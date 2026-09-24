@@ -12,8 +12,13 @@ import {
 describe('catalog parity', () => {
   const englishKeys = flattenKeys(catalogs.en).sort();
 
-  it('ships English, Urdu and Arabic', () => {
-    expect([...SUPPORTED_LOCALES]).toEqual(['en', 'ur', 'ar']);
+  it('ships English and Urdu', () => {
+    expect([...SUPPORTED_LOCALES]).toEqual(['en', 'ur']);
+  });
+
+  it('carries no catalog for a removed locale', () => {
+    // Arabic must not survive as a hidden or partially supported locale.
+    expect(Object.keys(catalogs)).toEqual(['en', 'ur']);
   });
 
   it.each(SUPPORTED_LOCALES)('%s has exactly the English key set', (locale) => {
@@ -30,7 +35,7 @@ describe('catalog parity', () => {
     expect(empty).toEqual([]);
   });
 
-  it.each(['ur', 'ar'] as const)('%s is actually translated, not copied from English', (locale) => {
+  it.each(['ur'] as const)('%s is actually translated, not copied from English', (locale) => {
     // Guards against a catalog that was duplicated and never filled in.
     // `continueWithGoogle` is excluded: "Google" is a brand name and legitimately
     // stays Latin script in both.
@@ -42,9 +47,8 @@ describe('catalog parity', () => {
 });
 
 describe('direction', () => {
-  it('marks Urdu and Arabic RTL and English LTR', () => {
+  it('marks Urdu RTL and English LTR', () => {
     expect(directionFor('ur')).toBe('rtl');
-    expect(directionFor('ar')).toBe('rtl');
     expect(directionFor('en')).toBe('ltr');
   });
 });
@@ -55,17 +59,20 @@ describe('resolveLocale', () => {
   });
 
   it('falls back by language before falling back to English', () => {
-    // A device set to ar-EG should get Arabic, not English.
-    expect(resolveLocale('ar-EG')).toBe('ar');
+    // A device set to ur-PK should get Urdu, not English.
+    expect(resolveLocale('ur-PK')).toBe('ur');
     expect(resolveLocale('en-GB')).toBe('en');
   });
 
   it('walks the preference list in order', () => {
-    expect(resolveLocale(['fr-FR', 'ar-SA', 'en'])).toBe('ar');
+    expect(resolveLocale(['fr-FR', 'ur-PK', 'en'])).toBe('ur');
   });
 
   it('falls back to English for an unsupported language', () => {
     expect(resolveLocale('ja')).toBe('en');
+    // Including one that used to be supported.
+    expect(resolveLocale('ar')).toBe('en');
+    expect(resolveLocale('ar-EG')).toBe('en');
   });
 
   it('handles an absent preference', () => {

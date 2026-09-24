@@ -158,15 +158,15 @@ These constrain every decision below. Cheap now, very expensive to retrofit.
 
 ### 🟡 Proposed (needs approval)
 
-| Area         | Proposal                                       | Why                                                           |
-| ------------ | ---------------------------------------------- | ------------------------------------------------------------- |
-| Navigation   | expo-router (file-based)                       | Standard for Expo; deep-linking for free                      |
-| Server state | TanStack Query                                 | Caching, retry, offline tolerance on poor networks            |
-| Validation   | Zod schemas **shared** between app and backend | One definition of "valid", enforced on both sides             |
-| i18n         | i18next + ICU, **RTL from day one**            | Urdu and Arabic are RTL; retrofitting RTL is a layout rewrite |
-| Geo          | PostGIS                                        | Distance filtering without exposing exact coordinates         |
-| Push         | Expo Notifications → FCM (APNs later)          |                                                               |
-| Errors       | Sentry                                         |                                                               |
+| Area         | Proposal                                       | Why                                                   |
+| ------------ | ---------------------------------------------- | ----------------------------------------------------- |
+| Navigation   | expo-router (file-based)                       | Standard for Expo; deep-linking for free              |
+| Server state | TanStack Query                                 | Caching, retry, offline tolerance on poor networks    |
+| Validation   | Zod schemas **shared** between app and backend | One definition of "valid", enforced on both sides     |
+| i18n         | i18next + ICU, **RTL from day one**            | Urdu is RTL; retrofitting RTL is a layout rewrite     |
+| Geo          | PostGIS                                        | Distance filtering without exposing exact coordinates |
+| Push         | Expo Notifications → FCM (APNs later)          |                                                       |
+| Errors       | Sentry                                         |                                                       |
 
 ### Proposed repository layout
 
@@ -492,7 +492,7 @@ Three gates, enforced server-side and mirrored in routing: **not signed in** →
 
 _Alternative considered and rejected:_ 4 tabs with Family nested under Me. Fewer tabs is cleaner on small screens, but family involvement is a headline differentiator and burying it in settings would signal it is an afterthought.
 
-**Consequence for low-end devices:** 5 tabs on a 320dp-wide screen is tight, especially with Urdu and Arabic labels, which run longer than English. The tab bar uses icon + short label with a tested minimum, and label length is a translation constraint recorded in `packages/i18n`.
+**Consequence for low-end devices:** 5 tabs on a 320dp-wide screen is tight, especially with Urdu labels, which run longer than English. The tab bar uses icon + short label with a tested minimum, and label length is a translation constraint recorded in `packages/i18n`.
 
 ### 6.3 Screen inventory (~72 screens)
 
@@ -538,7 +538,7 @@ Notifications inbox · Notification preferences · Error / offline state · Main
 
 ### 6.4 Cross-cutting UI requirements
 
-- **RTL from the first screen.** Every layout uses `start`/`end`, never `left`/`right`. Arabic and Urdu are RTL; this is not retrofittable.
+- **RTL from the first screen.** Every layout uses `start`/`end`, never `left`/`right`. Urdu is RTL; this is not retrofittable.
 - **Offline tolerance.** Cached reads, optimistic writes, explicit retry — target markets have unreliable networks.
 - **Image budgets.** Aggressive compression; never ship full-resolution photos to a list view.
 - **No hardcoded strings.** Every string from `packages/i18n`, enforced in CI.
@@ -982,7 +982,7 @@ Private profile · private photos with request/approve · hide exact location ·
 
 Reciprocity is the one most products get wrong. Showing someone a profile that would never accept them is worse than showing nothing.
 
-**Explanations use translated templates, not free-form generation** — correct Urdu and Arabic, zero hallucination risk, zero per-explanation cost, instant rendering:
+**Explanations use translated templates, not free-form generation** — correct Urdu, zero hallucination risk, zero per-explanation cost, instant rendering:
 
 > **Why this profile may be compatible**
 > • Both want to marry within 12 months
@@ -1194,32 +1194,37 @@ RLS tests passing · no hardcoded strings (CI-enforced) · RTL verified · secur
 
 **Phase 1 COMPLETE. A row is marked 🔨 BUILT only when it has been built AND verified.**
 
-| Component                                     | Status                                                                                                                                                                                                     |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Monorepo / pnpm workspace                     | 🔨 **BUILT** — 5 packages, TS strict, ESLint, Prettier                                                                                                                                                     |
-| ESLint architectural guardrails               | 🔨 **BUILT** — verified firing                                                                                                                                                                             |
-| `@nikahmate/domain` shared vocabulary         | 🔨 **BUILT** — 39 tests                                                                                                                                                                                    |
-| Migrations — identity + reference             | 🔨 **BUILT** — 9 tables, applied and asserted                                                                                                                                                              |
-| RLS policies — Phase 1 tables                 | 🔨 **BUILT** — 54 tests, positive and negative                                                                                                                                                             |
-| `@nikahmate/i18n` — en / ur / ar              | 🔨 **BUILT** — 20 tests, catalog parity + RTL                                                                                                                                                              |
-| API service — auth, bootstrap, /me, reference | 🔨 **BUILT** — 32 integration tests                                                                                                                                                                        |
-| `dbAsUser` / `dbAsService` boundary           | 🔨 **BUILT** — compiler-enforced allowlist                                                                                                                                                                 |
-| Sentry (server)                               | 🔨 **BUILT** — PII scrubbing, UUID masking                                                                                                                                                                 |
-| Expo app shell — 3 route groups, 5 tabs       | 🔨 **BUILT** — bundles and runs                                                                                                                                                                            |
-| **English / Urdu / Arabic at 320dp**          | 🔨 **VERIFIED** — rendered and measured in all three                                                                                                                                                       |
-| **RTL behaviour**                             | 🔨 **VERIFIED** — `dir=rtl`, mirrored layout, zero overflow                                                                                                                                                |
-| CI workflow                                   | 🔨 **BUILT** — lint, format, typecheck, test, Expo build, secret guard                                                                                                                                     |
-| Supabase projects (dev/staging/prod)          | ⛔ **Blocked** — requires your account. See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)                                                                                                               |
-| Supabase credentials                          | ⏳ Awaiting you — `.env` files created, empty                                                                                                                                                              |
-| Real sign-in flow                             | ❌ Phase 2 — needs the Supabase project                                                                                                                                                                    |
-| Gemini integration                            | ❌ Not started — **not required for v1**                                                                                                                                                                   |
-| Gemini API key                                | ❌ Not added, and rejected at boot if present                                                                                                                                                              |
-| Edge Functions                                | ❌ Phase 2+                                                                                                                                                                                                |
-| Admin panel                                   | ❌ Phase 8                                                                                                                                                                                                 |
-| Mobile component tests                        | ❌ Phase 2 — shell verified in a browser instead                                                                                                                                                           |
-| Planning docs                                 | ✅ [ENTITIES](docs/ENTITIES.md) · [ERD](docs/ERD.md) · [openapi.yaml](docs/openapi.yaml) · [ADRs](docs/adr/) · [SERVICE_ROLE_USAGE](docs/SERVICE_ROLE_USAGE.md) · [SUPABASE_SETUP](docs/SUPABASE_SETUP.md) |
+| Component                                      | Status                                                                                                                                                                                                     |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monorepo / pnpm workspace                      | 🔨 **BUILT** — 5 packages, TS strict, ESLint, Prettier                                                                                                                                                     |
+| ESLint architectural guardrails                | 🔨 **BUILT** — verified firing                                                                                                                                                                             |
+| `@nikahmate/domain` shared vocabulary          | 🔨 **BUILT** — 40 tests                                                                                                                                                                                    |
+| Migrations — identity + reference              | 🔨 **BUILT** — 9 tables, applied and asserted                                                                                                                                                              |
+| RLS policies — Phase 1 tables                  | 🔨 **BUILT** — 54 tests, positive and negative                                                                                                                                                             |
+| `@nikahmate/i18n` — en / ur                    | 🔨 **BUILT** — 17 tests, catalog parity + RTL                                                                                                                                                              |
+| API service — auth, bootstrap, /me, reference  | 🔨 **BUILT** — 32 integration tests                                                                                                                                                                        |
+| `dbAsUser` / `dbAsService` boundary            | 🔨 **BUILT** — compiler-enforced allowlist                                                                                                                                                                 |
+| Sentry (server)                                | 🔨 **BUILT** — PII scrubbing, UUID masking                                                                                                                                                                 |
+| Expo app shell — 3 route groups, 5 tabs        | 🔨 **BUILT** — bundles and runs                                                                                                                                                                            |
+| **Brand identity** — palette, type, components | 🔨 **BUILT** — emerald/gold, gradients, cards, buttons                                                                                                                                                     |
+| **NikahMate mark and app icons**               | 🔨 **BUILT** — generated from a committed script                                                                                                                                                           |
+| **Theme system, dark-ready**                   | 🔨 **BUILT** — semantic tokens; only light ships                                                                                                                                                           |
+| **English / Urdu at 320dp**                    | 🔨 **VERIFIED** — rendered and measured in both                                                                                                                                                            |
+| **RTL behaviour**                              | 🔨 **VERIFIED** — `dir=rtl`, mirrored layout, zero overflow                                                                                                                                                |
+| CI workflow                                    | 🔨 **BUILT** — lint, format, typecheck, test, Expo build, secret guard                                                                                                                                     |
+| Supabase projects (dev/staging/prod)           | ⛔ **Blocked** — requires your account. See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)                                                                                                               |
+| Supabase credentials                           | ⏳ Awaiting you — `.env` files created, empty                                                                                                                                                              |
+| Real sign-in flow                              | ❌ Phase 2 — needs the Supabase project                                                                                                                                                                    |
+| Dark theme                                     | ❌ Later — architecture ready, palette not authored                                                                                                                                                        |
+| Arabic locale                                  | ❌ Removed from v1 scope (ADR 0010)                                                                                                                                                                        |
+| Gemini integration                             | ❌ Not started — **not required for v1**                                                                                                                                                                   |
+| Gemini API key                                 | ❌ Not added, and rejected at boot if present                                                                                                                                                              |
+| Edge Functions                                 | ❌ Phase 2+                                                                                                                                                                                                |
+| Admin panel                                    | ❌ Phase 8                                                                                                                                                                                                 |
+| Mobile component tests                         | ❌ Phase 2 — shell verified in a browser instead                                                                                                                                                           |
+| Planning docs                                  | ✅ [ENTITIES](docs/ENTITIES.md) · [ERD](docs/ERD.md) · [openapi.yaml](docs/openapi.yaml) · [ADRs](docs/adr/) · [SERVICE_ROLE_USAGE](docs/SERVICE_ROLE_USAGE.md) · [SUPABASE_SETUP](docs/SUPABASE_SETUP.md) |
 
-**Test count: 145 passing** (domain 39 · database 54 · i18n 20 · api 32).
+**Test count: 143 passing** (domain 40 · database 54 · i18n 17 · api 32).
 Lint, format check and typecheck clean across all 5 packages.
 
 Database tests run against a real Postgres via PGlite, in-process, applying the
@@ -1234,18 +1239,17 @@ The mobile shell was built (`expo export`), served, and measured in a browser at
 | ------- | ----- | ---- | -------------- | ------------------- |
 | English | `ltr` | 5    | none           | 0 elements          |
 | Urdu    | `rtl` | 5    | none           | 0 elements          |
-| Arabic  | `rtl` | 5    | none           | 0 elements          |
 
-`scrollWidth` equals the 320px viewport in every locale, and tab navigation
-across all five routes was exercised.
+`scrollWidth` equals the 320px viewport in both locales, and tab navigation
+across all five routes was exercised in each.
 
-**A real bug was found and fixed during this verification.** Arabic and Urdu tab
-labels were clipped: react-navigation places the label in a height-constrained
-flex column, and the default `flexShrink` pulled the box back to ~13px
-regardless of the `lineHeight` requested — cutting descenders in both RTL
-scripts while leaving English untouched. Fixed with an owned label component,
-an explicit height and `flexShrink: 0`. It was invisible in English, which is
-precisely why the exit criterion required all three languages.
+**A real bug was found and fixed during this verification.** Urdu tab labels
+were clipped: react-navigation places the label in a height-constrained flex
+column, and the default `flexShrink` pulled the box back to ~13px regardless of
+the `lineHeight` requested — cutting descenders while leaving English
+untouched. Fixed with an owned label component, an explicit height and
+`flexShrink: 0`. It was invisible in English, which is precisely why the exit
+criterion required every shipped language.
 
 The existing **Zufishan** Supabase project has **not** been touched and will not be. NikahMate gets its own projects.
 
@@ -1312,13 +1316,13 @@ Grouped so you can answer in one pass. **Group A blocks the ERD.**
 
 ### Group B — scope & launch
 
-| #   | Question                                                                          |
-| --- | --------------------------------------------------------------------------------- |
-| B1  | Launch countries — focused first market, or all at once? _(I recommend focused.)_ |
-| B2  | Launch languages — English + Urdu + Arabic?                                       |
-| B3  | Is messaging free at launch, or gated?                                            |
-| B4  | Voice/video calls — MVP or later? _(Proposed: later.)_                            |
-| B5  | Target launch date; any hard deadline?                                            |
+| #      | Question                                                                          |
+| ------ | --------------------------------------------------------------------------------- |
+| B1     | Launch countries — focused first market, or all at once? _(I recommend focused.)_ |
+| ~~B2~~ | ✅ **ANSWERED** — English + Urdu for v1 (ADR 0010). Arabic deferred.              |
+| B3     | Is messaging free at launch, or gated?                                            |
+| B4     | Voice/video calls — MVP or later? _(Proposed: later.)_                            |
+| B5     | Target launch date; any hard deadline?                                            |
 
 ### Group C — technical & legal
 
@@ -1391,7 +1395,7 @@ Foundations only. No product features.
 | **Repository**    | pnpm workspace, TypeScript config, lint, CI                                              |
 | **Environments**  | Three Supabase projects — dev, staging, prod. **New projects. Zufishan is not touched.** |
 | **Mobile shell**  | Expo app, expo-router, three route groups, design tokens                                 |
-| **i18n + RTL**    | i18next, catalogs for English / Urdu / Arabic, RTL layout verified at 320dp              |
+| **i18n + RTL**    | i18next, catalogs for English / Urdu, RTL layout verified at 320dp                       |
 | **Auth**          | Email, phone OTP, Google · `users` + `user_auth_links` · `app.current_user_id()`         |
 | **Core schema**   | Identity and reference domains only — ~9 tables, with RLS policies and their tests       |
 | **Observability** | Sentry, structured logging, audit table                                                  |

@@ -19,6 +19,7 @@ choice can be re-examined later without re-deriving it from scratch (R15).
 | [0007](0007-postgres-backed-job-queue.md)           | Postgres-backed job queue (pg-boss), not Redis                 | Accepted |
 | [0008](0008-pnpm-workspaces-no-turborepo.md)        | pnpm workspaces now, Turborepo deferred                        | Accepted |
 | [0009](0009-consolidated-entity-design.md)          | Consolidated entity design: 90 entities                        | Accepted |
+| [0010](0010-launch-locales-english-and-urdu.md)     | Launch locales: English and Urdu only                          | Accepted |
 
 ## Constraints set by the product owner
 
@@ -26,13 +27,14 @@ These are not ADRs because they were not open decisions — they are the givens 
 architecture was designed around. Recorded so their origin is not mistaken for a
 technical choice later.
 
-| Constraint                                             | Set                                             |
-| ------------------------------------------------------ | ----------------------------------------------- |
-| React Native + Expo, TypeScript, Android first         | Product direction                               |
-| Supabase for auth, database, storage, realtime         | Product direction                               |
-| Gemini for AI features                                 | Product direction                               |
-| Website and admin panel reuse the same backend         | Product direction                               |
-| Each person owns their own profile; wali by invitation | Product direction                               |
-| Both men and women may send interest                   | Product direction                               |
-| Marriage platform, not casual dating                   | Product direction                               |
-| Solo developer                                         | Team constraint — drives 0002, 0005, 0007, 0008 |
+| Constraint                                             | Set                                                         |
+| ------------------------------------------------------ | ----------------------------------------------------------- |
+| React Native + Expo, TypeScript, Android first         | Product direction                                           |
+| Supabase for auth, database, storage, realtime         | Product direction                                           |
+| Gemini for AI features                                 | Product direction                                           |
+| English + Urdu at launch; Arabic deferred              | Recorded as [0010](0010-launch-locales-english-and-urdu.md) |
+| Website and admin panel reuse the same backend         | Product direction                                           |
+| Each person owns their own profile; wali by invitation | Product direction                                           |
+| Both men and women may send interest                   | Product direction                                           |
+| Marriage platform, not casual dating                   | Product direction                                           |
+| Solo developer                                         | Team constraint — drives 0002, 0005, 0007, 0008             |

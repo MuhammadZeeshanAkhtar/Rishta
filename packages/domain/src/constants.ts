@@ -124,11 +124,22 @@ export const V1_VERIFICATION_BADGES: readonly VerificationBadgeKey[] = [
   'profile_reviewed',
 ];
 
-/** Launch locales. Adding one is a data change, not a release (README §15). */
-export const LOCALES = ['en', 'ur', 'ar'] as const;
+/**
+ * Launch locales.
+ *
+ * English is primary and the fallback for everything. Urdu is the secondary
+ * locale and is right-to-left.
+ *
+ * Adding a locale is deliberately cheap: add the code here, add a catalog
+ * beside the others, and add its metadata in @nikahmate/i18n. Nothing else
+ * changes — direction, resolution, persistence and the selector all read from
+ * this list. Arabic was in scope earlier and was removed from v1; re-adding it
+ * is those three steps and no restructuring.
+ */
+export const LOCALES = ['en', 'ur'] as const;
 export type Locale = (typeof LOCALES)[number];
 
-export const RTL_LOCALES: readonly Locale[] = ['ur', 'ar'];
+export const RTL_LOCALES: readonly Locale[] = ['ur'];
 
 export function isRtl(locale: string): boolean {
   return (RTL_LOCALES as readonly string[]).includes(locale);

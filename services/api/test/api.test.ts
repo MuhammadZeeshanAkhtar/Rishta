@@ -251,10 +251,10 @@ describe('PATCH /me', () => {
       method: 'PATCH',
       url: '/me',
       headers: authHeader(authId),
-      payload: { locale: 'ar', incognito: true },
+      payload: { locale: 'ur', incognito: true },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().locale).toBe('ar');
+    expect(res.json().locale).toBe('ur');
     expect(res.json().incognito).toBe(true);
   });
 
@@ -318,7 +318,7 @@ describe('reference endpoints', () => {
   it('falls back to English for a locale with no translation', async () => {
     // A half-translated catalog should show English, not an empty dropdown
     // someone has to choose from to finish signing up.
-    const res = await h.app.inject({ method: 'GET', url: '/reference/education_level?locale=ar' });
+    const res = await h.app.inject({ method: 'GET', url: '/reference/education_level?locale=fr' });
     expect(res.json().items.find((i: { code: string }) => i.code === 'edu_bachelors').label).toBe(
       'Bachelor degree',
     );

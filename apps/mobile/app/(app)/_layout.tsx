@@ -1,6 +1,6 @@
 import { Redirect, Stack } from 'expo-router';
 import { useSession } from '../../src/session/SessionProvider';
-import { colors } from '../../src/theme/tokens';
+import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
  * Protected group. Anything below this is unreachable without a session.
@@ -11,6 +11,7 @@ import { colors } from '../../src/theme/tokens';
  */
 export default function AppLayout() {
   const { state } = useSession();
+  const theme = useTheme();
 
   if (state === 'loading') return null;
   if (state === 'signed_out') return <Redirect href="/(auth)/welcome" />;
@@ -19,7 +20,7 @@ export default function AppLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: colors.background },
+        contentStyle: { backgroundColor: theme.colors.background },
       }}
     />
   );

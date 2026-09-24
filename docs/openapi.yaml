@@ -864,7 +864,7 @@ paths:
       description: |
         Reasons are regenerated from `compatibility_factors` — the values that
         were actually compared — not narrated after the fact. Rendered from
-        translated templates, so Urdu and Arabic are correct and nothing is
+        translated templates, so Urdu is correct and nothing is
         invented about a real person.
       tags: [Compatibility]
       x-access: member
@@ -1907,7 +1907,7 @@ components:
     Locale:
       name: locale
       in: query
-      schema: { type: string, default: en, examples: [en, ur, ar] }
+      schema: { type: string, default: en, examples: [en, ur] }
     UserId:
       name: userId
       in: path

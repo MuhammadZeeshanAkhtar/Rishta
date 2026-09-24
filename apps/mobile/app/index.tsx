@@ -1,7 +1,7 @@
 import { Redirect } from 'expo-router';
 import { ActivityIndicator, View } from 'react-native';
 import { useSession } from '../src/session/SessionProvider';
-import { colors } from '../src/theme/tokens';
+import { useTheme } from '../src/theme/ThemeProvider';
 
 /**
  * The three gates from README §6.1, in one place.
@@ -15,11 +15,19 @@ import { colors } from '../src/theme/tokens';
  */
 export default function Index() {
   const { state } = useSession();
+  const theme = useTheme();
 
   if (state === 'loading') {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={colors.primary} />
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: theme.colors.background,
+        }}
+      >
+        <ActivityIndicator color={theme.colors.brand} />
       </View>
     );
   }

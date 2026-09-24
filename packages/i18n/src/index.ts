@@ -1,7 +1,6 @@
 import { DEFAULT_LOCALE, LOCALES, isRtl, type Locale } from '@nikahmate/domain';
 import en from './locales/en.json';
 import ur from './locales/ur.json';
-import ar from './locales/ar.json';
 
 /**
  * Translation catalogs and locale metadata.
@@ -19,7 +18,6 @@ export type TranslationCatalog = typeof en;
 export const catalogs: Record<Locale, TranslationCatalog> = {
   en,
   ur: ur as TranslationCatalog,
-  ar: ar as TranslationCatalog,
 };
 
 export interface LocaleMeta {
@@ -33,7 +31,6 @@ export interface LocaleMeta {
 export const LOCALE_META: Record<Locale, LocaleMeta> = {
   en: { code: 'en', nativeName: 'English', englishName: 'English', direction: 'ltr' },
   ur: { code: 'ur', nativeName: 'اردو', englishName: 'Urdu', direction: 'rtl' },
-  ar: { code: 'ar', nativeName: 'العربية', englishName: 'Arabic', direction: 'rtl' },
 };
 
 export const SUPPORTED_LOCALES = LOCALES;
@@ -44,7 +41,7 @@ export type { Locale };
  * Picks the best supported locale for a device.
  *
  * Falls back by language before falling back to English: a device set to
- * `ar-EG` should get Arabic, not English.
+ * `ur-PK` should get Urdu, not English.
  */
 export function resolveLocale(preferred: readonly string[] | string | undefined): Locale {
   const candidates = typeof preferred === 'string' ? [preferred] : (preferred ?? []);
@@ -95,7 +92,7 @@ export function flattenKeys(catalog: unknown, prefix = ''): string[] {
  * Maximum rendered length of a bottom-tab label.
  *
  * ADR 0004 chose five tabs, and recorded label length as the cost: five labels
- * must fit a 320dp screen, and Urdu and Arabic run longer than English. This is
+ * must fit a 320dp screen, and Urdu runs longer than English. This is
  * the constraint made testable rather than left as a note.
  */
 export const MAX_TAB_LABEL_CHARS = 12;

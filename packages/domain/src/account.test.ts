@@ -156,14 +156,20 @@ describe('timezoneSchema', () => {
 });
 
 describe('locale constants', () => {
-  it('ships English, Urdu and Arabic in v1', () => {
-    expect([...LOCALES]).toEqual(['en', 'ur', 'ar']);
+  it('ships English and Urdu in v1', () => {
+    expect([...LOCALES]).toEqual(['en', 'ur']);
   });
 
-  it('marks Urdu and Arabic as RTL', () => {
+  it('marks Urdu as RTL and English as LTR', () => {
     expect(isRtl('ur')).toBe(true);
-    expect(isRtl('ar')).toBe(true);
     expect(isRtl('en')).toBe(false);
+  });
+
+  it('does not treat a removed locale as supported', () => {
+    // Arabic was in scope earlier and was removed from v1. It must not linger
+    // as a half-supported locale that resolves or reports a direction.
+    expect([...LOCALES]).not.toContain('ar');
+    expect(isRtl('ar')).toBe(false);
   });
 });
 

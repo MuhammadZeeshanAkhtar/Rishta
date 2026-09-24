@@ -1,6 +1,8 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
+import { Card, CardHeading } from './Card';
 import { useLocale } from '../i18n/LocaleProvider';
-import { colors, radius, spacing, typography } from '../theme/tokens';
+import { useTheme } from '../theme/ThemeProvider';
+import { spacing, typography } from '../theme/tokens';
 
 /**
  * Marks a screen as an empty shell.
@@ -10,32 +12,24 @@ import { colors, radius, spacing, typography } from '../theme/tokens';
  */
 export function PhaseNotice({ phase, feature }: { phase: string; feature: string }) {
   const { direction } = useLocale();
+  const theme = useTheme();
+
   return (
-    <View style={styles.box}>
-      <Text style={[styles.label, { writingDirection: direction, textAlign: 'left' }]}>
-        {phase}
-      </Text>
-      <Text style={[styles.body, { writingDirection: direction, textAlign: 'left' }]}>
+    <Card tone="sunken" style={styles.card}>
+      <CardHeading overline={phase} title="Not built yet" />
+      <Text
+        style={[
+          styles.body,
+          { color: theme.colors.textMuted, writingDirection: direction, textAlign: 'left' },
+        ]}
+      >
         {feature}
       </Text>
-    </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
-  box: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginTop: spacing.md,
-  },
-  label: {
-    ...typography.caption,
-    color: colors.primary,
-    fontWeight: '700',
-    marginBottom: spacing.xs,
-  },
-  body: { ...typography.body, color: colors.textMuted },
+  card: { marginTop: spacing.md },
+  body: { ...typography.body, marginTop: spacing.sm },
 });

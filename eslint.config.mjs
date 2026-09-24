@@ -32,6 +32,23 @@ export default tseslint.config(
     },
   },
 
+  // Build-time Node scripts. Not app code: they run under Node, so they get
+  // Node globals and may log.
+  {
+    files: ['**/scripts/**/*.{mjs,js,ts}'],
+    languageOptions: {
+      globals: {
+        Buffer: 'readonly',
+        console: 'readonly',
+        process: 'readonly',
+        __dirname: 'readonly',
+      },
+    },
+    rules: {
+      'no-console': 'off',
+    },
+  },
+
   // ---------------------------------------------------------------------------
   // Architectural guardrails.
   //
