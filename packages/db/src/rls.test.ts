@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDb, seedReference, seedUser, type SeededUser, type TestDb } from './harness.js';
+import { createTestDb, seedReference, seedUser, type SeededUser, type TestDb } from './harness';
 
 /**
  * RLS policy tests — the Phase 1 slice of the matrix in ERD §18.

@@ -39,3 +39,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 coverage/
+
+# CI Expo export output
+.expo-ci-export/

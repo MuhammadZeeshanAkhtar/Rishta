@@ -5,8 +5,8 @@
   "description": "Trusted server layer: authorization, business rules, entitlements.",
   "type": "module",
   "scripts": {
-    "dev": "node --watch --experimental-strip-types src/index.ts",
-    "start": "node --experimental-strip-types src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -25,6 +25,7 @@
     "@nikahmate/db": "workspace:*",
     "@types/node": "^22.18.0",
     "@types/pg": "^8.15.5",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "tsx": "^4.20.6"
   }
 }

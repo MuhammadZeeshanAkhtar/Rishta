@@ -6,9 +6,9 @@ import {
   identitySchema,
   meetsMinimumAge,
   userSettingsUpdateSchema,
-} from './account.js';
-import { isRtl, LOCALES, REFERENCE_TYPES, FREE_PLAN_ENTITLEMENTS } from './constants.js';
-import { phoneE164Schema, referenceCodeSchema, timezoneSchema } from './common.js';
+} from './account';
+import { isRtl, LOCALES, REFERENCE_TYPES, FREE_PLAN_ENTITLEMENTS } from './constants';
+import { phoneE164Schema, referenceCodeSchema, timezoneSchema } from './common';
 
 describe('ageFromDateOfBirth', () => {
   const now = new Date('2026-09-24T12:00:00Z');

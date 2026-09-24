@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { bootstrapRequestSchema, userSettingsUpdateSchema, type Me } from '@nikahmate/domain';
-import { requireAuthContext } from '../auth/plugin.js';
-import { badRequest, notFound } from '../errors.js';
-import type { Db, DbSession } from '../db/types.js';
+import { requireAuthContext } from '../auth/plugin';
+import { badRequest, notFound } from '../errors';
+import type { Db, DbSession } from '../db/types';
 
 /**
  * Account routes: bootstrap, read and update.

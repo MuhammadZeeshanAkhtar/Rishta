@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDb, seedReference, type TestDb } from './harness.js';
+import { createTestDb, seedReference, type TestDb } from './harness';
 
 /**
  * Migration-level tests: does the schema apply, and does it enforce the

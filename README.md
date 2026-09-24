@@ -1192,39 +1192,60 @@ RLS tests passing · no hardcoded strings (CI-enforced) · RTL verified · secur
 
 ## 13. Implementation status
 
-**Phase 1 in progress. This table is the honest record: a row is only marked 🔨 BUILT when it has been built AND tested.**
+**Phase 1 COMPLETE. A row is marked 🔨 BUILT only when it has been built AND verified.**
 
-| Component                             | Status                                                 |
-| ------------------------------------- | ------------------------------------------------------ |
-| Monorepo / pnpm workspace             | 🔨 **BUILT** — 3 packages, TS strict, ESLint, Prettier |
-| ESLint architectural guardrails       | 🔨 **BUILT** — verified firing                         |
-| `@nikahmate/domain` shared vocabulary | 🔨 **BUILT** — 39 tests                                |
-| Migrations — identity + reference     | 🔨 **BUILT** — 9 tables, applied and asserted          |
-| RLS policies — Phase 1 tables         | 🔨 **BUILT** — 50 tests, positive and negative         |
-| `@nikahmate/i18n` — en / ur / ar      | 🔨 **BUILT** — 20 tests, catalog parity + RTL          |
-| CI workflow                           | 🔨 **BUILT** — not yet run on a remote                 |
-| Backend API service                   | ❌ Not started                                         |
-| Expo mobile app                       | ❌ Not started                                         |
-| RTL verified on a device at 320dp     | ❌ Not verified                                        |
-| Sentry / observability                | ❌ Not started                                         |
-| Supabase projects (dev/staging/prod)  | ⛔ **Blocked** — requires your account                 |
-| Supabase credentials                  | ❌ Not added _(by your instruction)_                   |
-| Gemini integration                    | ❌ Not started — _not required for v1_                 |
-| Gemini API key                        | ❌ Not added _(by your instruction)_                   |
-| Edge Functions                        | ❌ Not started                                         |
-| Admin panel                           | ❌ Not started                                         |
-| Planning — README                     | ✅ Complete                                            |
-| Planning — entity inventory           | ✅ [docs/ENTITIES.md](docs/ENTITIES.md)                |
-| Planning — ERD                        | ✅ [docs/ERD.md](docs/ERD.md)                          |
-| Planning — API contract               | ✅ [docs/openapi.yaml](docs/openapi.yaml)              |
-| Planning — ADRs                       | ✅ [docs/adr/](docs/adr/) — 9 records                  |
+| Component                                     | Status                                                                                                                                                                                                     |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monorepo / pnpm workspace                     | 🔨 **BUILT** — 5 packages, TS strict, ESLint, Prettier                                                                                                                                                     |
+| ESLint architectural guardrails               | 🔨 **BUILT** — verified firing                                                                                                                                                                             |
+| `@nikahmate/domain` shared vocabulary         | 🔨 **BUILT** — 39 tests                                                                                                                                                                                    |
+| Migrations — identity + reference             | 🔨 **BUILT** — 9 tables, applied and asserted                                                                                                                                                              |
+| RLS policies — Phase 1 tables                 | 🔨 **BUILT** — 54 tests, positive and negative                                                                                                                                                             |
+| `@nikahmate/i18n` — en / ur / ar              | 🔨 **BUILT** — 20 tests, catalog parity + RTL                                                                                                                                                              |
+| API service — auth, bootstrap, /me, reference | 🔨 **BUILT** — 32 integration tests                                                                                                                                                                        |
+| `dbAsUser` / `dbAsService` boundary           | 🔨 **BUILT** — compiler-enforced allowlist                                                                                                                                                                 |
+| Sentry (server)                               | 🔨 **BUILT** — PII scrubbing, UUID masking                                                                                                                                                                 |
+| Expo app shell — 3 route groups, 5 tabs       | 🔨 **BUILT** — bundles and runs                                                                                                                                                                            |
+| **English / Urdu / Arabic at 320dp**          | 🔨 **VERIFIED** — rendered and measured in all three                                                                                                                                                       |
+| **RTL behaviour**                             | 🔨 **VERIFIED** — `dir=rtl`, mirrored layout, zero overflow                                                                                                                                                |
+| CI workflow                                   | 🔨 **BUILT** — lint, format, typecheck, test, Expo build, secret guard                                                                                                                                     |
+| Supabase projects (dev/staging/prod)          | ⛔ **Blocked** — requires your account. See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)                                                                                                               |
+| Supabase credentials                          | ⏳ Awaiting you — `.env` files created, empty                                                                                                                                                              |
+| Real sign-in flow                             | ❌ Phase 2 — needs the Supabase project                                                                                                                                                                    |
+| Gemini integration                            | ❌ Not started — **not required for v1**                                                                                                                                                                   |
+| Gemini API key                                | ❌ Not added, and rejected at boot if present                                                                                                                                                              |
+| Edge Functions                                | ❌ Phase 2+                                                                                                                                                                                                |
+| Admin panel                                   | ❌ Phase 8                                                                                                                                                                                                 |
+| Mobile component tests                        | ❌ Phase 2 — shell verified in a browser instead                                                                                                                                                           |
+| Planning docs                                 | ✅ [ENTITIES](docs/ENTITIES.md) · [ERD](docs/ERD.md) · [openapi.yaml](docs/openapi.yaml) · [ADRs](docs/adr/) · [SERVICE_ROLE_USAGE](docs/SERVICE_ROLE_USAGE.md) · [SUPABASE_SETUP](docs/SUPABASE_SETUP.md) |
 
-**Test count: 109 passing** (domain 39 · database 50 · i18n 20).
+**Test count: 145 passing** (domain 39 · database 54 · i18n 20 · api 32).
+Lint, format check and typecheck clean across all 5 packages.
 
-Database tests run against a real Postgres via PGlite, in-process. The migration
-files are applied exactly as written, so a migration that cannot apply in the
-test suite will not apply in production either. No Docker and no service
-container is required, locally or in CI.
+Database tests run against a real Postgres via PGlite, in-process, applying the
+migration files exactly as written. No Docker or service container is needed.
+
+### Phase 1 verification evidence
+
+The mobile shell was built (`expo export`), served, and measured in a browser at
+**320 x 760** — the narrowest screen the product supports:
+
+| Locale  | `dir` | Tabs | Labels clipped | Horizontal overflow |
+| ------- | ----- | ---- | -------------- | ------------------- |
+| English | `ltr` | 5    | none           | 0 elements          |
+| Urdu    | `rtl` | 5    | none           | 0 elements          |
+| Arabic  | `rtl` | 5    | none           | 0 elements          |
+
+`scrollWidth` equals the 320px viewport in every locale, and tab navigation
+across all five routes was exercised.
+
+**A real bug was found and fixed during this verification.** Arabic and Urdu tab
+labels were clipped: react-navigation places the label in a height-constrained
+flex column, and the default `flexShrink` pulled the box back to ~13px
+regardless of the `lineHeight` requested — cutting descenders in both RTL
+scripts while leaving English untouched. Fixed with an owned label component,
+an explicit height and `flexShrink: 0`. It was invisible in English, which is
+precisely why the exit criterion required all three languages.
 
 The existing **Zufishan** Supabase project has **not** been touched and will not be. NikahMate gets its own projects.
 

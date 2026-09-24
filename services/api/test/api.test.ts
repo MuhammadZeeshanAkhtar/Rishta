@@ -6,7 +6,7 @@ import {
   randomAuthId,
   seedReferenceData,
   type TestHarness,
-} from './helpers.js';
+} from './helpers';
 
 let h: TestHarness;
 

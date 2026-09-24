@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/node';
-import type { Config } from '../config.js';
+import type { Config } from '../config';
 
 /**
  * Error reporting.

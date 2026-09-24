@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { unauthenticated } from '../errors.js';
-import { bearerFrom, type AuthContext, type TokenVerifier } from './verify.js';
+import { unauthenticated } from '../errors';
+import { bearerFrom, type AuthContext, type TokenVerifier } from './verify';
 
 declare module 'fastify' {
   interface FastifyRequest {

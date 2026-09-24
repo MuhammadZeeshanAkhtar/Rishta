@@ -9,7 +9,7 @@
  * discovery, interests and conversations arrive with their phases.
  */
 
-export * from './constants.js';
-export * from './common.js';
-export * from './account.js';
-export * from './reference.js';
+export * from './constants';
+export * from './common';
+export * from './account';
+export * from './reference';

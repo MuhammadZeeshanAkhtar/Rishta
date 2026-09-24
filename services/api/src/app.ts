@@ -1,13 +1,13 @@
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import type { Config } from './config.js';
-import { ApiError, internalError } from './errors.js';
-import authPlugin from './auth/plugin.js';
-import type { TokenVerifier } from './auth/verify.js';
-import type { Db } from './db/types.js';
-import { accountRoutes } from './routes/account.js';
-import { referenceRoutes } from './routes/reference.js';
-import { captureException } from './observability/sentry.js';
+import type { Config } from './config';
+import { ApiError, internalError } from './errors';
+import authPlugin from './auth/plugin';
+import type { TokenVerifier } from './auth/verify';
+import type { Db } from './db/types';
+import { accountRoutes } from './routes/account';
+import { referenceRoutes } from './routes/reference';
+import { captureException } from './observability/sentry';
 
 export interface BuildAppOptions {
   config: Config;

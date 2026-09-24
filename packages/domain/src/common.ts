@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PROBLEM_CODES } from './constants.js';
+import { PROBLEM_CODES } from './constants';
 
 /**
  * Primitive validators shared by every schema.

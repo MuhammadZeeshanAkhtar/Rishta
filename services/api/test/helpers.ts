@@ -1,11 +1,11 @@
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations } from '@nikahmate/db';
 import type { FastifyInstance } from 'fastify';
-import { buildApp } from '../src/app.js';
-import type { Config } from '../src/config.js';
-import type { Db, DbSession, ServiceRoleUse } from '../src/db/types.js';
-import type { AuthContext, TokenVerifier } from '../src/auth/verify.js';
-import { unauthenticated } from '../src/errors.js';
+import { buildApp } from '../src/app';
+import type { Config } from '../src/config';
+import type { Db, DbSession, ServiceRoleUse } from '../src/db/types';
+import type { AuthContext, TokenVerifier } from '../src/auth/verify';
+import { unauthenticated } from '../src/errors';
 
 /**
  * Test harness.

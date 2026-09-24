@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
-import type { Config } from '../config.js';
-import { unauthenticated } from '../errors.js';
+import type { Config } from '../config';
+import { unauthenticated } from '../errors';
 
 /**
  * Supabase JWT verification.

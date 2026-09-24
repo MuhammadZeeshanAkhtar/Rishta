@@ -43,6 +43,18 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # Proves the mobile app actually bundles. A type error is not the same as
+      # a Metro resolution failure: the workspace packages ship TypeScript
+      # source, so only a real bundle catches a bad import path.
+      - name: Build mobile app
+        run: pnpm --filter @nikahmate/mobile exec expo export --platform web --output-dir .expo-ci-export
+
+      # Reports drift without blocking: this fails whenever Expo ships a patch
+      # release, which is information, not a correctness signal.
+      - name: Check Expo dependency alignment
+        continue-on-error: true
+        run: pnpm --filter @nikahmate/mobile exec expo install --check
+
   secrets:
     name: Secret guard
     runs-on: ubuntu-latest

@@ -1,7 +1,7 @@
 import { DEFAULT_LOCALE, LOCALES, isRtl, type Locale } from '@nikahmate/domain';
-import en from './locales/en.json' with { type: 'json' };
-import ur from './locales/ur.json' with { type: 'json' };
-import ar from './locales/ar.json' with { type: 'json' };
+import en from './locales/en.json';
+import ur from './locales/ur.json';
+import ar from './locales/ar.json';
 
 /**
  * Translation catalogs and locale metadata.

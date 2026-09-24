@@ -7,7 +7,7 @@ import {
   flattenKeys,
   resolveLocale,
   translate,
-} from './index.js';
+} from './index';
 
 describe('catalog parity', () => {
   const englishKeys = flattenKeys(catalogs.en).sort();

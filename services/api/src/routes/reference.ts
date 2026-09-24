@@ -6,8 +6,8 @@ import {
   type ReferenceItem,
   type ReferenceType,
 } from '@nikahmate/domain';
-import { badRequest, notFound } from '../errors.js';
-import type { Db } from '../db/types.js';
+import { badRequest, notFound } from '../errors';
+import type { Db } from '../db/types';
 
 /**
  * Reference data — the only genuinely public endpoints in v1.

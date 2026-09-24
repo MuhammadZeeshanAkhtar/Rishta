@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { REFERENCE_TYPES } from './constants.js';
-import { localeSchema, referenceCodeSchema } from './common.js';
+import { REFERENCE_TYPES } from './constants';
+import { localeSchema, referenceCodeSchema } from './common';
 
 /**
  * Reference data — the generic `(type, code)` vocabulary that replaced nineteen

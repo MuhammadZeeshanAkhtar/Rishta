@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "NikahMate",
+    "slug": "nikahmate",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "nikahmate",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.nikahmate.app",
+      "edgeToEdgeEnabled": true
+    },
+    "ios": {
+      "bundleIdentifier": "com.nikahmate.app",
+      "supportsTablet": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": ["expo-router", "expo-localization", "expo-secure-store"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:3000"
+    }
+  }
+}

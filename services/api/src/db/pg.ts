@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { Db, DbSession, ServiceRoleUse, ServiceUseRecorder } from './types.js';
+import type { Db, DbSession, ServiceRoleUse, ServiceUseRecorder } from './types';
 
 /**
  * Production database access over node-postgres.

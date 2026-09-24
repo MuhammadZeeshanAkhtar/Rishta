@@ -1,9 +1,9 @@
-import { assertNoForbiddenSecrets, loadConfig } from './config.js';
-import { buildApp } from './app.js';
-import { createPgDb } from './db/pg.js';
-import { createTokenVerifier } from './auth/verify.js';
-import { flushSentry, initSentry } from './observability/sentry.js';
-import type { ServiceRoleUse } from './db/types.js';
+import { assertNoForbiddenSecrets, loadConfig } from './config';
+import { buildApp } from './app';
+import { createPgDb } from './db/pg';
+import { createTokenVerifier } from './auth/verify';
+import { flushSentry, initSentry } from './observability/sentry';
+import type { ServiceRoleUse } from './db/types';
 
 /**
  * Entry point. Nothing here is importable by tests — `buildApp` is the seam,

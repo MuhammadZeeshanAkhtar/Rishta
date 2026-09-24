@@ -5,8 +5,8 @@ import {
   SECURITY_EVENT_TYPES,
   USER_STATUSES,
   VERIFICATION_BADGES,
-} from './constants.js';
-import { countryCodeSchema, localeSchema, timestampSchema, timezoneSchema } from './common.js';
+} from './constants';
+import { countryCodeSchema, localeSchema, timestampSchema, timezoneSchema } from './common';
 
 /**
  * Account and identity schemas. Mirrors the Account section of
