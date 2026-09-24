@@ -2024,7 +2024,9 @@ components:
       type: object
       properties:
         userId: { type: string, format: uuid }
-        displayName: { type: string }
+        # Null until onboarding collects it. The account row exists from the
+        # moment the JWT is verified, before the person has told us their name.
+        displayName: { type: [string, 'null'] }
         status: { type: string, enum: [onboarding, active, deactivated, suspended, banned, pending_deletion] }
         onboardingStep: { type: [string, 'null'] }
         profileCompleted: { type: boolean }

@@ -1194,30 +1194,30 @@ RLS tests passing · no hardcoded strings (CI-enforced) · RTL verified · secur
 
 **Phase 1 in progress. This table is the honest record: a row is only marked 🔨 BUILT when it has been built AND tested.**
 
-| Component | Status |
-|---|---|
-| Monorepo / pnpm workspace | 🔨 **BUILT** — 3 packages, TS strict, ESLint, Prettier |
-| ESLint architectural guardrails | 🔨 **BUILT** — verified firing |
-| `@nikahmate/domain` shared vocabulary | 🔨 **BUILT** — 39 tests |
-| Migrations — identity + reference | 🔨 **BUILT** — 9 tables, applied and asserted |
-| RLS policies — Phase 1 tables | 🔨 **BUILT** — 50 tests, positive and negative |
-| `@nikahmate/i18n` — en / ur / ar | 🔨 **BUILT** — 20 tests, catalog parity + RTL |
-| CI workflow | 🔨 **BUILT** — not yet run on a remote |
-| Backend API service | ❌ Not started |
-| Expo mobile app | ❌ Not started |
-| RTL verified on a device at 320dp | ❌ Not verified |
-| Sentry / observability | ❌ Not started |
-| Supabase projects (dev/staging/prod) | ⛔ **Blocked** — requires your account |
-| Supabase credentials | ❌ Not added _(by your instruction)_ |
-| Gemini integration | ❌ Not started — _not required for v1_ |
-| Gemini API key | ❌ Not added _(by your instruction)_ |
-| Edge Functions | ❌ Not started |
-| Admin panel | ❌ Not started |
-| Planning — README | ✅ Complete |
-| Planning — entity inventory | ✅ [docs/ENTITIES.md](docs/ENTITIES.md) |
-| Planning — ERD | ✅ [docs/ERD.md](docs/ERD.md) |
-| Planning — API contract | ✅ [docs/openapi.yaml](docs/openapi.yaml) |
-| Planning — ADRs | ✅ [docs/adr/](docs/adr/) — 9 records |
+| Component                             | Status                                                 |
+| ------------------------------------- | ------------------------------------------------------ |
+| Monorepo / pnpm workspace             | 🔨 **BUILT** — 3 packages, TS strict, ESLint, Prettier |
+| ESLint architectural guardrails       | 🔨 **BUILT** — verified firing                         |
+| `@nikahmate/domain` shared vocabulary | 🔨 **BUILT** — 39 tests                                |
+| Migrations — identity + reference     | 🔨 **BUILT** — 9 tables, applied and asserted          |
+| RLS policies — Phase 1 tables         | 🔨 **BUILT** — 50 tests, positive and negative         |
+| `@nikahmate/i18n` — en / ur / ar      | 🔨 **BUILT** — 20 tests, catalog parity + RTL          |
+| CI workflow                           | 🔨 **BUILT** — not yet run on a remote                 |
+| Backend API service                   | ❌ Not started                                         |
+| Expo mobile app                       | ❌ Not started                                         |
+| RTL verified on a device at 320dp     | ❌ Not verified                                        |
+| Sentry / observability                | ❌ Not started                                         |
+| Supabase projects (dev/staging/prod)  | ⛔ **Blocked** — requires your account                 |
+| Supabase credentials                  | ❌ Not added _(by your instruction)_                   |
+| Gemini integration                    | ❌ Not started — _not required for v1_                 |
+| Gemini API key                        | ❌ Not added _(by your instruction)_                   |
+| Edge Functions                        | ❌ Not started                                         |
+| Admin panel                           | ❌ Not started                                         |
+| Planning — README                     | ✅ Complete                                            |
+| Planning — entity inventory           | ✅ [docs/ENTITIES.md](docs/ENTITIES.md)                |
+| Planning — ERD                        | ✅ [docs/ERD.md](docs/ERD.md)                          |
+| Planning — API contract               | ✅ [docs/openapi.yaml](docs/openapi.yaml)              |
+| Planning — ADRs                       | ✅ [docs/adr/](docs/adr/) — 9 records                  |
 
 **Test count: 109 passing** (domain 39 · database 50 · i18n 20).
 

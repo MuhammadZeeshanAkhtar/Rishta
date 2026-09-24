@@ -164,6 +164,54 @@ describe('users constraints', () => {
   });
 });
 
+describe('progressive onboarding', () => {
+  it('allows an account row with no identity while onboarding', async () => {
+    // Bootstrap creates this row the moment the JWT is verified, before the
+    // person has told us anything about themselves.
+    const rows = await db.admin<{ id: string }>(
+      `insert into public.users (status) values ('onboarding') returning id`,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it('refuses to activate an account with incomplete identity', async () => {
+    const rows = await db.admin<{ id: string }>(
+      `insert into public.users (status) values ('onboarding') returning id`,
+    );
+    await expect(
+      db.admin(`update public.users set status = 'active' where id = $1`, [rows[0]!.id]),
+    ).rejects.toThrow(/users_identity_complete/);
+  });
+
+  it('activates once identity is complete', async () => {
+    const rows = await db.admin<{ id: string }>(
+      `insert into public.users (status) values ('onboarding') returning id`,
+    );
+    await expect(
+      db.admin(
+        `update public.users
+         set display_name = 'Complete', gender = 'female',
+             date_of_birth = date '1994-03-02', country_code = 'pk',
+             status = 'active'
+         where id = $1`,
+        [rows[0]!.id],
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('still rejects an under-18 date of birth supplied later', async () => {
+    const rows = await db.admin<{ id: string }>(
+      `insert into public.users (status) values ('onboarding') returning id`,
+    );
+    await expect(
+      db.admin(
+        `update public.users set date_of_birth = current_date - interval '16 years' where id = $1`,
+        [rows[0]!.id],
+      ),
+    ).rejects.toThrow(/at least 18/);
+  });
+});
+
 describe('reference data constraints', () => {
   it('rejects a display string where a code belongs', async () => {
     await expect(

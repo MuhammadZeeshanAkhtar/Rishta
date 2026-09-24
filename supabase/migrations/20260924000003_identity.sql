@@ -18,10 +18,17 @@
 
 create table public.users (
   id                   uuid primary key default gen_random_uuid(),
-  display_name         text not null,
-  gender               text not null,
-  date_of_birth        date not null,
-  country_code         char(2) not null,
+
+  -- Nullable DURING ONBOARDING ONLY. The account row is created as soon as the
+  -- JWT is verified, before the person has told us anything about themselves,
+  -- and onboarding must survive a dropped connection without starting over.
+  -- users_identity_complete below restores the invariant the moment a user
+  -- leaves 'onboarding': there is no such thing as an active user without a
+  -- name, gender, date of birth and country.
+  display_name         text,
+  gender               text,
+  date_of_birth        date,
+  country_code         char(2),
 
   -- Constant column existing only to carry the composite FK below.
   country_ref_type     text generated always as ('country'::text) stored,
@@ -34,13 +41,27 @@ create table public.users (
   updated_at           timestamptz not null default now(),
   deleted_at           timestamptz,
 
-  constraint users_display_name_len check (char_length(display_name) between 1 and 80),
-  constraint users_gender_valid check (gender in ('male', 'female')),
+  constraint users_display_name_len
+    check (display_name is null or char_length(display_name) between 1 and 80),
+  constraint users_gender_valid
+    check (gender is null or gender in ('male', 'female')),
   constraint users_status_valid check (status in (
     'onboarding', 'active', 'deactivated', 'suspended', 'banned', 'pending_deletion'
   )),
   constraint users_dob_sane check (
-    date_of_birth > date '1900-01-01' and date_of_birth < current_date
+    date_of_birth is null
+    or (date_of_birth > date '1900-01-01' and date_of_birth < current_date)
+  ),
+
+  -- The invariant, conditional on having left onboarding.
+  constraint users_identity_complete check (
+    status = 'onboarding'
+    or (
+      display_name is not null
+      and gender is not null
+      and date_of_birth is not null
+      and country_code is not null
+    )
   ),
 
   -- Database-level integrity on a hard-filterable reference code (ERD E2).
@@ -100,7 +121,8 @@ returns trigger
 language plpgsql
 as $$
 begin
-  if new.date_of_birth > (current_date - interval '18 years') then
+  if new.date_of_birth is not null
+     and new.date_of_birth > (current_date - interval '18 years') then
     raise exception 'members must be at least 18 years old'
       using errcode = 'check_violation';
   end if;

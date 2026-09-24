@@ -1,0 +1,30 @@
+{
+  "name": "@nikahmate/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trusted server layer: authorization, business rules, entitlements.",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "^10.3.0",
+    "@nikahmate/domain": "workspace:*",
+    "@sentry/node": "^10.19.0",
+    "fastify": "^5.6.1",
+    "fastify-plugin": "^6.0.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.3",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@nikahmate/db": "workspace:*",
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "vitest": "^3.2.4"
+  }
+}

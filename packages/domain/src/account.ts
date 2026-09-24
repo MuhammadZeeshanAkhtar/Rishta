@@ -63,7 +63,8 @@ export type VerificationBadge = z.infer<typeof verificationBadgeSchema>;
 
 export const meSchema = z.object({
   userId: z.string().uuid(),
-  displayName: z.string(),
+  /** Null until onboarding collects it. */
+  displayName: z.string().nullable(),
   status: z.enum(USER_STATUSES),
   onboardingStep: z.string().nullable(),
   profileCompleted: z.boolean(),

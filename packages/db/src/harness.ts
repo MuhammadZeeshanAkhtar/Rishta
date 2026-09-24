@@ -18,7 +18,7 @@ export const MIGRATIONS_DIR = join(here, '..', '..', '..', 'supabase', 'migratio
  * `request.jwt.claims` GUC, which PostgREST sets per request and which a test
  * sets with `set local`.
  */
-const SUPABASE_SHIM = `
+export const SUPABASE_SHIM = `
   create schema if not exists auth;
 
   create or replace function auth.uid()
@@ -72,8 +72,17 @@ export interface TestDb {
  * Migrations run exactly as written — no test-only edits. A migration that
  * cannot apply here is a migration that will not apply in production.
  */
-export async function createTestDb(): Promise<TestDb> {
-  const db = new PGlite();
+export interface SqlRunner {
+  exec(sql: string): Promise<unknown>;
+}
+
+/**
+ * Applies the Supabase shim and every migration, in filename order.
+ *
+ * Exported so the API test suite reuses exactly this — one definition of "set
+ * up a database", rather than a second copy that can drift.
+ */
+export async function applyMigrations(db: SqlRunner): Promise<void> {
   await db.exec(SUPABASE_SHIM);
 
   const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
@@ -90,6 +99,11 @@ export async function createTestDb(): Promise<TestDb> {
       throw new Error(`Migration ${file} failed: ${(error as Error).message}`, { cause: error });
     }
   }
+}
+
+export async function createTestDb(): Promise<TestDb> {
+  const db = new PGlite();
+  await applyMigrations(db);
 
   return {
     async as<T = Record<string, unknown>>(
