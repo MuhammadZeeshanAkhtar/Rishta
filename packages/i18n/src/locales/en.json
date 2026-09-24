@@ -1,0 +1,43 @@
+{
+  "common": {
+    "continue": "Continue",
+    "back": "Back",
+    "cancel": "Cancel",
+    "save": "Save",
+    "retry": "Try again",
+    "loading": "Loading…",
+    "skip": "Skip"
+  },
+  "tabs": {
+    "discover": "Discover",
+    "interests": "Interests",
+    "messages": "Messages",
+    "family": "Family",
+    "me": "Me"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signUp": "Create account",
+    "signOut": "Sign out",
+    "email": "Email",
+    "phone": "Phone number",
+    "password": "Password",
+    "forgotPassword": "Forgot password?",
+    "continueWithGoogle": "Continue with Google",
+    "verifyEmail": "Verify your email",
+    "verifyPhone": "Verify your phone number",
+    "enterCode": "Enter the code we sent you",
+    "resendCode": "Resend code"
+  },
+  "onboarding": {
+    "welcome": "Find a spouse, with dignity",
+    "ageGate": "You must be at least 18 to use NikahMate",
+    "chooseLanguage": "Choose your language",
+    "incomplete": "Complete your profile to start"
+  },
+  "errors": {
+    "network": "No connection. Check your network and try again.",
+    "generic": "Something went wrong. Please try again.",
+    "sessionExpired": "Your session has expired. Please sign in again."
+  }
+}

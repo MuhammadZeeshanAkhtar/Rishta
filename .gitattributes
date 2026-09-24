@@ -1,0 +1,28 @@
+# Normalise every text file to LF in the repository and in the working tree.
+#
+# Without this, Windows checkouts get CRLF while .editorconfig and Prettier
+# (endOfLine: lf) expect LF, so `pnpm format:check` fails locally but passes in
+# CI. Pinning it here keeps every machine and the CI runner identical.
+* text=auto eol=lf
+
+*.sql   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+
+# Binary — never normalise, never diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.gif   binary
+*.ico   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.keystore binary
+*.jks   binary
+
+pnpm-lock.yaml -diff linguist-generated

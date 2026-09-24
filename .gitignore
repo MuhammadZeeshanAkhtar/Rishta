@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# expo
+.expo/
+.expo-shared/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+
+# env & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+*.pem
+
+# supabase local
+supabase/.branches/
+supabase/.temp/
+
+# editors / os
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# logs & coverage
+*.log
+npm-debug.log*
+coverage/

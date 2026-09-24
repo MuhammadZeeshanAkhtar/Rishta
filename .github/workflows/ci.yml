@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Includes the migration and RLS suites. They run against a real Postgres
+      # (PGlite, in-process) so no Docker or service container is needed — the
+      # migration files are applied exactly as written.
+      - name: Test
+        run: pnpm test
+
+  secrets:
+    name: Secret guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A narrow, deliberate check for the things this project has committed to
+      # never shipping (README principle 3). Not a substitute for a real secret
+      # scanner, but it fails fast and costs nothing.
+      - name: No service-role keys, AI keys or .env files
+        run: |
+          set -euo pipefail
+
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$'; then
+            echo "::error::A .env file is tracked. Secrets must never be committed."
+            exit 1
+          fi
+
+          # Supabase service-role JWTs carry this role claim; anon keys do not.
+          if git grep -nE '"role"\s*:\s*"service_role"' -- . ':(exclude)docs/**' ':(exclude)*.md'; then
+            echo "::error::Possible Supabase service-role key in the repository."
+            exit 1
+          fi
+
+          # Google API keys (Gemini included) have a fixed, recognisable shape.
+          # Gemini is not used in v1 at all, so any match here is a mistake.
+          if git grep -nE 'AIza[0-9A-Za-z_-]{35}' -- . ':(exclude)*.md'; then
+            echo "::error::Possible Google/Gemini API key in the repository."
+            exit 1
+          fi
+
+          echo "No secrets detected."

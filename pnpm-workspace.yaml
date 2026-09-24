@@ -1,0 +1,13 @@
+packages:
+  - 'apps/*'
+  - 'services/*'
+  - 'packages/*'
+
+allowBuilds:
+  esbuild: set this to true or false
+
+# Explicit allowlist of packages permitted to run install scripts.
+# pnpm blocks them by default; keep this list short and justified rather than
+# disabling the check. Every entry is a package we have chosen to trust.
+onlyBuiltDependencies:
+  - esbuild

@@ -1,0 +1,2729 @@
+openapi: 3.1.0
+
+# =============================================================================
+# NikahMate API — v1 contract
+#
+# STATUS: Proposed for review. NOTHING IS IMPLEMENTED.
+# No server exists, no Supabase project exists, no code has been written.
+#
+# Scope: the 96 member-facing endpoints of v1 (D4 = Option A).
+# Deferred and therefore ABSENT: proposals, AI/Gemini, payments, voice notes,
+# translation, selfie/KYC verification, audio/video calling, admin endpoints.
+#
+# This contract is deliberately RUNTIME-NEUTRAL (D1). Nothing here assumes
+# Node, Deno, Supabase or any particular host. That is what keeps the backend
+# runtime decision reversible and lets the future website and admin panel
+# reuse this contract unchanged.
+#
+# x-access mirrors README §9.2 access classes:
+#   public | self | member | perm | match | wali
+# =============================================================================
+
+info:
+  title: NikahMate API
+  version: 1.0.0-draft
+  description: |
+    Worldwide Muslim matrimonial platform.
+
+    **Authentication.** Every endpoint except those marked `x-access: public`
+    requires a Supabase-issued JWT as a bearer token. The API resolves it to an
+    internal `users.id`; the Supabase auth id is never a path or body parameter.
+
+    **Authorization.** Resolved once, server-side, by a single authorization
+    service. Row-level security in Postgres is a backstop, not the primary
+    control. Field-level visibility is applied by this API, not by RLS.
+
+    **Errors.** Every non-2xx response uses the `Problem` schema.
+
+    **Pagination.** Cursor-based throughout. Offset pagination is not used —
+    it degrades linearly on the longest conversations, which belong to the
+    most engaged users.
+  contact:
+    name: NikahMate
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.nikahmate.example/v1
+    description: Placeholder. No environment exists yet.
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Account
+    description: Session, devices, security, data rights
+  - name: Reference
+    description: Coded lists and their translations
+  - name: Profile
+    description: Own profile and permission-filtered profiles of others
+  - name: Photos
+    description: Private media with controlled reveal
+  - name: Preferences
+    description: Hard and soft partner preferences
+  - name: Discovery
+    description: Sections, search, shortlist
+  - name: Compatibility
+    description: Deterministic scoring and its explanations
+  - name: Interests
+    description: Send, respond, withdraw
+  - name: Matches
+    description: Mutual matches
+  - name: Conversations
+    description: Staged messaging
+  - name: Family
+    description: Wali invitations and scoped access (Observer tier in v1)
+  - name: Verification
+    description: Email and phone verification
+  - name: Safety
+    description: Blocks, reports, safety centre
+  - name: Notifications
+    description: Inbox, preferences, push registration
+  - name: Entitlements
+    description: Plans, entitlements, usage counters
+
+paths:
+
+  # ===========================================================================
+  # ACCOUNT — 10
+  # ===========================================================================
+
+  /account/bootstrap:
+    post:
+      operationId: bootstrapAccount
+      summary: Create the member record after Supabase Auth sign-up
+      description: |
+        Idempotent. Called once after the client obtains a Supabase session.
+        Creates `users` and `user_auth_links`, and returns the onboarding state.
+      tags: [Account]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BootstrapRequest' }
+      responses:
+        '200': { description: Existing account returned, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '201': { description: Account created, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me:
+    get:
+      operationId: getMe
+      summary: Account state, flags and onboarding position
+      tags: [Account]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      operationId: updateMe
+      summary: Update locale, timezone and display settings
+      tags: [Account]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserSettingsUpdate' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/devices:
+    get:
+      operationId: listDevices
+      summary: Devices with an active session
+      tags: [Account]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Device' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/devices/{deviceId}:
+    delete:
+      operationId: revokeDevice
+      summary: Revoke a device session
+      tags: [Account]
+      x-access: self
+      parameters:
+        - { name: deviceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/security-events:
+    get:
+      operationId: listSecurityEvents
+      summary: Sign-ins and credential changes
+      tags: [Account]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/SecurityEvent' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/deactivate:
+    post:
+      operationId: deactivateAccount
+      summary: Hide the profile without deleting anything
+      description: Reversible. The user can return at any time; nothing is erased.
+      tags: [Account]
+      x-access: self
+      responses:
+        '204': { description: Deactivated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/reactivate:
+    post:
+      operationId: reactivateAccount
+      summary: Return from deactivation
+      tags: [Account]
+      x-access: self
+      responses:
+        '204': { description: Reactivated }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/delete:
+    post:
+      operationId: requestDeletion
+      summary: Request erasure
+      description: |
+        Starts a 30-day grace period (ERD E1). An open moderation case places a
+        retention hold and delays execution; the response says so in general terms.
+        Erasure anonymises — a counterpart keeps their side of a conversation.
+      tags: [Account]
+      x-access: self
+      x-async: true
+      responses:
+        '202': { description: Scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/DeletionRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: cancelDeletion
+      summary: Cancel a pending deletion during the grace period
+      tags: [Account]
+      x-access: self
+      responses:
+        '204': { description: Cancelled }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/export:
+    post:
+      operationId: requestExport
+      summary: Request a data export
+      tags: [Account]
+      x-access: self
+      x-async: true
+      responses:
+        '202': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/ExportJob' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # ===========================================================================
+  # REFERENCE — 3
+  # ===========================================================================
+
+  /reference/manifest:
+    get:
+      operationId: getReferenceManifest
+      summary: Version hashes per reference type, for client-side caching
+      description: |
+        The client caches reference data aggressively and re-fetches a type only
+        when its hash changes. On a poor connection this is the difference
+        between a usable app and a spinner.
+      tags: [Reference]
+      x-access: public
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/Locale' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
+
+  /reference/{type}:
+    get:
+      operationId: listReferenceItems
+      summary: All items of one reference type, localised
+      tags: [Reference]
+      x-access: public
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/ReferenceType' }
+        - { $ref: '#/components/parameters/Locale' }
+        - { name: parentCode, in: query, schema: { type: string }, description: Filter by parent, e.g. regions of a country }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type: { type: string }
+                  hash: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/ReferenceItem' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reference/{type}/{code}:
+    get:
+      operationId: getReferenceItem
+      summary: One reference item
+      tags: [Reference]
+      x-access: public
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/ReferenceType' }
+        - { name: code, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/Locale' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ReferenceItem' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===========================================================================
+  # PROFILE — 9
+  # ===========================================================================
+
+  /me/profile:
+    get:
+      operationId: getMyProfile
+      summary: Own profile, all fields
+      tags: [Profile]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OwnProfile' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      operationId: updateMyProfile
+      summary: Update one or more profile sections
+      description: |
+        Partial. Reference codes are validated against `reference_items` by the
+        shared Zod schema before anything is written (ERD E2).
+      tags: [Profile]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfileUpdate' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OwnProfile' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/profile/completion:
+    get:
+      operationId: getProfileCompletion
+      summary: Completion score and the next suggested steps
+      tags: [Profile]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ProfileCompletion' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/profile/preview:
+    get:
+      operationId: previewMyProfile
+      summary: How this profile appears to a given viewer relationship
+      description: Lets a user verify their privacy settings do what they expect.
+      tags: [Profile]
+      x-access: self
+      parameters:
+        - name: as
+          in: query
+          schema: { type: string, enum: [stranger, interest_pending, match, wali] }
+          required: true
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicProfile' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/profile/submit:
+    post:
+      operationId: submitProfileForReview
+      summary: Submit the completed profile for review
+      description: A profile is not discoverable until review passes.
+      tags: [Profile]
+      x-access: self
+      x-async: true
+      responses:
+        '202': { description: Submitted, content: { application/json: { schema: { $ref: '#/components/schemas/ProfileCompletion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/profile/visibility:
+    get:
+      operationId: getFieldVisibility
+      summary: Per-field visibility settings
+      description: The 14 controllable keys from ERD E6.
+      tags: [Profile]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FieldVisibilityMap' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: setFieldVisibility
+      summary: Replace per-field visibility settings
+      tags: [Profile]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FieldVisibilityMap' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FieldVisibilityMap' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /profiles/{userId}:
+    get:
+      operationId: getProfile
+      summary: Another member's profile, permission-filtered
+      description: |
+        The response contains only fields this viewer may see. Fields that are
+        hidden are ABSENT, not null — the server never sends what the viewer
+        may not have (README principle 4).
+
+        Returns 404, not 403, when the viewer is blocked in either direction.
+        A 403 would confirm the account exists.
+      tags: [Profile]
+      x-access: perm
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicProfile' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /profiles/{userId}/view:
+    post:
+      operationId: recordProfileView
+      summary: Record that this profile was viewed
+      description: |
+        Suppressed from the viewed member's "who viewed you" when the viewer has
+        incognito enabled, but always recorded for abuse investigation.
+      tags: [Profile]
+      x-access: member
+      x-async: true
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '204': { description: Recorded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===========================================================================
+  # PHOTOS — 9
+  # ===========================================================================
+
+  /me/photos:
+    get:
+      operationId: listMyPhotos
+      summary: Own photos with moderation state
+      tags: [Photos]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/OwnPhoto' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/photos/upload-url:
+    post:
+      operationId: createPhotoUploadUrl
+      summary: Issue a scoped, short-lived upload target
+      description: |
+        The client uploads directly to storage using this target, then calls
+        finalize. The API never proxies image bytes.
+      tags: [Photos]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contentType, byteSize]
+              properties:
+                contentType: { type: string, enum: ['image/jpeg', 'image/png', 'image/webp'] }
+                byteSize: { type: integer, maximum: 10485760 }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/UploadTarget' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /me/photos/{photoId}/finalize:
+    post:
+      operationId: finalizePhoto
+      summary: Generate variants and run moderation
+      description: |
+        Queues server-side generation of the thumbnail and blurred derivatives,
+        then automated moderation. The photo is not visible to anyone until
+        moderation passes.
+      tags: [Photos]
+      x-access: self
+      x-async: true
+      parameters:
+        - { $ref: '#/components/parameters/PhotoId' }
+      responses:
+        '202': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/OwnPhoto' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/photos/{photoId}:
+    patch:
+      operationId: updatePhoto
+      summary: Change visibility, order or primary flag
+      tags: [Photos]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/PhotoId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visibility: { $ref: '#/components/schemas/PhotoVisibility' }
+                position: { type: integer, minimum: 0 }
+                isPrimary: { type: boolean }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OwnPhoto' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deletePhoto
+      summary: Delete a photo and its variants
+      tags: [Photos]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/PhotoId' }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /profiles/{userId}/photos:
+    get:
+      operationId: getProfilePhotos
+      summary: Another member's photos, as short-lived signed URLs
+      description: |
+        Returns only what this viewer may see, at the correct variant. A photo
+        at `blurred` visibility returns the server-generated blurred file — never
+        the original with a client-side blur applied.
+
+        URLs expire in 5 minutes and are not cacheable.
+      tags: [Photos]
+      x-access: perm
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/VisiblePhoto' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /profiles/{userId}/photo-request:
+    post:
+      operationId: requestPhotoAccess
+      summary: Ask to see private photos
+      description: One open request per pair at a time — also the anti-nagging control.
+      tags: [Photos]
+      x-access: member
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message: { type: string, maxLength: 300 }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PhotoRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/photo-requests:
+    get:
+      operationId: listPhotoRequests
+      summary: Incoming and outgoing photo requests
+      tags: [Photos]
+      x-access: self
+      parameters:
+        - { name: direction, in: query, schema: { type: string, enum: [incoming, outgoing] } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/PhotoRequestStatus' } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/PhotoRequest' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/photo-requests/{requestId}/respond:
+    post:
+      operationId: respondToPhotoRequest
+      summary: Approve or decline a photo request
+      tags: [Photos]
+      x-access: self
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, decline] }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PhotoRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===========================================================================
+  # PREFERENCES — 4
+  # ===========================================================================
+
+  /me/preferences:
+    get:
+      operationId: getPreferences
+      summary: Hard and soft partner preferences
+      tags: [Preferences]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Preferences' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: replacePreferences
+      summary: Replace all preferences
+      tags: [Preferences]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Preferences' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Preferences' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      operationId: updatePreferences
+      summary: Partially update preferences
+      tags: [Preferences]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Preferences' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Preferences' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/preferences/impact:
+    get:
+      operationId: getPreferenceImpact
+      summary: How many profiles match these preferences
+      description: |
+        Shown while editing so a user can see when a criterion has narrowed
+        their pool to almost nothing, and loosen it deliberately rather than
+        wondering why discovery is empty.
+      tags: [Preferences]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PreferenceImpact' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # DISCOVERY — 8
+  # ===========================================================================
+
+  /discovery/sections:
+    get:
+      operationId: listDiscoverySections
+      summary: Available sections with a short preview of each
+      tags: [Discovery]
+      x-access: member
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/DiscoverySection' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /discovery/sections/{sectionKey}:
+    get:
+      operationId: getDiscoverySection
+      summary: One section, paginated
+      description: |
+        Served from precomputed `match_candidates`, never a live scan. Blocks,
+        dismissals and privacy tiers are applied on read, so a profile blocked
+        since the last precompute never appears.
+      tags: [Discovery]
+      x-access: member
+      parameters:
+        - name: sectionKey
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [recommended, highly_compatible, nearby, verified, recently_joined, same_language, same_country, open_to_relocation]
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { $ref: '#/components/responses/ProfileCardPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /discovery/search:
+    post:
+      operationId: searchProfiles
+      summary: Advanced filtered search
+      description: |
+        Filters beyond the free tier are entitlement-gated and return 403 with
+        `code: entitlement_required` rather than silently ignoring the filter.
+      tags: [Discovery]
+      x-access: member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SearchRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ProfileCardPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /discovery/shortlist:
+    get:
+      operationId: getShortlist
+      summary: Saved profiles
+      tags: [Discovery]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { $ref: '#/components/responses/ProfileCardPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /discovery/shortlist/{userId}:
+    put:
+      operationId: addToShortlist
+      summary: Save a profile
+      tags: [Discovery]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: Saved }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: removeFromShortlist
+      summary: Unsave a profile
+      tags: [Discovery]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /discovery/{userId}/dismiss:
+    post:
+      operationId: dismissProfile
+      summary: Not interested — hide permanently
+      description: Never surfaced to the dismissed member.
+      tags: [Discovery]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: Dismissed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/profile-views:
+    get:
+      operationId: listProfileViews
+      summary: Who viewed me
+      description: Entitlement-gated. Incognito viewers are excluded.
+      tags: [Discovery]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { $ref: '#/components/responses/ProfileCardPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ===========================================================================
+  # COMPATIBILITY — 4
+  # ===========================================================================
+
+  /compatibility/dimensions:
+    get:
+      operationId: listCompatibilityDimensions
+      summary: Dimension definitions and their weights
+      description: |
+        Published deliberately. A user is entitled to know what the score is
+        made of — D6 chose a deterministic engine precisely so this is possible.
+      tags: [Compatibility]
+      x-access: public
+      security: []
+      parameters: [{ $ref: '#/components/parameters/Locale' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  engineVersion: { type: string, examples: ['v1.0'] }
+                  items: { type: array, items: { $ref: '#/components/schemas/CompatibilityDimension' } }
+
+  /compatibility/{userId}:
+    get:
+      operationId: getCompatibility
+      summary: Overall score and sub-scores against this member
+      tags: [Compatibility]
+      x-access: member
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CompatibilityScore' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /compatibility/{userId}/explanation:
+    get:
+      operationId: getCompatibilityExplanation
+      summary: Why this profile may be compatible
+      description: |
+        Reasons are regenerated from `compatibility_factors` — the values that
+        were actually compared — not narrated after the fact. Rendered from
+        translated templates, so Urdu and Arabic are correct and nothing is
+        invented about a real person.
+      tags: [Compatibility]
+      x-access: member
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+        - { $ref: '#/components/parameters/Locale' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CompatibilityExplanation' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /compatibility/recompute:
+    post:
+      operationId: recomputeCompatibility
+      summary: Recompute after a preference change
+      description: Rate-limited. The nightly batch does the bulk of this work.
+      tags: [Compatibility]
+      x-access: self
+      x-async: true
+      responses:
+        '202': { description: Queued }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # ===========================================================================
+  # INTERESTS — 6
+  # ===========================================================================
+
+  /interests:
+    post:
+      operationId: sendInterest
+      summary: Send an interest
+      description: |
+        Checks, in order: block (either direction), gender eligibility, profile
+        approved, daily quota, existing interest. Quota consumption happens in
+        the same transaction as the insert — otherwise two concurrent requests
+        both read the same remaining count and the limit is advisory.
+
+        `actedBy` is set when a delegate sent this on the owner's behalf (A7),
+        and is ALWAYS returned to the recipient. Delegation is never covert.
+      tags: [Interests]
+      x-access: member
+      x-async: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipientUserId]
+              properties:
+                recipientUserId: { type: string, format: uuid }
+                note: { type: string, maxLength: 500 }
+      responses:
+        '201': { description: Sent, content: { application/json: { schema: { $ref: '#/components/schemas/Interest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429':
+          description: Daily interest quota exhausted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+    get:
+      operationId: listInterests
+      summary: Interests sent or received
+      tags: [Interests]
+      x-access: self
+      parameters:
+        - { name: direction, in: query, required: true, schema: { type: string, enum: [sent, received] } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/InterestStatus' } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Interest' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /interests/{interestId}:
+    get:
+      operationId: getInterest
+      summary: One interest
+      tags: [Interests]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/InterestId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Interest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: withdrawInterest
+      summary: Withdraw a sent interest
+      tags: [Interests]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/InterestId' }]
+      responses:
+        '204': { description: Withdrawn }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /interests/{interestId}/respond:
+    post:
+      operationId: respondToInterest
+      summary: Accept, decline or defer an interest
+      description: |
+        Accepting creates a match and opens a conversation at stage 1.
+        A decline tells the sender it was declined and nothing more — no reason,
+        no detail. `maybe_later` parks it and remains revisitable.
+      tags: [Interests]
+      x-access: self
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/InterestId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [accept, decline, maybe_later] }
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interest: { $ref: '#/components/schemas/Interest' }
+                  match: { $ref: '#/components/schemas/Match' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/quotas:
+    get:
+      operationId: getQuotas
+      summary: Remaining daily allowances
+      description: 'Free plan: 5 interests per day (ERD E4/A5). Resets at midnight in the user''s timezone.'
+      tags: [Interests]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Quota' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # MATCHES — 3
+  # ===========================================================================
+
+  /matches:
+    get:
+      operationId: listMatches
+      summary: Active matches
+      tags: [Matches]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Match' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /matches/{matchId}:
+    get:
+      operationId: getMatch
+      summary: One match
+      tags: [Matches]
+      x-access: match
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Match' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /matches/{matchId}/unmatch:
+    post:
+      operationId: unmatch
+      summary: End a match
+      tags: [Matches]
+      x-access: match
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 300 }
+      responses:
+        '204': { description: Ended }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===========================================================================
+  # CONVERSATIONS — 9
+  # ===========================================================================
+
+  /conversations:
+    get:
+      operationId: listConversations
+      summary: Conversations with unread counts
+      tags: [Conversations]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Conversation' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /conversations/{conversationId}:
+    get:
+      operationId: getConversation
+      summary: Conversation metadata, stage and participants
+      tags: [Conversations]
+      x-access: match
+      parameters: [{ $ref: '#/components/parameters/ConversationId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /conversations/{conversationId}/messages:
+    get:
+      operationId: listMessages
+      summary: Message history
+      description: Keyset pagination on creation time, newest first.
+      tags: [Conversations]
+      x-access: match
+      parameters:
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Message' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: sendMessage
+      summary: Send a text message
+      description: |
+        Stage 1 caps a conversation at 30 messages per day; the cap lifts at
+        stage 2. Realtime delivery is a Supabase Realtime channel subscription,
+        not a response to this call — this endpoint owns the write and the
+        authorization, Realtime owns push-to-device.
+      tags: [Conversations]
+      x-access: match
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/ConversationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, clientMessageId]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 4000 }
+                clientMessageId:
+                  type: string
+                  format: uuid
+                  description: Idempotency key. Retrying on a flaky connection must not double-send.
+      responses:
+        '201': { description: Sent, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /conversations/{conversationId}/read:
+    post:
+      operationId: markConversationRead
+      summary: Mark read up to a message
+      description: Recorded regardless; surfaced to the counterpart only if the reader has read receipts enabled.
+      tags: [Conversations]
+      x-access: match
+      parameters: [{ $ref: '#/components/parameters/ConversationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lastReadMessageId]
+              properties:
+                lastReadMessageId: { type: string, format: uuid }
+      responses:
+        '204': { description: Recorded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /conversations/{conversationId}/stage:
+    get:
+      operationId: getConversationStage
+      summary: Current stage and what it unlocks
+      tags: [Conversations]
+      x-access: match
+      parameters:
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { $ref: '#/components/parameters/Locale' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ConversationStage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /conversations/{conversationId}/stage/propose:
+    post:
+      operationId: proposeStageAdvance
+      summary: Propose advancing to the next stage
+      description: Advancement is mutual. This creates a proposal the counterpart must accept.
+      tags: [Conversations]
+      x-access: match
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/ConversationId' }]
+      responses:
+        '201': { description: Proposed, content: { application/json: { schema: { $ref: '#/components/schemas/StageTransition' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /conversations/{conversationId}/stage/respond:
+    post:
+      operationId: respondToStageAdvance
+      summary: Accept or decline a stage advance
+      tags: [Conversations]
+      x-access: match
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/ConversationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transitionId, decision]
+              properties:
+                transitionId: { type: string, format: uuid }
+                decision: { type: string, enum: [accept, decline] }
+      responses:
+        '200': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/ConversationStage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /conversations/{conversationId}/suggestions:
+    get:
+      operationId: getQuestionSuggestions
+      summary: Stage-appropriate marriage questions
+      description: |
+        v1 serves a curated, translated question bank per stage — NOT generated
+        text. Gemini-authored suggestions arrive in v1.2 behind the same contract,
+        so the client does not change when they do.
+      tags: [Conversations]
+      x-access: match
+      parameters:
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { $ref: '#/components/parameters/Locale' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stage: { type: integer }
+                  items: { type: array, items: { $ref: '#/components/schemas/QuestionSuggestion' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===========================================================================
+  # FAMILY / WALI — 9  (Observer tier only in v1)
+  # ===========================================================================
+
+  /family/members:
+    get:
+      operationId: listFamilyMembers
+      summary: Family members and what each may see
+      tags: [Family]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FamilyMember' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /family/invitations:
+    post:
+      operationId: inviteFamilyMember
+      summary: Invite a family member
+      description: |
+        v1 accepts `tier: observer` only. Participant and Manager arrive in 1.1;
+        sending them now returns 400 rather than silently downgrading, so a
+        client built against a future version fails loudly instead of quietly
+        granting less than the user intended.
+      tags: [Family]
+      x-access: self
+      x-async: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contact, relationshipCode, tier]
+              properties:
+                contact: { type: string, description: Email or E.164 phone }
+                relationshipCode: { type: string, enum: [father, mother, brother, sister, guardian, other] }
+                tier: { type: string, enum: [observer] }
+                permissions:
+                  type: array
+                  items: { type: string, enum: [view_profile, view_matches] }
+      responses:
+        '201': { description: Sent, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyInvitation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    get:
+      operationId: listFamilyInvitations
+      summary: Invitations sent and received
+      tags: [Family]
+      x-access: self
+      parameters:
+        - { name: direction, in: query, schema: { type: string, enum: [sent, received] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FamilyInvitation' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /family/invitations/{invitationId}/respond:
+    post:
+      operationId: respondToFamilyInvitation
+      summary: Accept or decline an invitation
+      tags: [Family]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/InvitationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [accept, decline] }
+      responses:
+        '200': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyInvitation' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { description: Invitation expired, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+
+  /family/invitations/{invitationId}:
+    delete:
+      operationId: cancelFamilyInvitation
+      summary: Cancel a sent invitation
+      tags: [Family]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/InvitationId' }]
+      responses:
+        '204': { description: Cancelled }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/members/{relationshipId}/permissions:
+    patch:
+      operationId: updateFamilyPermissions
+      summary: Change what a family member may see
+      tags: [Family]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/RelationshipId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                permissions:
+                  type: array
+                  items: { type: string, enum: [view_profile, view_matches] }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyMember' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/members/{relationshipId}:
+    delete:
+      operationId: revokeFamilyMember
+      summary: Revoke access immediately
+      description: Takes effect at once. Existing sessions do not retain access.
+      tags: [Family]
+      x-access: self
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/RelationshipId' }]
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/access-log:
+    get:
+      operationId: getFamilyAccessLog
+      summary: Everything a family member has looked at
+      description: |
+        The anti-coercion control. It only works if the app surfaces it, so this
+        is a first-class screen, not a buried setting.
+      tags: [Family]
+      x-access: self
+      parameters:
+        - { name: relationshipId, in: query, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/FamilyAccessLogEntry' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /family/managed:
+    get:
+      operationId: listManagedProfiles
+      summary: Profiles this account has been granted access to
+      description: One delegate may hold grants on several profiles (A6).
+      tags: [Family]
+      x-access: wali
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedProfile' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # VERIFICATION — 4
+  # ===========================================================================
+
+  /me/verification:
+    get:
+      operationId: getVerificationStatus
+      summary: Current verification levels and badges
+      description: |
+        Each badge states exactly what was checked. There is no generic
+        "Verified" badge, because it would imply more than was confirmed.
+      tags: [Verification]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/VerificationStatus' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/verification/email/resend:
+    post:
+      operationId: resendEmailVerification
+      summary: Resend the email verification link
+      tags: [Verification]
+      x-access: self
+      responses:
+        '202': { description: Sent }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /me/verification/phone/start:
+    post:
+      operationId: startPhoneVerification
+      summary: Send an OTP
+      tags: [Verification]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneE164]
+              properties:
+                phoneE164: { type: string, pattern: '^\+[1-9]\d{6,14}$' }
+      responses:
+        '202': { description: Sent }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /me/verification/phone/confirm:
+    post:
+      operationId: confirmPhoneVerification
+      summary: Confirm the OTP
+      tags: [Verification]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, minLength: 4, maxLength: 8 }
+      responses:
+        '200': { description: Verified, content: { application/json: { schema: { $ref: '#/components/schemas/VerificationStatus' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # ===========================================================================
+  # SAFETY — 8
+  # ===========================================================================
+
+  /blocks:
+    get:
+      operationId: listBlocks
+      summary: Members this account has blocked
+      tags: [Safety]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Block' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /blocks/{userId}:
+    put:
+      operationId: blockUser
+      summary: Block a member
+      description: |
+        Bidirectional in effect: neither party sees the other anywhere.
+        The blocked member is never told and cannot detect it — every read
+        path returns 404 rather than 403.
+      tags: [Safety]
+      x-access: member
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reasonCode: { type: string }
+      responses:
+        '204': { description: Blocked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: unblockUser
+      summary: Unblock a member
+      tags: [Safety]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: Unblocked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reports:
+    post:
+      operationId: createReport
+      summary: Report a member
+      description: |
+        An evidence snapshot is captured by value at report time. If it held
+        references instead, a bad actor deleting their messages would destroy
+        the case against them.
+      tags: [Safety]
+      x-access: member
+      x-async: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reportedUserId, category]
+              properties:
+                reportedUserId: { type: string, format: uuid }
+                category: { $ref: '#/components/schemas/ReportCategory' }
+                description: { type: string, maxLength: 2000 }
+                contextType: { type: string, enum: [profile, conversation, message, photo] }
+                contextId: { type: string, format: uuid }
+      responses:
+        '201': { description: Filed, content: { application/json: { schema: { $ref: '#/components/schemas/Report' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/reports:
+    get:
+      operationId: listMyReports
+      summary: Reports I have filed, and their outcomes
+      tags: [Safety]
+      x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Report' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /safety/center:
+    get:
+      operationId: getSafetyCenter
+      summary: Localised safety guidance
+      tags: [Safety]
+      x-access: public
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/Locale' }
+        - { name: country, in: query, schema: { type: string, minLength: 2, maxLength: 2 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/SafetyCenter' } } } }
+
+  /safety/panic-exit:
+    post:
+      operationId: panicExit
+      summary: Immediately hide the profile and end active sessions
+      description: |
+        One action, no confirmation dialog. For someone whose situation changed
+        suddenly — a family member who should not have found the account, or
+        worse. Speed matters more than reversibility here; it is undoable later
+        from a signed-in session.
+      tags: [Safety]
+      x-access: self
+      x-async: true
+      responses:
+        '204': { description: Hidden }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /support/contact:
+    post:
+      operationId: contactSupport
+      summary: Private channel to support
+      description: |
+        Never visible to any family member or delegate, regardless of their
+        grants, and never surfaced in the family access log. This is the route
+        for reporting coercion by someone who has access to the account.
+      tags: [Safety]
+      x-access: self
+      x-async: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, body]
+              properties:
+                subject: { type: string, maxLength: 200 }
+                body: { type: string, maxLength: 5000 }
+                urgent: { type: boolean, default: false }
+      responses:
+        '201': { description: Received }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # NOTIFICATIONS — 7
+  # ===========================================================================
+
+  /notifications:
+    get:
+      operationId: listNotifications
+      summary: Notification inbox
+      description: The inbox is the source of truth; push is one delivery channel.
+      tags: [Notifications]
+      x-access: self
+      parameters:
+        - { name: unreadOnly, in: query, schema: { type: boolean, default: false } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      unreadCount: { type: integer }
+                      items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /notifications/{notificationId}/read:
+    post:
+      operationId: markNotificationRead
+      summary: Mark one notification read
+      tags: [Notifications]
+      x-access: self
+      parameters:
+        - { name: notificationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Marked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      summary: Mark everything read
+      tags: [Notifications]
+      x-access: self
+      responses:
+        '204': { description: Marked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/notification-preferences:
+    get:
+      operationId: getNotificationPreferences
+      summary: Per-type settings and quiet hours
+      tags: [Notifications]
+      x-access: self
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationPreferences' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: setNotificationPreferences
+      summary: Replace notification preferences
+      description: Quiet hours are evaluated in the user's timezone, never the server's.
+      tags: [Notifications]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationPreferences' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationPreferences' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/push-tokens:
+    post:
+      operationId: registerPushToken
+      summary: Register a device push token
+      tags: [Notifications]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, token, platform]
+              properties:
+                deviceId: { type: string }
+                token: { type: string }
+                platform: { type: string, enum: [android, ios] }
+      responses:
+        '204': { description: Registered }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/push-tokens/{deviceId}:
+    delete:
+      operationId: unregisterPushToken
+      summary: Unregister a device push token
+      tags: [Notifications]
+      x-access: self
+      parameters:
+        - { name: deviceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Unregistered }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # ENTITLEMENTS — 3
+  # ===========================================================================
+
+  /plans:
+    get:
+      operationId: listPlans
+      summary: Available plans
+      description: v1 exposes the free plan only. Money is switched off.
+      tags: [Entitlements]
+      x-access: public
+      security: []
+      parameters: [{ $ref: '#/components/parameters/Locale' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Plan' } }
+
+  /me/entitlements:
+    get:
+      operationId: getEntitlements
+      summary: What this member may do
+      description: |
+        Feature code asks `can(user, key)`. It never asks whether a user is
+        premium — that is what keeps v1.2 billing from touching feature code.
+      tags: [Entitlements]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  planKey: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/Entitlement' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/usage:
+    get:
+      operationId: getUsage
+      summary: Counters against limits
+      tags: [Entitlements]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Quota' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+# =============================================================================
+# COMPONENTS
+# =============================================================================
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Supabase-issued JWT. The API resolves it to an internal `users.id` via
+        `user_auth_links`. The Supabase auth id is never accepted as a path or
+        body parameter.
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: Opaque keyset cursor from the previous page.
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    Locale:
+      name: locale
+      in: query
+      schema: { type: string, default: en, examples: [en, ur, ar] }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PhotoId:
+      name: photoId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InterestId:
+      name: interestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MatchId:
+      name: matchId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InvitationId:
+      name: invitationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RelationshipId:
+      name: relationshipId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ReferenceType:
+      name: type
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [country, region, city, language, education_level, field_of_study, profession,
+               industry, employment_status, marital_status, religious_practice, sect,
+               prayer_frequency, quran_level, marriage_timeline, relocation_option,
+               hobby, lifestyle_attribute, personality_trait, dress_practice, diet, smoking]
+
+  responses:
+    BadRequest:
+      description: Validation failed
+      content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unauthorized:
+      description: Missing or invalid token
+      content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Forbidden:
+      description: Authenticated but not permitted, or an entitlement is required
+      content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    NotFound:
+      description: |
+        Not found, or not visible to this viewer. Blocks and privacy return 404
+        rather than 403 — a 403 would confirm the resource exists.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Conflict:
+      description: Conflicts with current state
+      content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    TooManyRequests:
+      description: Rate limit or quota exceeded
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    ProfileCardPage:
+      description: A page of profile cards
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Page'
+              - type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ProfileCard' } }
+
+  schemas:
+
+    Problem:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: [validation_failed, entitlement_required, quota_exhausted, blocked] }
+        message: { type: string, description: Human-readable, already localised to the caller's locale }
+        messageKey: { type: string, description: i18n key, so the client can re-render on locale change }
+        fields:
+          type: object
+          additionalProperties: { type: string }
+          description: Field-level validation errors
+        retryAfterSeconds: { type: integer }
+
+    Page:
+      type: object
+      properties:
+        nextCursor: { type: [string, 'null'] }
+        hasMore: { type: boolean }
+
+    # --- Account -------------------------------------------------------------
+
+    BootstrapRequest:
+      type: object
+      required: [locale, timezone]
+      properties:
+        locale: { type: string }
+        timezone: { type: string, description: IANA identifier }
+        deviceId: { type: string }
+        platform: { type: string, enum: [android, ios] }
+
+    Me:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        status: { type: string, enum: [onboarding, active, deactivated, suspended, banned, pending_deletion] }
+        onboardingStep: { type: [string, 'null'] }
+        profileCompleted: { type: boolean }
+        locale: { type: string }
+        timezone: { type: string }
+        showOnlineStatus: { type: boolean }
+        sendReadReceipts: { type: boolean }
+        incognito: { type: boolean }
+        discoveryPaused: { type: boolean }
+        verification: { $ref: '#/components/schemas/VerificationStatus' }
+
+    UserSettingsUpdate:
+      type: object
+      properties:
+        locale: { type: string }
+        timezone: { type: string }
+        showOnlineStatus: { type: boolean }
+        sendReadReceipts: { type: boolean }
+        incognito: { type: boolean }
+        discoveryPaused: { type: boolean }
+
+    Device:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string }
+        appVersion: { type: string }
+        lastSeenAt: { type: string, format: date-time }
+        isCurrent: { type: boolean }
+
+    SecurityEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventType: { type: string, enum: [sign_in, sign_out, password_change, email_change, new_device, device_revoked] }
+        createdAt: { type: string, format: date-time }
+        approximateLocation: { type: [string, 'null'], description: Country-level only }
+
+    DeletionRequest:
+      type: object
+      properties:
+        requestedAt: { type: string, format: date-time }
+        scheduledFor: { type: string, format: date-time }
+        status: { type: string, enum: [pending, held, executed, cancelled] }
+        heldReason: { type: [string, 'null'], description: General terms only — never case detail }
+
+    ExportJob:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [queued, ready, expired] }
+        readyAt: { type: [string, 'null'], format: date-time }
+        downloadUrl: { type: [string, 'null'], description: Short-lived }
+
+    # --- Reference -----------------------------------------------------------
+
+    ReferenceItem:
+      type: object
+      properties:
+        code: { type: string, examples: [edu_bachelors] }
+        type: { type: string }
+        label: { type: string, description: Localised }
+        description: { type: [string, 'null'] }
+        parentCode: { type: [string, 'null'] }
+        sortOrder: { type: integer }
+
+    # --- Profile -------------------------------------------------------------
+
+    OwnProfile:
+      type: object
+      description: Every field, including those hidden from others.
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        dateOfBirth: { type: string, format: date }
+        gender: { type: string, enum: [male, female], description: Immutable once the profile is complete }
+        aboutMe: { type: [string, 'null'] }
+        lookingFor: { type: [string, 'null'] }
+        nationalityCode: { type: [string, 'null'] }
+        languages: { type: array, items: { type: string } }
+        heightCm: { type: [integer, 'null'] }
+        maritalStatusCode: { type: string }
+        hasChildren: { type: [boolean, 'null'] }
+        childrenCount: { type: [integer, 'null'] }
+        childrenLiveWithMe: { type: [boolean, 'null'] }
+        wantsChildrenCode: { type: [string, 'null'] }
+        marriageTimelineCode: { type: [string, 'null'] }
+        relocationWillingnessCode: { type: [string, 'null'] }
+        relocationTargetCountries: { type: array, items: { type: string } }
+        educationLevelCode: { type: [string, 'null'] }
+        fieldOfStudyCode: { type: [string, 'null'] }
+        institution: { type: [string, 'null'] }
+        professionCode: { type: [string, 'null'] }
+        industryCode: { type: [string, 'null'] }
+        employmentStatusCode: { type: [string, 'null'] }
+        religiousPracticeCode: { type: [string, 'null'] }
+        sectCode: { type: [string, 'null'], description: Null means not stated. Never auto-excluded by another member's filter. }
+        prayerFrequencyCode: { type: [string, 'null'] }
+        quranLevelCode: { type: [string, 'null'] }
+        dressPracticeCode: { type: [string, 'null'] }
+        familyReligiosityCode: { type: [string, 'null'] }
+        livingWithFamilyExpectationCode: { type: [string, 'null'] }
+        familyBackground: { type: [string, 'null'] }
+        hobbies: { type: array, items: { type: string } }
+        lifestyleAttributes: { type: array, items: { type: string } }
+        personalityTraits: { type: array, items: { type: string } }
+        dietCode: { type: [string, 'null'] }
+        smokingCode: { type: [string, 'null'] }
+        location: { $ref: '#/components/schemas/Location' }
+        sensitive: { $ref: '#/components/schemas/ProfileSensitive' }
+        reviewStatus: { type: string, enum: [draft, pending, approved, rejected] }
+
+    ProfileSensitive:
+      type: object
+      description: Returned only to the owner. Never included in another member's view.
+      properties:
+        phoneE164: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        employerName: { type: [string, 'null'] }
+        workplaceCity: { type: [string, 'null'] }
+
+    ProfileUpdate:
+      type: object
+      description: Any subset of the editable fields of OwnProfile.
+      additionalProperties: true
+
+    PublicProfile:
+      type: object
+      description: |
+        Another member's profile. **Fields the viewer may not see are ABSENT,
+        not null.** The client must treat absence as "not permitted", never as
+        "empty" — the server does not send what the viewer may not have.
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        age: { type: integer, description: Computed. Date of birth is never returned. }
+        gender: { type: string, enum: [male, female] }
+        countryCode: { type: string }
+        maritalStatusCode: { type: string }
+        religiousPracticeCode: { type: string }
+        marriageTimelineCode: { type: [string, 'null'] }
+        relocationWillingnessCode: { type: [string, 'null'] }
+        hasChildren: { type: [boolean, 'null'] }
+        languages: { type: array, items: { type: string } }
+        aboutMe: { type: string }
+        distanceBand: { $ref: '#/components/schemas/DistanceBand' }
+        verification: { $ref: '#/components/schemas/VerificationBadges' }
+        photos: { type: array, items: { $ref: '#/components/schemas/VisiblePhoto' } }
+        viewerRelationship: { type: string, enum: [stranger, interest_pending, match, wali] }
+        hiddenFieldCount: { type: integer, description: How many fields exist but are not visible, so the UI can say so honestly }
+
+    ProfileCard:
+      type: object
+      description: Compact representation for lists and feeds.
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        age: { type: integer }
+        countryCode: { type: string }
+        cityName: { type: [string, 'null'] }
+        distanceBand: { $ref: '#/components/schemas/DistanceBand' }
+        primaryPhoto: { oneOf: [{ $ref: '#/components/schemas/VisiblePhoto' }, { type: 'null' }] }
+        compatibilityScore: { type: [number, 'null'] }
+        topReasons: { type: array, maxItems: 3, items: { type: string } }
+        verification: { $ref: '#/components/schemas/VerificationBadges' }
+        isShortlisted: { type: boolean }
+
+    ProfileCompletion:
+      type: object
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        reviewStatus: { type: string, enum: [draft, pending, approved, rejected] }
+        rejectionReasonKey: { type: [string, 'null'] }
+        missingRequired: { type: array, items: { type: string } }
+        suggestedNext: { type: array, items: { type: string } }
+        isDiscoverable: { type: boolean }
+
+    FieldVisibility:
+      type: string
+      enum: [public, matched_only, on_request, private]
+
+    FieldVisibilityMap:
+      type: object
+      description: |
+        The 14 controllable keys (ERD E6). Matching-critical fields are absent
+        here because they cannot be hidden; contact fields are absent because
+        they are never visible without an explicit grant.
+      properties:
+        profession: { $ref: '#/components/schemas/FieldVisibility' }
+        industry: { $ref: '#/components/schemas/FieldVisibility' }
+        employment_status: { $ref: '#/components/schemas/FieldVisibility' }
+        institution: { $ref: '#/components/schemas/FieldVisibility' }
+        education_level: { $ref: '#/components/schemas/FieldVisibility' }
+        field_of_study: { $ref: '#/components/schemas/FieldVisibility' }
+        location_precision: { type: string, enum: [city, region, country] }
+        height: { $ref: '#/components/schemas/FieldVisibility' }
+        nationality: { $ref: '#/components/schemas/FieldVisibility' }
+        family_background: { $ref: '#/components/schemas/FieldVisibility' }
+        sect: { $ref: '#/components/schemas/FieldVisibility' }
+        children_details: { $ref: '#/components/schemas/FieldVisibility' }
+        hobbies_and_lifestyle: { $ref: '#/components/schemas/FieldVisibility' }
+        about_me: { type: string, enum: [public, matched_only] }
+
+    Location:
+      type: object
+      properties:
+        countryCode: { type: string }
+        regionCode: { type: [string, 'null'] }
+        cityName: { type: [string, 'null'] }
+        displayPrecision: { type: string, enum: [city, region, country] }
+
+    DistanceBand:
+      type: [string, 'null']
+      description: |
+        Banded, never exact (ERD E3). Filtering uses precise distance
+        server-side; the response never does. Narrower bands would make
+        repeated queries from different points a trilateration attack.
+      enum: [same_city, under_25km, km_25_50, km_50_100, km_100_250, km_250_500, over_500km, same_country, different_country, null]
+
+    # --- Photos --------------------------------------------------------------
+
+    PhotoVisibility:
+      type: string
+      enum: [public, blurred, on_request, private]
+
+    OwnPhoto:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        visibility: { $ref: '#/components/schemas/PhotoVisibility' }
+        position: { type: integer }
+        isPrimary: { type: boolean }
+        moderationStatus: { type: string, enum: [pending, approved, rejected] }
+        rejectionReasonKey: { type: [string, 'null'] }
+        urls:
+          type: object
+          properties:
+            thumb: { type: string }
+            full: { type: string }
+        viewCount: { type: integer }
+
+    VisiblePhoto:
+      type: object
+      description: |
+        The URL points at the variant this viewer is permitted to see. A photo
+        at `blurred` returns the server-generated blurred file — the original
+        is never sent with the expectation that the client will obscure it.
+      properties:
+        id: { type: string, format: uuid }
+        variant: { type: string, enum: [thumb, blurred, full] }
+        url: { type: string, description: Signed, expires in 5 minutes, not cacheable }
+        expiresAt: { type: string, format: date-time }
+        requiresRequest: { type: boolean, description: True when a photo exists but needs an approved request }
+
+    UploadTarget:
+      type: object
+      properties:
+        photoId: { type: string, format: uuid }
+        uploadUrl: { type: string }
+        method: { type: string, enum: [PUT, POST] }
+        headers: { type: object, additionalProperties: { type: string } }
+        expiresAt: { type: string, format: date-time }
+
+    PhotoRequestStatus:
+      type: string
+      enum: [pending, approved, declined, withdrawn]
+
+    PhotoRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [incoming, outgoing] }
+        counterpart: { $ref: '#/components/schemas/ProfileCard' }
+        status: { $ref: '#/components/schemas/PhotoRequestStatus' }
+        message: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        respondedAt: { type: [string, 'null'], format: date-time }
+
+    # --- Preferences ---------------------------------------------------------
+
+    Preferences:
+      type: object
+      properties:
+        ageMin: { type: [integer, 'null'], minimum: 18 }
+        ageMax: { type: [integer, 'null'] }
+        heightMinCm: { type: [integer, 'null'] }
+        heightMaxCm: { type: [integer, 'null'] }
+        countryCodes: { type: array, items: { type: string } }
+        maxDistanceKm: { type: [integer, 'null'] }
+        languageCodes: { type: array, items: { type: string } }
+        educationLevelCodes: { type: array, items: { type: string } }
+        professionCodes: { type: array, items: { type: string } }
+        religiousPracticeCodes: { type: array, items: { type: string } }
+        sectCodes: { type: array, items: { type: string } }
+        excludeUnstatedSect:
+          type: boolean
+          default: false
+          description: |
+            The A2 guard. Defaults to false, so a member who states a sect
+            preference still sees profiles that left it blank. Leaving the
+            field blank must not make someone invisible.
+        maritalStatusCodes: { type: array, items: { type: string } }
+        acceptsChildren: { type: [boolean, 'null'] }
+        wantsChildrenCodes: { type: array, items: { type: string } }
+        marriageTimelineCodes: { type: array, items: { type: string } }
+        relocationRequired: { type: [boolean, 'null'] }
+        livingWithFamilyCodes: { type: array, items: { type: string } }
+        rules:
+          type: array
+          description: Which criteria are hard filters and which only influence ranking.
+          items:
+            type: object
+            properties:
+              criterion: { type: string }
+              isHard: { type: boolean }
+              weight: { type: number, minimum: 0, maximum: 1 }
+
+    PreferenceImpact:
+      type: object
+      properties:
+        matchingProfiles: { type: integer }
+        withoutHardFilters: { type: integer }
+        narrowestCriteria:
+          type: array
+          description: The criteria excluding the most people, so a user can loosen deliberately.
+          items:
+            type: object
+            properties:
+              criterion: { type: string }
+              excludedCount: { type: integer }
+
+    # --- Discovery & compatibility -------------------------------------------
+
+    DiscoverySection:
+      type: object
+      properties:
+        key: { type: string }
+        title: { type: string, description: Localised }
+        subtitle: { type: [string, 'null'] }
+        totalCount: { type: integer }
+        preview: { type: array, maxItems: 5, items: { $ref: '#/components/schemas/ProfileCard' } }
+        requiresEntitlement: { type: [string, 'null'] }
+
+    SearchRequest:
+      type: object
+      properties:
+        preferences: { $ref: '#/components/schemas/Preferences' }
+        verifiedOnly: { type: boolean }
+        hasPhotos: { type: boolean }
+        activeWithinDays: { type: integer }
+        sort: { type: string, enum: [compatibility, recently_active, recently_joined], default: compatibility }
+        cursor: { type: string }
+        limit: { type: integer, minimum: 1, maximum: 50, default: 20 }
+
+    CompatibilityDimension:
+      type: object
+      properties:
+        key:
+          type: string
+          enum: [reciprocity, religious, timeline, location, children, family, language, education, lifestyle, profession, personality]
+        label: { type: string }
+        description: { type: string }
+        weight: { type: number, description: 'Engine v1.0 weights, summing to 100' }
+
+    CompatibilityScore:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        overall: { type: number, minimum: 0, maximum: 100 }
+        engineVersion: { type: string }
+        computedAt: { type: string, format: date-time }
+        dimensions:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              subScore: { type: number }
+              weight: { type: number }
+              hasData: { type: boolean, description: False when neither side supplied this. Weight renormalises rather than penalising a blank field. }
+
+    CompatibilityExplanation:
+      type: object
+      description: |
+        Reasons regenerated from the values actually compared, rendered from
+        translated templates. Nothing here is generated prose, so nothing can
+        be invented about a real person.
+      properties:
+        userId: { type: string, format: uuid }
+        overall: { type: number }
+        reasons:
+          type: array
+          items:
+            type: object
+            properties:
+              dimension: { type: string }
+              text: { type: string, description: Localised, template-rendered }
+              messageKey: { type: string }
+              sentiment: { type: string, enum: [strong, moderate, differs] }
+        differences:
+          type: array
+          description: Shown honestly alongside the positives. A one-sided explanation is a sales pitch, not information.
+          items:
+            type: object
+            properties:
+              dimension: { type: string }
+              text: { type: string }
+              messageKey: { type: string }
+
+    # --- Interests & matches -------------------------------------------------
+
+    InterestStatus:
+      type: string
+      enum: [pending, accepted, declined, maybe_later, withdrawn]
+
+    Interest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [sent, received] }
+        counterpart: { $ref: '#/components/schemas/ProfileCard' }
+        status: { $ref: '#/components/schemas/InterestStatus' }
+        note: { type: [string, 'null'] }
+        actedBy:
+          description: |
+            Set when a delegate acted on the owner's behalf (A7). ALWAYS
+            returned to the recipient and rendered in the UI — delegation is
+            never covert. Null means the account owner acted personally.
+          oneOf:
+            - $ref: '#/components/schemas/ActorRef'
+            - type: 'null'
+        createdAt: { type: string, format: date-time }
+        respondedAt: { type: [string, 'null'], format: date-time }
+
+    ActorRef:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        relationshipCode: { type: string, examples: [brother, mother] }
+
+    Quota:
+      type: object
+      properties:
+        key: { type: string, examples: [daily_interests] }
+        used: { type: integer }
+        limit: { type: integer }
+        remaining: { type: integer }
+        resetsAt: { type: string, format: date-time, description: Midnight in the user's timezone }
+
+    Match:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        counterpart: { $ref: '#/components/schemas/ProfileCard' }
+        conversationId: { type: [string, 'null'], format: uuid }
+        stage: { type: integer, minimum: 1, maximum: 5 }
+        createdAt: { type: string, format: date-time }
+        endedAt: { type: [string, 'null'], format: date-time }
+
+    # --- Conversations -------------------------------------------------------
+
+    Conversation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        matchId: { type: string, format: uuid }
+        counterpart: { $ref: '#/components/schemas/ProfileCard' }
+        participants: { type: array, items: { $ref: '#/components/schemas/Participant' } }
+        stage: { $ref: '#/components/schemas/ConversationStage' }
+        unreadCount: { type: integer }
+        lastMessageAt: { type: [string, 'null'], format: date-time }
+        counterpartOnline: { type: [boolean, 'null'], description: Null when the counterpart hides their online status }
+        status: { type: string, enum: [active, archived, ended] }
+
+    Participant:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        role: { type: string, enum: [principal, wali] }
+        canWrite: { type: boolean }
+        relationshipCode: { type: [string, 'null'], description: Present for a wali, so both sides can see who joined and how they are related }
+
+    ConversationStage:
+      type: object
+      properties:
+        current: { type: integer, minimum: 1, maximum: 5 }
+        name: { type: string, description: Localised }
+        unlocks: { type: array, items: { type: string } }
+        nextName: { type: [string, 'null'] }
+        nextUnlocks: { type: array, items: { type: string } }
+        pendingTransition:
+          oneOf:
+            - $ref: '#/components/schemas/StageTransition'
+            - type: 'null'
+        messagesRemainingToday: { type: [integer, 'null'], description: Stage 1 caps at 30/day; null once the cap lifts at stage 2 }
+
+    StageTransition:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fromStage: { type: integer }
+        toStage: { type: integer }
+        proposedByUserId: { type: string, format: uuid }
+        proposedByMe: { type: boolean }
+        status: { type: string, enum: [pending, accepted, declined] }
+        createdAt: { type: string, format: date-time }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        senderUserId: { type: string, format: uuid }
+        sentByMe: { type: boolean }
+        actedBy:
+          description: Set when a delegate wrote this on the owner's behalf (A7). Always surfaced.
+          oneOf:
+            - $ref: '#/components/schemas/ActorRef'
+            - type: 'null'
+        body: { type: [string, 'null'], description: Null when deleted or blocked by moderation }
+        moderationStatus: { type: string, enum: [clean, flagged, blocked] }
+        clientMessageId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+        editedAt: { type: [string, 'null'], format: date-time }
+        deletedAt: { type: [string, 'null'], format: date-time }
+        readByCounterpart: { type: [boolean, 'null'], description: Null when the counterpart has read receipts off }
+
+    QuestionSuggestion:
+      type: object
+      properties:
+        key: { type: string }
+        text: { type: string, description: Localised }
+        category: { type: string, examples: [religious, family, expectations, practical] }
+
+    # --- Family --------------------------------------------------------------
+
+    FamilyMember:
+      type: object
+      properties:
+        relationshipId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        relationshipCode: { type: string }
+        tier: { type: string, enum: [observer], description: 'v1: observer only. Participant and Manager arrive in 1.1.' }
+        permissions: { type: array, items: { type: string, enum: [view_profile, view_matches] } }
+        status: { type: string, enum: [active, revoked] }
+        lastAccessAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    FamilyInvitation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [sent, received] }
+        ownerDisplayName: { type: [string, 'null'] }
+        contactMasked: { type: [string, 'null'], description: Masked, never the full address }
+        relationshipCode: { type: string }
+        tier: { type: string }
+        permissions: { type: array, items: { type: string } }
+        status: { type: string, enum: [pending, accepted, declined, expired, cancelled] }
+        expiresAt: { type: string, format: date-time }
+
+    FamilyAccessLogEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        delegateDisplayName: { type: string }
+        relationshipCode: { type: string }
+        action: { type: string, examples: [viewed_profile, viewed_matches] }
+        resourceType: { type: [string, 'null'] }
+        occurredAt: { type: string, format: date-time }
+
+    ManagedProfile:
+      type: object
+      properties:
+        relationshipId: { type: string, format: uuid }
+        ownerUserId: { type: string, format: uuid }
+        ownerDisplayName: { type: string }
+        relationshipCode: { type: string }
+        tier: { type: string }
+        permissions: { type: array, items: { type: string } }
+
+    # --- Verification & safety ----------------------------------------------
+
+    VerificationStatus:
+      type: object
+      properties:
+        emailVerified: { type: boolean }
+        phoneVerified: { type: boolean }
+        selfieVerified: { type: boolean, description: 'Always false in v1 — the flow arrives in 1.1' }
+        idVerified: { type: boolean, description: 'Always false in v1' }
+        profileReviewed: { type: boolean }
+
+    VerificationBadges:
+      type: object
+      description: |
+        Each badge states exactly what was checked. There is deliberately no
+        generic "Verified" badge — one would imply more than was confirmed,
+        which is how platforms in this category lose trust permanently.
+      properties:
+        badges:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string, enum: [email_verified, phone_verified, photo_verified, id_verified, profile_reviewed] }
+              label: { type: string, description: Localised and specific }
+              earnedAt: { type: string, format: date-time }
+
+    Block:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        blockedAt: { type: string, format: date-time }
+
+    ReportCategory:
+      type: string
+      enum: [scam, harassment, impersonation, fake_profile, inappropriate_content, misrepresented_status, other]
+
+    Report:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        category: { $ref: '#/components/schemas/ReportCategory' }
+        status: { type: string, enum: [open, triaged, actioned, dismissed] }
+        outcomeKey: { type: [string, 'null'], description: General terms — never details about another member's account }
+        createdAt: { type: string, format: date-time }
+        resolvedAt: { type: [string, 'null'], format: date-time }
+
+    SafetyCenter:
+      type: object
+      properties:
+        sections:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              title: { type: string }
+              body: { type: string, description: Localised markdown }
+        emergencyContacts:
+          type: array
+          description: Country-specific where available.
+          items:
+            type: object
+            properties:
+              label: { type: string }
+              value: { type: string }
+
+    # --- Notifications & entitlements ---------------------------------------
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type:
+          type: string
+          enum: [interest_received, interest_accepted, new_match, new_message, photo_request,
+                 photo_request_answered, family_invitation, family_invitation_answered,
+                 stage_advance_proposed, verification_update, security_alert, report_update]
+        title: { type: string, description: Localised }
+        body: { type: string }
+        data: { type: object, additionalProperties: true }
+        readAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    NotificationPreferences:
+      type: object
+      properties:
+        quietHoursStart: { type: [string, 'null'], examples: ['22:00'] }
+        quietHoursEnd: { type: [string, 'null'], examples: ['07:00'] }
+        types:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              push: { type: boolean }
+              inApp: { type: boolean }
+
+    Plan:
+      type: object
+      properties:
+        key: { type: string }
+        name: { type: string }
+        description: { type: string }
+        isCurrent: { type: boolean }
+        entitlements: { type: array, items: { $ref: '#/components/schemas/Entitlement' } }
+
+    Entitlement:
+      type: object
+      properties:
+        key:
+          type: string
+          examples: [daily_interests, advanced_filters, who_viewed_me, incognito]
+        value: { description: Boolean for a capability, integer for a limit }
+        source: { type: string, enum: [plan, grant, promo] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+
