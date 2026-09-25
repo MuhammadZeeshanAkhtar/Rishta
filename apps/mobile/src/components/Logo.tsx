@@ -8,8 +8,7 @@ import { spacing } from '../theme/tokens';
  * The NikahMate mark.
  *
  * The symbol — a heart formed from two interlocking ribbons, one emerald and
- * one gold, beneath a crescent and star, with the N monogram held inside — is
- * the supplied brand artwork. It ships as a raster because that is what it is:
+ * one gold, with the N monogram held inside — is the supplied brand artwork. It ships as a raster because that is what it is:
  * `docs/brand/source/` holds the original, and
  * `scripts/build-brand-assets.py` derives every asset from it.
  *
@@ -18,8 +17,8 @@ import { spacing } from '../theme/tokens';
  * (Nikah in the neutral, Mate in gold) in one place instead of in an export.
  */
 
-/** The symbol is slightly taller than it is wide; preserve that ratio. */
-const SYMBOL_ASPECT = 512 / 538;
+/** The symbol is wider than it is tall; preserve that ratio. */
+const SYMBOL_ASPECT = 512 / 452;
 
 export type LogoTone = 'light' | 'dark' | 'mono';
 export type LogoVariant = 'symbol' | 'horizontal' | 'stacked';
