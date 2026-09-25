@@ -59,7 +59,7 @@ export interface Theme {
 export const lightTheme: Theme = {
   name: 'light',
   colors: {
-    background: neutral[0],
+    background: neutral[25],
     surface: neutral[0],
     surfaceSunken: neutral[50],
 
@@ -76,7 +76,7 @@ export const lightTheme: Theme = {
     brandSurface: emerald[50],
     brandBorder: emerald[200],
 
-    accent: gold[500],
+    accent: gold[600],
     accentSurface: gold[50],
 
     danger: status.danger,
@@ -92,17 +92,17 @@ export const lightTheme: Theme = {
   shadow: {
     card: {
       shadowColor: neutral[900],
-      shadowOpacity: 0.05,
-      shadowRadius: 12,
+      shadowOpacity: 0.04,
+      shadowRadius: 14,
       shadowOffset: { width: 0, height: 4 },
       elevation: 2,
     },
     raised: {
       shadowColor: neutral[900],
-      shadowOpacity: 0.09,
-      shadowRadius: 20,
-      shadowOffset: { width: 0, height: 8 },
-      elevation: 5,
+      shadowOpacity: 0.08,
+      shadowRadius: 24,
+      shadowOffset: { width: 0, height: 10 },
+      elevation: 6,
     },
   },
 };

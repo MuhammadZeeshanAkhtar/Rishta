@@ -7,6 +7,7 @@ import { Logo } from '../../src/components/Logo';
 import { LOCALE_META, useLocale } from '../../src/i18n/LocaleProvider';
 import { useSession } from '../../src/session/SessionProvider';
 import { useTheme } from '../../src/theme/ThemeProvider';
+import { emerald } from '../../src/theme/palette';
 import { MIN_TOUCH_TARGET, layout, radius, spacing, typography } from '../../src/theme/tokens';
 
 /**
@@ -34,7 +35,7 @@ export default function WelcomeScreen() {
         end={{ x: 1, y: 1 }}
         style={[styles.hero, { paddingTop: insets.top + spacing.xxl }]}
       >
-        <Logo size={64} variant="wordmark" tone="onBrand" />
+        <Logo size={88} variant="stacked" tone="dark" />
         <Text style={[styles.tagline, { writingDirection: direction }]}>
           {t('onboarding.welcome')}
         </Text>
@@ -143,7 +144,9 @@ const styles = StyleSheet.create({
   },
   tagline: {
     ...typography.body,
-    color: '#D8ECE6',
+    // A light step of the brand hue rather than a one-off tint: the tagline
+    // sits on the emerald gradient and should belong to it.
+    color: emerald[100],
     marginTop: spacing.md,
     textAlign: 'center',
   },

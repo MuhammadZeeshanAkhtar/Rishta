@@ -12,7 +12,7 @@
       "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0A5449"
+        "backgroundColor": "#064E3B"
       }
     },
     "ios": {
@@ -32,9 +32,9 @@
         "expo-splash-screen",
         {
           "image": "./assets/splash-icon.png",
-          "imageWidth": 180,
+          "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#0A5449"
+          "backgroundColor": "#064E3B"
         }
       ]
     ],
@@ -45,7 +45,7 @@
       "apiBaseUrl": "http://localhost:3000"
     },
     "icon": "./assets/icon.png",
-    "backgroundColor": "#FFFFFF",
-    "primaryColor": "#0E6B5C"
+    "backgroundColor": "#FAFAF7",
+    "primaryColor": "#047857"
   }
 }
