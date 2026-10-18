@@ -1,6 +1,6 @@
 # NikahMate — ERD (v1)
 
-**Status:** 🟡 Proposed for review · **Version:** 0.1 · **Date:** 2026-09-24
+**Status:** 🟡 Proposed for review · **Version:** 0.2 · **Date:** 2026-09-25
 **Parent:** [../README.md](../README.md) · **Entity inventory:** [ENTITIES.md](ENTITIES.md)
 
 > ## ⚠️ NOTHING IS CREATED
@@ -8,7 +8,12 @@
 > No tables, no migrations, no Supabase project, no credentials, no code.
 > This is a design document for review.
 
-**Covers all 71 v1 entities** — M1 and M2 together, not M1 alone. RLS policies cross that
+> **v0.2 — Family Safety ([ADR 0011](adr/0011-family-safety-wali-communication.md)).** Domain 12
+> is rewritten: three new tables, a communication state machine on `matches`, two new RLS
+> predicates in §2.3, and new rows in the §18 test matrix. Sections 1–11 and 13–17 are unchanged
+> except where marked.
+
+**Covers all 74 v1 entities** — M1 and M2 together, not M1 alone. RLS policies cross that
 boundary: a moderator reading `messages` (M1) depends on `role_assignments` (M2), so
 designing M1 policies in isolation would guarantee rework.
 
@@ -19,21 +24,22 @@ out of scope here and get their own pass at v1.1.
 
 ## Table of contents
 
-| §   | Section                                           |
-| --- | ------------------------------------------------- |
-| 1   | [Conventions](#1-conventions)                     |
-| 2   | [RLS strategy](#2-rls-strategy)                   |
-| 3   | [Identity & account](#3-identity--account--7)     |
-| 4   | [Profile](#4-profile--3)                          |
-| 5   | [Reference data](#5-reference-data--2)            |
-| 6   | [Location](#6-location--2)                        |
-| 7   | [Media](#7-media--6)                              |
-| 8   | [Preferences](#8-preferences--2)                  |
-| 9   | [Discovery & matching](#9-discovery--matching--6) |
-| 10  | [Interest & match](#10-interest--match--4)        |
-| 11  | [Conversation](#11-conversation--6)               |
+| §   | Section                                                                  |
+| --- | ------------------------------------------------------------------------ |
+| 1   | [Conventions](#1-conventions)                                            |
+| 2   | [RLS strategy](#2-rls-strategy)                                          |
+| 3   | [Identity & account](#3-identity--account--7)                            |
+| 4   | [Profile](#4-profile--3)                                                 |
+| 5   | [Reference data](#5-reference-data--2)                                   |
+| 6   | [Location](#6-location--2)                                               |
+| 7   | [Media](#7-media--6)                                                     |
+| 8   | [Preferences](#8-preferences--2)                                         |
+| 9   | [Discovery & matching](#9-discovery--matching--6)                        |
+| 10  | [Interest & match](#10-interest--match--4)                               |
+| 11  | [Conversation](#11-conversation--6)                                      |
+| 21  | [Communication state machine](#21-communication-state-machine--adr-0011) |
 
-_(Domains 12–17 continue in the second half of this document.)_
+_(Domains 12–17, the RLS test matrix and the state machine continue in the second half of this document.)_
 
 ---
 
@@ -82,7 +88,7 @@ as $$ select user_id from user_auth_links where auth_user_id = auth.uid() $$;
 
 ### 2.3 The shared predicates
 
-Three functions encapsulate the permission model from README §9.4. They are the **database mirror** of the API's authorization service — the backstop, not the primary control.
+Five functions encapsulate the permission model from README §9.4. They are the **database mirror** of the API's authorization service — the backstop, not the primary control.
 
 ```sql
 app.is_blocked(a uuid, b uuid) returns boolean        -- checks BOTH directions
@@ -90,7 +96,15 @@ app.relationship(viewer uuid, target uuid) returns text
    -- 'self' | 'stranger' | 'interest_pending' | 'match'
    -- | 'own_wali' | 'counterpart_wali' | 'blocked'
 app.can_view_profile(viewer uuid, target uuid) returns boolean
+
+-- Family Safety (ADR 0011)
+app.family_grant(delegate uuid, owner uuid, permission text) returns boolean
+app.can_review_match(delegate uuid, match_id uuid) returns boolean
 ```
+
+**`family_grant` reads `family_permissions`, never `family_relationships.tier`.** The tier is a preset label the invite UI expands into grants at the moment of granting; consulting it at read time would mean two sources of truth for one question, and the one that is easier to read is the one that gets stale.
+
+**`can_review_match` is match-scoped on purpose.** It answers "may this delegate review _this_ pairing", not "may this delegate see this person". A reviewing family member reaches the counterpart's review packet through a specific match and cannot browse, search or open an arbitrary profile. **The scope is the control** — without it, granting `review_interest` would quietly grant a directory.
 
 **`is_blocked` is bidirectional.** A blocks B means neither sees the other. Checking one direction is the single most likely policy bug in this schema, so it lives in one function that every policy calls rather than being re-expressed per table.
 
@@ -150,17 +164,22 @@ app.can_view_profile(viewer uuid, target uuid) returns boolean
 
 #### `user_settings`
 
-| Column               | Type                          | Notes                                     |
-| -------------------- | ----------------------------- | ----------------------------------------- |
-| `user_id`            | uuid PK FK → users            | One row per user                          |
-| `locale`             | text NOT NULL default `'en'`  |                                           |
-| `timezone`           | text NOT NULL default `'UTC'` | IANA. Drives notification quiet hours     |
-| `show_online_status` | bool default true             |                                           |
-| `send_read_receipts` | bool default true             |                                           |
-| `incognito`          | bool default false            | Entitlement-gated                         |
-| `discovery_paused`   | bool default false            | "I'm taking a break" without deactivating |
+| Column                     | Type                             | Notes                                       |
+| -------------------------- | -------------------------------- | ------------------------------------------- |
+| `user_id`                  | uuid PK FK → users               | One row per user                            |
+| `locale`                   | text NOT NULL default `'en'`     |                                             |
+| `timezone`                 | text NOT NULL default `'UTC'`    | IANA. Drives notification quiet hours       |
+| `show_online_status`       | bool default true                |                                             |
+| `send_read_receipts`       | bool default true                |                                             |
+| `incognito`                | bool default false               | Entitlement-gated                           |
+| `discovery_paused`         | bool default false               | "I'm taking a break" without deactivating   |
+| **`communication_policy`** | text NOT NULL default `'direct'` | **ADR 0011** — `direct` · `family_reviewed` |
 
 **RLS:** `owner`
+
+> **`communication_policy` is the owner's gate, and only the owner's.** Set to `family_reviewed`, every match on this side waits for a delegate holding `approve_communication`. The owner may change it at any time and every review-holding delegate is notified when they do — but the owner can never approve in a delegate's place, which is what makes the approval worth anything.
+>
+> **It defaults to `direct`.** A safety gate that is on by default for people who have invited nobody would lock them out of the product, and a default that has to be worked around is a default that teaches people to work around safety settings.
 
 #### `user_consents` — R1 lives here
 
@@ -486,20 +505,27 @@ Excluded from discovery permanently. Never surfaced to the dismissed party.
 
 #### `matches`
 
-| Column                                         | Type                | Notes                                  |
-| ---------------------------------------------- | ------------------- | -------------------------------------- |
-| `user_a_id` / `user_b_id`                      | uuid FK → users     | **Ordered so `user_a_id < user_b_id`** |
-| `interest_id`                                  | uuid FK → interests | What created it                        |
-| `ended_at` / `ended_by_user_id` / `end_reason` |                     |                                        |
+| Column                                         | Type                 | Notes                                                                |
+| ---------------------------------------------- | -------------------- | -------------------------------------------------------------------- |
+| `user_a_id` / `user_b_id`                      | uuid FK → users      | **Ordered so `user_a_id < user_b_id`**                               |
+| `interest_id`                                  | uuid FK → interests  | What created it                                                      |
+| **`communication_state`**                      | text NOT NULL        | **ADR 0011** — the authorization gate. Values and transitions in §21 |
+| **`communication_state_at`**                   | timestamptz NOT NULL | When it last changed. Drives the review SLA (R16)                    |
+| `ended_at` / `ended_by_user_id` / `end_reason` |                      |                                                                      |
 
-**Indexes:** `unique(user_a_id, user_b_id)` · `(user_a_id) where ended_at is null` · `(user_b_id) where ended_at is null`
+**Indexes:** `unique(user_a_id, user_b_id)` · `(user_a_id) where ended_at is null` · `(user_b_id) where ended_at is null` · `(communication_state, communication_state_at) where communication_state = 'pending_family_review'` — the reviews-awaiting-action query and the SLA sweep
 **RLS:** `shared`
 
 > **The ordering constraint is what makes the unique index work.** Without it, (A,B) and (B,A) are different rows and duplicate matches become possible. Enforced by a check constraint, not by convention.
 
+> **`communication_state` lives here, not on `conversations`.** The gate decides whether a thread may exist at all, and family review happens before any message. A `conversations` row is created when the state first permits writing. Putting the gate on the thread would mean creating a thread in order to forbid it.
+
 #### `match_events`
 
-`match_id` · `event` · `actor_user_id` · **RLS:** `system`
+`match_id` · `event` · `actor_user_id` · **`acted_by_user_id`** · **`relationship_id`** · `from_state` / `to_state` · **RLS:** `system`
+**Indexes:** `(match_id, created_at)`
+
+> **This table is the state machine's history.** Every `communication_state` transition writes a row, carrying the acting delegate and the relationship used so "Approved by Ahmed (Father) on behalf of Muhammad" is reconstructable from one row (ADR 0011). No separate review-event table exists — this one already had the shape.
 
 ---
 
@@ -510,15 +536,19 @@ Excluded from discovery permanently. Never surfaced to the dismissed party.
 `match_id uuid FK unique` · `last_message_at timestamptz` · `status text` (`active`/`archived`/`ended`)
 **Indexes:** `unique(match_id)` · `(last_message_at desc)` · **RLS:** `shared`
 
+> **A row exists only once `matches.communication_state` permits writing** (§21). `status` remains the participants' own archive/end control and is independent of the family gate — a conversation can be archived by its owner while fully approved, and frozen by a revocation while still `active`. Two different questions, two different columns.
+>
+> **`last_message_at is not null` is what makes the exposed `active` state derivable.** The API reports `active` rather than storing it, because `messages` already knows.
+
 #### `conversation_participants`
 
-| Column                  | Type                       | Notes                                                                  |
-| ----------------------- | -------------------------- | ---------------------------------------------------------------------- |
-| `conversation_id`       | uuid FK → conversations    |                                                                        |
-| `user_id`               | uuid FK → users            |                                                                        |
-| `role`                  | text NOT NULL              | `principal` · `wali` — wali rows arrive in 1.1, the shape is ready now |
-| `can_write`             | bool NOT NULL default true | A wali Observer would be false                                         |
-| `joined_at` / `left_at` | timestamptz                |                                                                        |
+| Column                  | Type                       | Notes                                                                        |
+| ----------------------- | -------------------------- | ---------------------------------------------------------------------------- |
+| `conversation_id`       | uuid FK → conversations    |                                                                              |
+| `user_id`               | uuid FK → users            |                                                                              |
+| `role`                  | text NOT NULL              | `principal` · `wali` — wali rows arrive at M2, the shape is ready now        |
+| `can_write`             | bool NOT NULL default true | False for a delegate holding `view_conversation` but not `join_conversation` |
+| `joined_at` / `left_at` | timestamptz                |                                                                              |
 
 **Indexes:** `unique(conversation_id, user_id)` · `(user_id) where left_at is null` — **the membership check every message policy runs**
 **RLS:** `shared`
@@ -546,7 +576,9 @@ Stage advancement is mutual: a proposal row that the counterpart must accept.
 **Indexes:** `(conversation_id, created_at desc)` — the only read pattern that matters · `(moderation_status) where moderation_status = 'flagged'`
 **RLS:** `shared` — membership in `conversation_participants`, plus moderator access via `role_assignments`
 
-> **This is the policy that crosses the M1/M2 boundary** and the reason this ERD covers all 71 entities rather than M1's 47. `messages` ships in M1; the moderator branch of its policy depends on `role_assignments`, which ships in M2. Designing it once is cheaper than designing it twice.
+> **This is the policy that crosses the M1/M2 boundary** and the reason this ERD covers all 74 entities rather than M1's 52. `messages` ships in M1; the moderator branch of its policy depends on `role_assignments`, which ships in M2. Designing it once is cheaper than designing it twice.
+
+> **Insert is additionally gated on `matches.communication_state`** (§21). Membership is necessary and not sufficient: a revoked approval leaves the participant rows intact and the thread readable while closing writes. Enforced in the API and mirrored in the insert policy — **the read policy and the write policy answer different questions here**, which is the single easiest thing to get wrong in this table.
 
 #### `message_reads`
 
@@ -559,23 +591,27 @@ _Domains 12–17, the RLS test matrix, performance notes and open items continue
 
 ---
 
-## 12. Family / Wali — 4 _(M2, Observer tier only)_
+## 12. Family / Wali — 7 _(M1 review layer · M2 calls · [ADR 0011](adr/0011-family-safety-wali-communication.md))_
 
 #### `family_relationships`
 
-| Column              | Type            | Notes                                                                       |
-| ------------------- | --------------- | --------------------------------------------------------------------------- |
-| `owner_user_id`     | uuid FK → users | Whose profile this is about                                                 |
-| `delegate_user_id`  | uuid FK → users | The family member                                                           |
-| `relationship_code` | text            | `father` · `mother` · `brother` · `sister` · `guardian` · `other`           |
-| `tier`              | text NOT NULL   | `observer` · `participant` · `manager` — **v1 only ever writes `observer`** |
-| `status`            | text NOT NULL   | `active` · `revoked`                                                        |
-| `revoked_at`        | timestamptz     |                                                                             |
+| Column              | Type            | Notes                                                                                                |
+| ------------------- | --------------- | ---------------------------------------------------------------------------------------------------- |
+| `owner_user_id`     | uuid FK → users | Whose profile this is about                                                                          |
+| `delegate_user_id`  | uuid FK → users | The family member                                                                                    |
+| `relationship_code` | text            | `father` · `mother` · `brother` · `sister` · `guardian` · `other` — extensible via `reference_items` |
+| `tier`              | text NOT NULL   | `observer` · `reviewer` · `participant` · `manager` — **a preset label, not an authorization input** |
+| `status`            | text NOT NULL   | `active` · `revoked`                                                                                 |
+| `revoked_at`        | timestamptz     |                                                                                                      |
 
 **Indexes:** `unique(owner_user_id, delegate_user_id)` · `(delegate_user_id) where status = 'active'` — supports A6 naturally, since one delegate can hold many rows
 **RLS:** `shared`
 
-> **A check constraint pins `tier = 'observer'` in v1** and is relaxed in 1.1. This is deliberate: the column exists so 1.1 extends rather than migrates, but the constraint means a bug cannot accidentally grant Manager rights to a tier whose authorization logic has not been written yet.
+> **A check constraint pins `tier in ('observer','reviewer')` in v1**, relaxed as `participant` (M2) and `manager` (1.1) arrive. The column exists so later tiers extend rather than migrate, and the constraint means a bug cannot grant rights whose authorization logic has not been written yet.
+>
+> **`tier` is never read by a policy.** It expands into `family_permissions` rows at grant time and is thereafter a label for the UI. `app.family_grant()` reads the permission rows. One question, one source of truth.
+>
+> **The relationship is not the identity.** `owner_user_id` remains the account owner in every table below; a delegate never becomes the subject of a row about the owner.
 
 #### `family_invitations`
 
@@ -593,14 +629,83 @@ _Domains 12–17, the RLS test matrix, performance notes and open items continue
 
 #### `family_permissions`
 
-`relationship_id uuid FK` · `permission text` · `granted bool`
-**Indexes:** `unique(relationship_id, permission)` · **RLS:** `shared`
-v1 seeds only `view_profile` and `view_matches`. The 1.1 set adds `view_conversation`, `participate`, `receive_proposals`, `manage_profile`.
+`relationship_id uuid FK` · `permission text` · `granted bool` · `granted_at` · `granted_by_user_id`
+**Indexes:** `unique(relationship_id, permission)` · `(relationship_id) where granted` — the predicate's read path
+**RLS:** `shared`
+
+The vocabulary, by the phase each becomes usable:
+
+| Permission              | Phase | What it opens                                            |
+| ----------------------- | ----- | -------------------------------------------------------- |
+| `view_profile`          | M1    | The owner's own profile, per `profile_field_visibility`  |
+| `view_matches`          | M1    | The owner's matches, from stage 4 (E5)                   |
+| `review_interest`       | M1    | An accepted interest and the counterpart's review packet |
+| `approve_communication` | M1    | Approve · reject · request more information · revoke     |
+| `report_on_behalf`      | M1    | `reports` rows attributed to owner **and** delegate      |
+| `block_on_behalf`       | M1    | `blocks` rows attributed to both                         |
+| `view_conversation`     | M2    | Message history — supervised view                        |
+| `join_conversation`     | M2    | Write in the thread, visibly attributed                  |
+| `request_family_call`   | M2    | Request or accept a family call                          |
+| `join_family_call`      | M2    | Be a participant in a call                               |
+| `receive_proposal`      | 1.1   | Be a recipient of a formal proposal                      |
+| `manage_profile`        | 1.1   | Edit profile and preferences on the owner's behalf       |
+
+> A permission not yet in its phase is **rejected at grant time with 400**, not accepted and ignored. A grant that silently does nothing is worse than a refusal: the owner believes they granted something.
+
+#### `family_reviews` — **NEW**
+
+| Column               | Type                 | Notes                                                                   |
+| -------------------- | -------------------- | ----------------------------------------------------------------------- |
+| `match_id`           | uuid FK → matches    |                                                                         |
+| `owner_user_id`      | uuid FK → users      | **Which side of the match this review is for**                          |
+| `relationship_id`    | uuid NULL FK         | Who decided. Null while pending                                         |
+| `decided_by_user_id` | uuid NULL FK → users | The delegate, denormalised for the audit read                           |
+| `decision`           | text NOT NULL        | `pending` · `approved` · `rejected` · `more_info_requested` · `revoked` |
+| `note`               | text                 | Optional, visible to the owner — never to the counterpart               |
+| `decided_at`         | timestamptz          |                                                                         |
+| `requested_at`       | timestamptz NOT NULL | When the owner's family was asked. Drives the SLA                       |
+
+**Indexes:** `unique(match_id, owner_user_id)` — one live review per side · `(owner_user_id, decision) where decision = 'pending'` — the delegate's inbox
+**RLS:** `shared` — the owner, and any delegate of that owner holding `approve_communication`. **The counterpart sees that a review is pending, never who is reviewing or what they wrote.**
+
+> **One review per side, not per delegate.** Where an owner has several delegates holding `approve_communication`, **the first decision stands** and `relationship_id` records whose it was. Quorum rules are a future extension and are additive — the row already knows which relationship decided, so counting is the only thing that would change.
+>
+> **`more_info_requested` does not leave the pending gate.** It notifies the owner and resets nothing; the state stays `pending_family_review` until an approve or reject arrives. A third outcome that silently behaved like approval would be the worst possible default.
+
+#### `family_calls` — **NEW** _(M2)_
+
+| Column                                                        | Type                 | Notes                                                                                |
+| ------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------ |
+| `match_id`                                                    | uuid FK → matches    |                                                                                      |
+| `requested_by_user_id`                                        | uuid FK → users      | The principal on the requesting side                                                 |
+| `acted_by_user_id`                                            | uuid NULL FK → users | Set when a delegate requested it (A7)                                                |
+| `status`                                                      | text NOT NULL        | `requested` · `accepted` · `declined` · `active` · `ended` · `cancelled` · `expired` |
+| `scheduled_at`                                                | timestamptz          | Optional — a call may be requested for later                                         |
+| `started_at` / `ended_at` / `ended_by_user_id` / `end_reason` |                      |                                                                                      |
+
+**Indexes:** `(match_id, created_at desc)` · `(status, scheduled_at) where status in ('requested','accepted')`
+**RLS:** `shared` — principals of the match, plus delegates of either side holding `join_family_call` or `request_family_call`
+
+> **A call may not reach `active` without at least one `family` participant on each side.** That constraint is the safety model, and it is enforced in the API at the join transition, not by a check constraint — it depends on a count across another table.
+>
+> **Direct owner-to-owner calling is a `system_flags` entry that is off.** The code path exists and refuses. A path that is switched off gets reviewed before it is switched on; a path that is absent gets rebuilt under deadline pressure.
+>
+> **No media columns.** Transport is a Phase 9 decision (ADR 0011); the schema is transport-neutral and the join token is issued, never stored.
+
+#### `family_call_participants` — **NEW** _(M2)_
+
+`call_id uuid FK` · `user_id uuid FK` · `side_owner_user_id uuid FK` — which side they are on · `role text` (`principal` · `family`) · `relationship_id uuid NULL FK` · `invited_by_user_id` · `invited_at` / `joined_at` / `left_at`
+**Indexes:** `unique(call_id, user_id)` · `(call_id) where left_at is null` — the who-is-in-the-room read
+**RLS:** `shared` — everyone in the call
+
+> **The participant list is visible to every participant.** The system knowing who is present is necessary but not sufficient; the people in the call have to know too, or "family-mediated" is a claim rather than a property.
 
 #### `family_access_log`
 
-`relationship_id` · `delegate_user_id` · `owner_user_id` · `action` · `resource_type` · `resource_id`
+`relationship_id` · `delegate_user_id` · `owner_user_id` · `action` · **`permission`** · `resource_type` · `resource_id`
 **Indexes:** `(owner_user_id, created_at desc)` · **RLS:** `system` — **the owner can read their own.** Every delegate action is visible to the person it concerns. That is the anti-coercion control, and it only works if it is surfaced in the app, not merely recorded.
+
+> **`permission` records which grant authorised the action**, not just what was done. Without it, an owner reviewing the log can see that their brother opened something but not under which right — which is the question they would actually be asking before deciding whether to revoke.
 
 ---
 
@@ -628,20 +733,23 @@ v1 seeds only `view_profile` and `view_matches`. The 1.1 set adds `view_conversa
 
 #### `blocks`
 
-`blocker_user_id` · `blocked_user_id` · `reason_code text`
+`blocker_user_id` · `blocked_user_id` · `reason_code text` · **`acted_by_user_id`** · **`relationship_id`**
 **Indexes:** `unique(blocker_user_id, blocked_user_id)` · **`(blocked_user_id)`** — needed because `app.is_blocked()` checks **both** directions on every shared read
 **RLS:** `owner` — the blocker only. The blocked party must never be able to detect the block, so they get no read path at all.
 
+> **`acted_by_user_id` carries `block_on_behalf`** (ADR 0011). The block is the owner's — `blocker_user_id` is always the owner, never the delegate — and the delegate who pulled the trigger is recorded beside it. A block filed by a delegate behaves identically to one the owner filed, which is the point.
+
 #### `reports`
 
-| Column                                  | Type            | Notes                                                                                                        |
-| --------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------ |
-| `reporter_user_id` / `reported_user_id` | uuid FK → users |                                                                                                              |
-| `category`                              | text NOT NULL   | `scam` · `harassment` · `impersonation` · `fake_profile` · `inappropriate_content` · `misrepresented_status` |
-| `description`                           | text            |                                                                                                              |
-| `context_type` / `context_id`           | text / uuid     | Conversation, message, photo or profile                                                                      |
-| `status`                                | text            | `open` · `triaged` · `actioned` · `dismissed`                                                                |
-| `outcome`                               | text            |                                                                                                              |
+| Column                                         | Type            | Notes                                                                                                        |
+| ---------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `reporter_user_id` / `reported_user_id`        | uuid FK → users |                                                                                                              |
+| **`acted_by_user_id`** / **`relationship_id`** | uuid NULL FK    | `report_on_behalf` — the delegate who filed it, beside the owner it belongs to                               |
+| `category`                                     | text NOT NULL   | `scam` · `harassment` · `impersonation` · `fake_profile` · `inappropriate_content` · `misrepresented_status` |
+| `description`                                  | text            |                                                                                                              |
+| `context_type` / `context_id`                  | text / uuid     | Conversation, message, photo or profile                                                                      |
+| `status`                                       | text            | `open` · `triaged` · `actioned` · `dismissed`                                                                |
+| `outcome`                                      | text            |                                                                                                              |
 
 **Indexes:** `(status, created_at)` — the queue · `(reported_user_id)` — pattern detection across reports
 **RLS:** `owner` — the reporter sees their own and its outcome. The reported party sees nothing.
@@ -771,20 +879,34 @@ Quiet hours are evaluated against `user_settings.timezone`, not the server's.
 
 Mandatory in CI. Every `shared` table is tested against every viewer relationship, **positive and negative**.
 
-| Viewer relationship            | profiles            | photos             | messages      | interests   | matches      | family_*    |
-| ------------------------------ | ------------------- | ------------------ | ------------- | ----------- | ------------ | ----------- |
-| self                           | ✅ full             | ✅ full            | ✅ own convos | ✅ own      | ✅ own       | ✅ own      |
-| stranger, approved profile     | ✅ visible fields   | ⛔ unless `public` | ⛔            | ⛔          | ⛔           | ⛔          |
-| stranger, profile not approved | ⛔                  | ⛔                 | ⛔            | ⛔          | ⛔           | ⛔          |
-| interest pending               | ✅ visible fields   | ⛔ unless granted  | ⛔            | ✅ that one | ⛔           | ⛔          |
-| mutual match                   | ✅ + `matched_only` | ✅ + granted       | ✅ that convo | ✅          | ✅           | ⛔          |
-| **blocked (either direction)** | ⛔                  | ⛔                 | ⛔            | ⛔          | ⛔           | ⛔          |
-| own wali (observer)            | ✅ per grant        | ⛔                 | ⛔            | ⛔          | ✅ per grant | ✅ own      |
-| counterpart's wali             | ⛔                  | ⛔                 | ⛔            | ⛔          | ⛔           | ⛔          |
-| moderator                      | ✅ via role         | ✅ via role        | ✅ via role   | ✅ via role | ✅ via role  | ✅ via role |
-| deactivated / banned subject   | ⛔                  | ⛔                 | ⛔            | ⛔          | ⛔           | ⛔          |
+| Viewer relationship                       | profiles                              | photos                            | messages         | interests   | matches      | family_\*   | family_reviews |
+| ----------------------------------------- | ------------------------------------- | --------------------------------- | ---------------- | ----------- | ------------ | ----------- | -------------- |
+| self                                      | ✅ full                               | ✅ full                           | ✅ own convos    | ✅ own      | ✅ own       | ✅ own      | ✅ own matches |
+| stranger, approved profile                | ✅ visible fields                     | ⛔ unless `public`                | ⛔               | ⛔          | ⛔           | ⛔          | ⛔             |
+| stranger, profile not approved            | ⛔                                    | ⛔                                | ⛔               | ⛔          | ⛔           | ⛔          | ⛔             |
+| interest pending                          | ✅ visible fields                     | ⛔ unless granted                 | ⛔               | ✅ that one | ⛔           | ⛔          | ⛔             |
+| mutual match                              | ✅ + `matched_only`                   | ✅ + granted                      | ✅ that convo    | ✅          | ✅           | ⛔          | ✅ status only |
+| **blocked (either direction)**            | ⛔                                    | ⛔                                | ⛔               | ⛔          | ⛔           | ⛔          | ⛔             |
+| own wali — `view_profile`                 | ✅ per grant                          | ⛔                                | ⛔               | ⛔          | ⛔           | ✅ own      | ⛔             |
+| own wali — `view_matches`                 | ✅ per grant                          | ⛔                                | ⛔               | ⛔          | ✅ stage ≥ 4 | ✅ own      | ⛔             |
+| **own wali — `review_interest`**          | ✅ **counterpart of that match only** | ✅ **as the principal sees them** | ⛔               | ✅ that one | ✅ that one  | ✅ own      | ✅ that one    |
+| **own wali — `approve_communication`**    | ✅ same scope                         | ✅ same scope                     | ⛔               | ✅ that one | ✅ that one  | ✅ own      | ✅ **write**   |
+| **own wali — `view_conversation`** _(M2)_ | ✅ same scope                         | ✅ same scope                     | ✅ **read only** | ✅ that one | ✅ that one  | ✅ own      | ✅ that one    |
+| **own wali — no relevant grant**          | ⛔                                    | ⛔                                | ⛔               | ⛔          | ⛔           | ✅ own      | ⛔             |
+| counterpart's wali                        | ⛔                                    | ⛔                                | ⛔               | ⛔          | ⛔           | ⛔          | ⛔             |
+| **revoked wali**                          | ⛔                                    | ⛔                                | ⛔               | ⛔          | ⛔           | ⛔          | ⛔             |
+| moderator                                 | ✅ via role                           | ✅ via role                       | ✅ via role      | ✅ via role | ✅ via role  | ✅ via role | ✅ via role    |
+| deactivated / banned subject              | ⛔                                    | ⛔                                | ⛔               | ⛔          | ⛔           | ⛔          | ⛔             |
 
 **The row that catches the most bugs is `blocked (either direction)`.** Every one of those cells must be tested in _both_ directions — A blocks B, and B blocks A — because the asymmetric case is the one that slips through.
+
+**The rows that catch the second most are the wali grant rows**, and specifically the difference between `✅ counterpart of that match only` and `✅`. A delegate who can reach one counterpart through a match must be proven unable to reach that same person through discovery, search, or a direct profile read. **Scope is the control, so scope is what the negative tests assert.**
+
+Three further Family Safety assertions are mandatory:
+
+1. **The intersection rule.** For every field and photo: if the principal cannot see it, no delegate of that principal can — tested by setting a field to `private` on the counterpart and asserting the delegate's read loses it too. Never a union.
+2. **Revocation is immediate.** Revoking a relationship or a single permission closes access on the very next request, including an in-flight review and an active call.
+3. **Write gating is independent of read gating.** With `communication_state = 'revoked'`, the thread must still read and must not accept an insert — from either principal _or_ any delegate.
 
 ---
 
@@ -916,11 +1038,93 @@ age · gender · country · marital status · religious practice · marriage tim
 
 ---
 
+## 21. Communication state machine — [ADR 0011](adr/0011-family-safety-wali-communication.md)
+
+Accepting an interest does **not** open a conversation. Acceptance and communication are two
+permissions, and the family can stand between them.
+
+### The eight product states and where each lives
+
+| Product state         | Stored as                                                                        |
+| --------------------- | -------------------------------------------------------------------------------- |
+| Interest pending      | `interests.status = 'pending'`                                                   |
+| Interest accepted     | `interests.status = 'accepted'`                                                  |
+| Family review pending | `matches.communication_state = 'pending_family_review'`                          |
+| Family approved       | `matches.communication_state = 'family_approved'`                                |
+| Family rejected       | `matches.communication_state = 'family_rejected'`                                |
+| Communication active  | **derived** — writable state **and** `conversations.last_message_at is not null` |
+| Communication revoked | `matches.communication_state = 'revoked'`                                        |
+| Blocked               | `matches.communication_state = 'blocked'`, mirroring `blocks`                    |
+
+**Two columns, not one.** Interest states describe an interest; a match column cannot describe a
+row that does not exist yet. **`active` is derived, not stored** — `messages` already knows, and a
+second copy is a copy that can disagree.
+
+### Transitions on `matches.communication_state`
+
+```
+              interest accepted → match row created
+                            │
+        ┌───────────────────┴───────────────────┐
+  neither side                            either side
+  requires review                       requires review
+        │                                       │
+      open ──────────first message──────► pending_family_review
+        │                (derived: active)      │
+        │                                       │  approve (all required sides)
+        │                                       ├──────────────────► family_approved
+        │                                       │                          │
+        │                                       │  reject                  │ first message
+        │                                       ├──► family_rejected       │ (derived: active)
+        │                                       │        │                 │
+        │                                       │        │ owner re-requests
+        │                                       └────────┘                 │
+        │                                                                  │
+        └──────────────┬───────────────────────────────────────────────────┘
+                       │
+        revoke (delegate or owner)          block (either party)
+                       ▼                              ▼
+                    revoked  ◄── re-approve ──►     blocked
+```
+
+| Transition                                  | Who may cause it                                                 | Writes                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| → `open`                                    | System, when neither side is `family_reviewed`                   | `match_events`                                                           |
+| → `pending_family_review`                   | System, on accept when either side is `family_reviewed`          | `match_events` · one `family_reviews` row per gated side · notifications |
+| → `family_approved`                         | A delegate with `approve_communication`, **on every gated side** | `family_reviews` · `match_events` · `family_access_log`                  |
+| → `family_rejected`                         | Any one such delegate                                            | same                                                                     |
+| `more_info_requested`                       | Same delegate — **state does not move**                          | `family_reviews` · notification to the owner                             |
+| → `revoked`                                 | A delegate with `approve_communication`, **or the owner**        | same                                                                     |
+| → `blocked`                                 | Either principal, or a delegate with `block_on_behalf`           | `blocks` · `match_events`                                                |
+| `revoked` → `family_approved`               | A delegate with `approve_communication`                          | same                                                                     |
+| `family_rejected` → `pending_family_review` | The **owner**, re-requesting review                              | `family_reviews` reset · `match_events`                                  |
+
+### Invariants
+
+1. **Writing requires `communication_state in ('open','family_approved')`** — or the derived `active`, which is those two once a message exists. Every other value closes writes while leaving history readable.
+2. **A gated side's approval can only come from a delegate.** The owner may set the policy, change it, and revoke — never approve in a delegate's place. That is the whole meaning of the gate.
+3. **`blocked` outranks everything.** It is reachable from every state and exits to none.
+4. **Every transition writes `match_events`** with `actor_user_id`, `acted_by_user_id` and `relationship_id`. A transition with no history row is a bug, not a shortcut.
+5. **Changing `user_settings.communication_policy` never retroactively re-gates a live match.** Turning review on applies to matches created afterwards; matches already `open` stay open unless someone revokes. Silently freezing existing conversations from a settings toggle would be indistinguishable from a bug — and, for anyone under pressure at home, indistinguishable from a punishment.
+
+> **"Created afterwards" includes a REMATCH.** There is one `matches` row per pair forever, so a pair who unmatch and later come back revive that row rather than inserting a second. That revival begins a new match period — the accept path writes a second `created` event for exactly that reason — and the current policy governs it. Enforced in the schema by `app.gate_new_match_period()` (migration 0021), which sets `communication_state` on insert and on a row whose `ended_at` returns to null, and never on a live match. Without it, unmatching and rematching would be a way to launder past a review, needing no one's cooperation.
+
+### The coercion risk this creates — R16
+
+A mandatory gate is also a mechanism for stopping an adult from ever speaking to anyone. Four
+controls, none sufficient alone: the policy is the **owner's** and reversible by them; revoking a
+delegate is instant and needs no one's agreement; `family_access_log` shows the owner every
+action taken in their name; and a pending review past its SLA surfaces to the owner rather than
+sitting silently. The support channel in README §4.9 stays invisible to every delegate at every
+tier.
+
+---
+
 ## Next step
 
 On approval of this design:
 
-1. `docs/openapi.yaml` — the formal API contract for the ~131 member endpoints, built on these entities
+1. `docs/openapi.yaml` — the formal API contract for the ~145 member endpoints, built on these entities
 2. `docs/adr/` — architecture decision records for D1–D8
 3. Settle E1–E6
 

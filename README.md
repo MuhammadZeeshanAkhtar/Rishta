@@ -5,14 +5,114 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 ---
 
-> ## ⚠️ NOTHING IS IMPLEMENTED
+> ## PHASES 1–6 BUILT · 6b ONWARDS NOT STARTED
 >
-> This repository contains **documentation only**. No application code, no scaffolding,
-> no dependencies, no Supabase project, no tables, no migrations, no API keys.
-> See [§13 Implementation Status](#13-implementation-status) — every line reads _Not started_.
+> **Built and verified:** the monorepo, the full schema (23 migrations, 33 tables) with
+> RLS enabled _and forced_ everywhere, authentication, onboarding, profiles, photos,
+> per-field privacy, discovery, the deterministic compatibility engine, interests,
+> matches, notifications, and block & report.
+>
+> **Not started:** Family/Wali (Phase 6b), chat (Phase 7), moderation tooling (Phase 8),
+> and everything after. Those are specified in the ADRs and the OpenAPI contract but no
+> table, endpoint or screen exists for them.
+>
+> **998 tests pass.** Typecheck, lint and format are clean.
+> See [§13 Implementation Status](#13-implementation-status) for the row-by-row record and
+> [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what a new team should expect
+> to find missing.
+>
+> A Supabase project and credentials are **not** included and must be supplied — see
+> [Getting started](#getting-started).
 >
 > This README is the **main living product & architecture document**. It is updated as
 > decisions are made and as work is genuinely completed.
+
+---
+
+## Getting started
+
+### Prerequisites
+
+|          |                                                                                                          |
+| -------- | -------------------------------------------------------------------------------------------------------- |
+| Node     | **≥ 20** (CI runs 22; developed on 24)                                                                   |
+| pnpm     | **11** — `corepack enable && corepack prepare pnpm@11.21.0 --activate`                                   |
+| Supabase | One project for development. **Create a new one** — see [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) |
+
+No Docker is required. The database test suites run against a real Postgres
+in-process (PGlite), applying the migration files exactly as written.
+
+### 1 · Install
+
+```bash
+pnpm install
+```
+
+### 2 · Configure
+
+Two environment files, with deliberately different trust levels. Copy each example
+and fill it in — **neither `.env` is ever committed**, and both are gitignored.
+
+```bash
+cp services/api/.env.example services/api/.env
+cp apps/mobile/.env.example apps/mobile/.env
+```
+
+- `services/api/.env` holds **server-only secrets** (the database URL above all).
+- `apps/mobile/.env` holds **public values only** — Expo inlines every `EXPO_PUBLIC_*`
+  value into the app bundle, so anything placed there is readable by anyone who
+  downloads the APK.
+
+[docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) walks through which dashboard page each
+value comes from, and which values are safe where.
+
+### 3 · Apply the schema
+
+```bash
+pnpm --filter @nikahmate/api migrate:status
+```
+
+```bash
+pnpm --filter @nikahmate/api migrate
+```
+
+Check the status output first — it names the target host (never the password) so you can
+confirm which project you are about to change. The runner refuses a database that already
+holds tables it did not create, applies each migration in its own transaction together
+with its ledger row, and checksums what it applied, so an edited migration stops the next
+run instead of silently diverging.
+
+Then confirm the result:
+
+```bash
+pnpm --filter @nikahmate/api verify:db
+```
+
+### 4 · Run
+
+Two processes, in two terminals.
+
+```bash
+pnpm --filter @nikahmate/api dev
+```
+
+```bash
+pnpm --filter @nikahmate/mobile start
+```
+
+The API listens on `PORT` (default **3000**). Expo prints its own URL and offers a QR
+code for a device, `a` for an Android emulator, and `w` for the browser. In development
+the API accepts any `localhost` origin, so the web preview works without extra CORS
+configuration.
+
+Reaching the API from an **Android emulator** needs the host alias rather than localhost:
+set `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:3000`.
+
+### 5 · Verify
+
+```bash
+pnpm test && pnpm typecheck && pnpm lint && pnpm format:check
+```
 
 ---
 
@@ -43,7 +143,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 ## 0. Document status
 
-**Last updated:** 2026-09-24 · **Version:** 0.2 (planning — 4 architectural decisions locked)
+**Last updated:** 2026-09-25 · **Version:** 0.4 — Phase 1 built · Family Safety made core ([ADR 0011](docs/adr/0011-family-safety-wali-communication.md))
 
 ### Status legend
 
@@ -56,21 +156,23 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 ### Decisions locked
 
-| Ref     | Decision                                                                                                                                                                                                                                                                                 | Where                                          |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **D6**  | **Compatibility scoring is deterministic; Gemini layers on top.** A weighted engine produces sub-scores and the facts behind them; explanations are truthful by construction. Gemini handles moderation, translation, suggestions, bio assist, embeddings and optional narrative polish. | [§10.1](#101-the-core-recommendation--decided) |
-| **D1**  | **Hybrid backend runtime.** Node.js API service as primary; Supabase Edge Functions retained for the 4 webhooks.                                                                                                                                                                         | [§11.3](#113-decision--hybrid)                 |
-| **D2**  | **Horizontal foundations, then vertical feature slices.** Phases 1–2 build shared groundwork; Phases 3–12 each deliver schema + API + screens + tests end to end.                                                                                                                        | [§12.1](#121-phasing-style--decided)           |
-| **D3**  | **5 main tabs** — Discover · Interests · Messages · Family · Me.                                                                                                                                                                                                                         | [§6.2](#62-tab-bar--decided-5-tabs)            |
-| **D4**  | **MVP scope = Option A** — core loop + safety + wali Observer tier. Full wali matrix, proposals, voice notes, selfie verification, Gemini features and payments deferred to v1.1+.                                                                                                       | [§4](#4-complete-feature-set)                  |
-| **D5**  | **Gemini principle locked, access tier deferred.** Free tier = synthetic data only; paid access required before any real user data; PII minimised; processing disclosed; opt-out available. Gemini API vs Vertex AI chosen at Phase 11, driven by C3.                                    | [§10.3](#103-data-governance--decided)         |
-| **D1a** | **Job queue = `pg-boss` (Postgres-backed)** for v1, not BullMQ + Redis. One less service for a solo build.                                                                                                                                                                               | [§11.5](#115-d1-revisit-flag--solo-build)      |
-| **D7**  | **pnpm workspaces from day one; Turborepo deferred** until build times justify it.                                                                                                                                                                                                       | [§3](#3-technology-direction)                  |
-| **D8**  | **Consolidated entity design** — 90 entities, 71 in v1, 47 in M1. Reference 19→2, profile 6→3, `profile_sensitive` separate.                                                                                                                                                             | [docs/ENTITIES.md](docs/ENTITIES.md)           |
+| Ref     | Decision                                                                                                                                                                                                                                                                                       | Where                                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **D6**  | **Compatibility scoring is deterministic; Gemini layers on top.** A weighted engine produces sub-scores and the facts behind them; explanations are truthful by construction. Gemini handles moderation, translation, suggestions, bio assist, embeddings and optional narrative polish.       | [§10.1](#101-the-core-recommendation---decided)                                                            |
+| **D1**  | **Hybrid backend runtime.** Node.js API service as primary; Supabase Edge Functions retained for the 4 webhooks.                                                                                                                                                                               | [§11.3](#113--decision--hybrid)                                                                            |
+| **D2**  | **Horizontal foundations, then vertical feature slices.** Phases 1–2 build shared groundwork; Phases 3–12 each deliver schema + API + screens + tests end to end.                                                                                                                              | [§12.1](#121-phasing-style---decided)                                                                      |
+| **D3**  | **5 main tabs** — Discover · Interests · Messages · Family · Me.                                                                                                                                                                                                                               | [§6.2](#62-tab-bar---decided-5-tabs)                                                                       |
+| **D4**  | **MVP scope = Option A** — core loop + safety + wali Observer tier. Full wali matrix, proposals, voice notes, selfie verification, Gemini features and payments deferred to v1.1+.                                                                                                             | [§4](#4-complete-feature-set)                                                                              |
+| **D5**  | **Gemini principle locked, access tier deferred.** Free tier = synthetic data only; paid access required before any real user data; PII minimised; processing disclosed; opt-out available. Gemini API vs Vertex AI chosen at Phase 11, driven by C3.                                          | [§10.3](#103-data-governance---decided)                                                                    |
+| **D1a** | **Job queue = `pg-boss` (Postgres-backed)** for v1, not BullMQ + Redis. One less service for a solo build.                                                                                                                                                                                     | [§11.5](#115-d1-revisit-flag--solo-build)                                                                  |
+| **D7**  | **pnpm workspaces from day one; Turborepo deferred** until build times justify it.                                                                                                                                                                                                             | [§3](#3-technology-direction)                                                                              |
+| **D8**  | **Consolidated entity design** — 90 entities, 71 in v1, 47 in M1 _(revised by D12: 93 / 74 / 52)_. Reference 19→2, profile 6→3, `profile_sensitive` separate.                                                                                                                                  | [docs/ENTITIES.md](docs/ENTITIES.md)                                                                       |
+| **D11** | **Launch locale: English only.** Urdu and Arabic removed from v1 scope, and all right-to-left handling removed with them. The i18n indirection stays, so adding a left-to-right locale is a catalog plus a constant; a right-to-left one means building direction handling again.              | [ADR 0012](docs/adr/0012-english-only.md)                                                                  |
+| **D12** | 🟡 **Family Safety is a core layer, not a feature.** Accepting an interest no longer opens a conversation; a delegate holding `approve_communication` stands between them when the owner chooses it. Voice and video exist only as family-mediated calls. **93 entities, 74 in v1, 52 in M1.** | [ADR 0011](docs/adr/0011-family-safety-wali-communication.md) · [§4.9](#49-family--wali--the-safety-layer) |
 
-**Team: solo developer.** This is a planning constraint, not a footnote — it drives the two-milestone release sequencing in [§12.5](#125-solo-build-sequencing) and is the reason [§11.5](#115-d1-revisit-flag-solo-build) flags D1 for a second look.
+**Team: solo developer.** This is a planning constraint, not a footnote — it drives the two-milestone release sequencing in [§12.5](#125-solo-build-sequencing) and is the reason [§11.5](#115-d1-revisit-flag--solo-build) flags D1 for a second look.
 
-Still open: **D5, D7, D8, D9, D10** in [§14](#14-decisions-needing-your-approval), and all of [§15](#15-open-questions).
+**D12 needs your approval** — it supersedes the wali portion of D4 and adds ~4–6 weeks to the closed beta. Everything else above is locked. Remaining questions live in [§15](#15-open-questions) Groups B and C.
 
 ### Note on prior work
 
@@ -89,12 +191,14 @@ NikahMate helps Muslims worldwide find a compatible marriage partner with dignit
 ### The core journey
 
 ```
-   Discover  →  Compatibility  →  Send Interest  →  Mutual Match
-       →  Respectful Conversation  →  Family / Wali Involvement
+   Discover  →  Compatibility  →  Send Interest  →  Interest Accepted
+       →  Family Review  →  Respectful Conversation  →  Family Call
               →  Serious Proposal  →  Marriage
 ```
 
 Every feature in this document exists to move a user along that line, or to keep them safe while they travel it.
+
+**Family review sits in the middle of that line, not beside it.** Accepting an interest does not open a conversation. Where the profile owner has chosen it, a family member they invited decides whether communication begins — and voice and video exist only as calls between two families, never as a private channel between two strangers. See [§4.9](#49-family--wali--the-safety-layer) and [ADR 0011](docs/adr/0011-family-safety-wali-communication.md).
 
 ### What makes this not a dating app
 
@@ -104,6 +208,8 @@ Every feature in this document exists to move a user along that line, or to keep
 | Photo-first                     | Compatibility-first; photos private by default, revealed deliberately                          |
 | Anonymous, no accountability    | Layered verification with **honest** badges                                                    |
 | Aimless chat                    | Staged conversation with marriage-relevant prompts                                             |
+| Match = instant private chat    | **Family review between acceptance and conversation**, where the owner wants it                |
+| Private 1:1 voice and video     | **Family-to-family calls** — a session both households join, never a private channel           |
 | Individual-only                 | First-class wali/family participation with scoped, revocable permissions                       |
 | Opaque "98% match"              | Explainable compatibility — the actual reasons, shown                                          |
 | Casual intent                   | Formal proposal flow ending in marriage                                                        |
@@ -128,6 +234,8 @@ These constrain every decision below. Cheap now, very expensive to retrofit.
 8. **Explainability over accuracy theatre.** A defensible list of reasons beats an unexplainable percentage.
 9. **Everything sensitive is audited.** Who saw what, who was granted access, who changed what, when.
 10. **Build for a $120 Android phone on 3G**, not a flagship on fibre.
+11. **The profile owner owns their identity.** A family member is a delegate with explicit, revocable, auditable permissions — never the owner of the person. Every delegated action names the owner, the acting family member, their relationship, the time and the permission used. **Delegation is never covert.**
+12. **A safety gate must not become a cage.** Family review is the owner's choice, reversible by them, and a delegate can be revoked instantly without anyone's agreement. The controls that make family involvement trustworthy are the same ones that keep it from being used against the person it protects ([R16](#16-risk-register)).
 
 ---
 
@@ -151,7 +259,7 @@ These constrain every decision below. Cheap now, very expensive to retrofit.
 | Matching          | **Deterministic scoring engine; Gemini layered on top** _(D6)_                               |
 | Phasing           | **Horizontal foundations → vertical feature slices** _(D2)_                                  |
 | Navigation        | **5 main tabs** incl. a dedicated Family tab _(D3)_                                          |
-| v1 scope          | **Option A** — core loop + safety + wali Observer tier _(D4)_                                |
+| v1 scope          | **Option A** — core loop + safety + family review gate _(D4, wali portion revised by D12)_   |
 | Job queue         | **`pg-boss`** (Postgres-backed) — no Redis in v1 _(D1a)_                                     |
 | Repository        | **pnpm workspaces** from day one; **Turborepo deferred** until build times justify it _(D7)_ |
 | Team              | **Solo developer** — drives [§12.5](#125-solo-build-sequencing) sequencing                   |
@@ -163,7 +271,7 @@ These constrain every decision below. Cheap now, very expensive to retrofit.
 | Navigation   | expo-router (file-based)                       | Standard for Expo; deep-linking for free              |
 | Server state | TanStack Query                                 | Caching, retry, offline tolerance on poor networks    |
 | Validation   | Zod schemas **shared** between app and backend | One definition of "valid", enforced on both sides     |
-| i18n         | i18next + ICU, **RTL from day one**            | Urdu is RTL; retrofitting RTL is a layout rewrite     |
+| i18n         | Typed catalogs, English only                   | One language to review and moderate; no RTL to carry  |
 | Geo          | PostGIS                                        | Distance filtering without exposing exact coordinates |
 | Push         | Expo Notifications → FCM (APNs later)          |                                                       |
 | Errors       | Sentry                                         |                                                       |
@@ -180,7 +288,7 @@ services/
 packages/
   domain/          [v1]    Types, Zod schemas, enums — the shared vocabulary
   api-client/      [v1]    Typed client generated from OpenAPI (mobile + admin + web)
-  i18n/            [v1]    Translation catalogs, locale + RTL helpers
+  i18n/            [v1]    Translation catalogs and locale helpers
   ui/              [v1]    Mobile design system
 supabase/
   migrations/      [v1]    Every schema change, versioned
@@ -207,7 +315,8 @@ docs/              [v1]    ADRs, ERD, API contract, runbooks
 
 ## 4. Complete feature set
 
-**✅ D4 DECIDED — v1 scope is Option A:** core loop + safety + wali Observer tier.
+**✅ D4 DECIDED — v1 scope is Option A:** core loop + safety + wali.
+**🟡 D12 revises the wali portion** — family review is a core gate, not a read-only tier ([§4.9](#49-family--wali--the-safety-layer)).
 
 Legend: **M** = in **v1** (first release) · **1.1** = deferred to **v1.1** · **L** = later phase
 
@@ -297,23 +406,32 @@ Legend: **M** = in **v1** (first release) · **1.1** = deferred to **v1.1** · *
 
 ### 4.7 Interest & match
 
-|     | Feature                                         |
-| --- | ----------------------------------------------- |
-| M   | Send interest (both genders) with optional note |
-| M   | Respond: **Accept · Decline · Maybe Later**     |
-| M   | Mutual match creation                           |
-| M   | Sent / received / archived lists                |
-| M   | Daily interest quota                            |
-| M   | Withdraw interest                               |
-| M   | Unmatch                                         |
+|     | Feature                                                                   |
+| --- | ------------------------------------------------------------------------- |
+| M   | Send interest (both genders) with optional note                           |
+| M   | Respond: **Accept · Decline · Maybe Later**                               |
+| M   | Mutual match creation                                                     |
+| M   | **Acceptance creates a match, not a conversation** — the gate is separate |
+| M   | Sent / received / archived lists                                          |
+| M   | Daily interest quota                                                      |
+| M   | Withdraw interest                                                         |
+| M   | Unmatch                                                                   |
+
+> **Both men and women initiate, and both sides' families are protected by one person's setting.** If either party has chosen `family_reviewed`, the match waits. The counterpart cannot see what the other household expects, so the stricter side governs.
 
 ### 4.8 Conversation
 
 |     | Feature                                                                                                                |
 | --- | ---------------------------------------------------------------------------------------------------------------------- |
+| M   | **Text chat opens only once the communication gate permits it** — never automatically on acceptance                    |
 | M   | Text messaging (realtime)                                                                                              |
 | M   | **Staged conversation:** Introduction → Getting to Know → Marriage Expectations → Family Discussion → Serious Proposal |
 | M   | Mutual stage advancement (both must agree)                                                                             |
+| M   | **Approval provenance visible in the thread** — "Approved by Ahmed (Father)"                                           |
+| M   | **Revocation freezes writes, never deletes history**                                                                   |
+| M2  | Supervised family view of the thread (`view_conversation`)                                                             |
+| M2  | Family member speaks in-thread, visibly attributed (`join_conversation`)                                               |
+| M2  | **Family-to-family voice and video calls** — see [§4.9](#49-family--wali--the-safety-layer)                            |
 | 1.1 | Voice messages                                                                                                         |
 | M   | Read receipts (user-controllable)                                                                                      |
 | M   | Typing / online presence (user-controllable)                                                                           |
@@ -321,28 +439,85 @@ Legend: **M** = in **v1** (first release) · **1.1** = deferred to **v1.1** · *
 | M   | Suggested marriage questions per stage                                                                                 |
 | L   | Gemini conversation suggestions                                                                                        |
 | L   | Message translation (Gemini)                                                                                           |
-| L   | Voice calls (platform-mediated, numbers never exchanged)                                                               |
-| L   | Video calls                                                                                                            |
+| ❌  | **Direct 1:1 voice or video between profile owners — not in v1.** Gated off by a server-side flag, not merely absent   |
 
-### 4.9 Family / Wali
+### 4.9 Family / Wali — the safety layer
 
-|     | Feature                                                                                               |
-| --- | ----------------------------------------------------------------------------------------------------- |
-| M   | Invite father, mother, brother, sister, guardian, or other trusted person                             |
-| M   | **Observer tier** — view profile and matches, **read-only**                                           |
-| M   | Revoke any time, instantly                                                                            |
-| M   | Family access log visible to the user                                                                 |
-| M   | Private support channel the delegate cannot see (anti-coercion)                                       |
-| 1.1 | **Participant tier** — join conversation, always visibly attributed                                   |
-| 1.1 | **Manager tier** — edit profile, manage preferences, act on the user's behalf                         |
-| 1.1 | Granular grants beyond view-profile / view-matches                                                    |
-| 1.1 | Supervised conversation view                                                                          |
-| 1.1 | Receive proposals                                                                                     |
-| 1.1 | Wali participation visible to both sides — never covert _(applies once Participant exists)_           |
-| 1.1 | Delegated actions attributed, never disguised as the owner _(applies once Manager exists)_            |
-| L   | Multi-profile delegate context (a parent managing two children) — _pending [§15](#15-open-questions)_ |
+**🟡 D12 — [ADR 0011](docs/adr/0011-family-safety-wali-communication.md). Supersedes the wali portion of D4.**
 
-> **Why Observer-only in v1:** the full tier matrix is where risk **R6** lives — wali × privacy tier × conversation stage × entitlement is the hardest authorization surface in the product, and a bug there exposes private profiles. Observer is read-only on two resources. It delivers the family-involvement positioning at roughly 15% of the complexity, and the permission model is designed now (§9.4) so v1.1 extends it rather than replacing it.
+Family involvement is not a feature beside the product. It is the layer that decides
+whether communication happens at all.
+
+#### The flow
+
+```
+  Interest sent  →  accepted by the recipient
+        │
+        │   owner's communicationPolicy = family_reviewed ?
+        │
+        ├── no ──────────────────────────────►  conversation opens
+        │
+        └── yes ─►  family review pending
+                          │
+                          ├─ approve ──────►  conversation opens, provenance shown
+                          ├─ reject ───────►  closed; the OWNER may ask again
+                          ├─ more info ────►  still pending; the owner is told
+                          └─ later: revoke ►  writes stop, history stays
+```
+
+#### Who decides what
+
+|     | Feature                                                                                                        |
+| --- | -------------------------------------------------------------------------------------------------------------- |
+| M   | Invite father, mother, brother, sister, guardian, or other trusted person — **extensible list**                |
+| M   | **The owner chooses whether family review applies** (`direct` / `family_reviewed`)                             |
+| M   | **The owner can never approve in a delegate's place** — that is what makes approval mean something             |
+| M   | Delegate reviews: profile, photos per grant, compatibility, verification, marriage preferences, safety signals |
+| M   | Delegate decides: **approve · reject · request more information · revoke later**                               |
+| M   | Report and block on the owner's behalf, attributed                                                             |
+| M   | Revoke a delegate any time, instantly, without anyone's agreement                                              |
+| M   | Family access log visible to the owner — **including which permission was used**                               |
+| M   | Private support channel no delegate can see, at any tier (anti-coercion)                                       |
+| M   | Review SLA — a stalled review surfaces to the owner rather than sitting silently                               |
+| M2  | Supervised conversation view · family member speaks in-thread, visibly attributed                              |
+| M2  | **Family-to-family calls** — both sides bring family; the room knows who is in it                              |
+| 1.1 | **Manager tier** — edit profile, manage preferences, receive proposals                                         |
+| L   | Multi-delegate quorum · scheduled calls · supervised group modes                                               |
+
+#### Permissions — explicit, revocable, auditable, server-enforced
+
+`family_permissions` is the authority. **`tier` is a preset label for the invite UI and is never read by a policy.**
+
+| M1                      | M2                    | 1.1                |
+| ----------------------- | --------------------- | ------------------ |
+| `view_profile`          | `view_conversation`   | `receive_proposal` |
+| `view_matches`          | `join_conversation`   | `manage_profile`   |
+| `review_interest`       | `request_family_call` |                    |
+| `approve_communication` | `join_family_call`    |                    |
+| `report_on_behalf`      |                       |                    |
+| `block_on_behalf`       |                       |                    |
+
+A permission outside its phase is **rejected with 400**, never accepted and ignored. A grant that silently does nothing is worse than a refusal, because the owner believes they granted it.
+
+#### Family calls — the voice and video model
+
+Private 1:1 calling between two profile owners is **not built in v1**. The call model is:
+
+```
+        Larki  +  her approved family member
+                        ↕
+        Larka  +  his approved family member
+```
+
+A call is a session attached to a match. It **cannot start until at least one family participant is present on each side**, every participant is listed to every other participant, and joins and leaves are timestamped. Direct owner-to-owner calling exists as a code path gated on a `system_flags` entry that is **off** — a switched-off path gets reviewed before it is switched on; an absent one gets rebuilt under deadline pressure.
+
+#### What a delegate can never see
+
+`delegate_view(target) = owner_view(target) ∩ delegate_grants` — **an intersection, never a union.**
+
+Phone, email, employer, exact location and photos outside the principal's own grants are unreachable at every tier, because they live in `restricted` tables that the shared read path cannot reach at all ([§9.2](#92-the-two-access-paths)). A delegate without `view_conversation` never receives a message body — not in a review packet, not in a notification, not in a push payload.
+
+> **Why this reverses the D4 reduction.** D4 cut the wali to a read-only Observer precisely to shrink **R6**, the permission matrix. Making review a gate puts that complexity back: the closed beta grows from 47 tables to 52, and the family layer must be built **before** conversation rather than after it. Honest cost: **~4–6 weeks added to the closed-beta date**. The new risk this creates — a delegate with an indefinite veto over an adult — is [**R16**](#16-risk-register), and it is the reason the gate is the owner's to set and to leave.
 
 ### 4.10 Proposal & marriage journey
 
@@ -370,6 +545,8 @@ Legend: **M** = in **v1** (first release) · **1.1** = deferred to **v1.1** · *
 | --- | ---------------------------------------------------------------------------------------------------------------- |
 | M   | Block (bidirectional, invisible to the blocked party)                                                            |
 | M   | Report: scam · harassment · impersonation · fake profile · inappropriate content · misrepresented marital status |
+| M   | **Block and report on the owner's behalf** by a delegate — attributed to both, behaves identically               |
+| M   | **Blocking outranks every communication state** and is reachable from all of them                                |
 | M   | Automated content moderation on upload & send                                                                    |
 | M   | Duplicate-account and suspicious-activity detection                                                              |
 | M   | Rate limits and velocity caps                                                                                    |
@@ -384,9 +561,35 @@ Legend: **M** = in **v1** (first release) · **1.1** = deferred to **v1.1** · *
 | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M   | In-app notification inbox (source of truth)                                                                                                          |
 | M   | Push: new interest · interest accepted · new match · new message · photo request · wali invitation · proposal · verification update · security alert |
+| M   | **Family Safety events** — see the table below                                                                                                       |
 | M   | Per-type preferences                                                                                                                                 |
 | M   | Timezone-aware quiet hours                                                                                                                           |
 | M   | Localised notification content                                                                                                                       |
+
+#### Family Safety notification events
+
+| Event                             | Goes to                                     | Phase |
+| --------------------------------- | ------------------------------------------- | ----- |
+| `interest.received`               | Recipient                                   | M1    |
+| `interest.accepted`               | Sender                                      | M1    |
+| `family.review_required`          | Every delegate with `approve_communication` | M1    |
+| `family.review_approved`          | Owner · counterpart _(fact only)_           | M1    |
+| `family.review_rejected`          | Owner                                       | M1    |
+| `family.more_info_requested`      | Owner                                       | M1    |
+| `family.review_stalled`           | Owner — the SLA breach (R16)                | M1    |
+| `communication.unlocked`          | Both principals                             | M1    |
+| `communication.revoked`           | Both principals · owner's delegates         | M1    |
+| `family.policy_changed`           | Every delegate with a review grant          | M1    |
+| `family.member_revoked`           | The delegate                                | M1    |
+| `safety.report_filed`             | Owner, when a delegate filed it             | M1    |
+| `call.requested`                  | Counterpart side                            | M2    |
+| `call.accepted` / `call.declined` | Requesting side                             | M2    |
+| `call.member_invited`             | The invited family member                   | M2    |
+| `call.member_joined`              | Everyone in the call                        | M2    |
+
+> **A notification never carries what the recipient may not read.** A delegate without `view_conversation` gets "a new message arrived", never the message. The push payload is subject to the same authorization as the endpoint — a notification is a read, and it goes through the same decision.
+>
+> **The counterpart is told the fact, never the family.** `family.review_approved` reaching the other side says communication is open. It does not name the reviewer, quote their note, or reveal which household required review.
 
 ### 4.14 Subscriptions _(designed now, money later)_
 
@@ -425,15 +628,19 @@ Install → Language select → Sign up (email / phone / Google) → Verify
 Discover feed → Open profile → Read compatibility explanation
 → Send Interest (quota checked) → Recipient notified
 → Accept / Decline / Maybe Later
-   ├─ Accept  → MUTUAL MATCH → conversation opens
+   ├─ Accept  → MUTUAL MATCH
+   │             ├─ neither side requires review → conversation opens
+   │             └─ either side requires review  → FAMILY REVIEW PENDING
    ├─ Decline → sender told, politely, without detail
    └─ Maybe   → parked; recipient can revisit
 ```
 
+**A match is not a conversation.** The two are separate objects with separate gates, and `match.communicationState` is the only thing a client should read to decide whether writing is possible.
+
 ### 5.3 Conversation → proposal
 
 ```
-Match → Stage 1 Introduction
+Match (communication permitted) → Stage 1 Introduction
 → either side proposes advancing → other accepts → Stage 2 …
 → Stage 4 Family Discussion (wali may be invited in, visibly)
 → Stage 5 Serious Proposal → formal proposal sent
@@ -441,6 +648,8 @@ Match → Stage 1 Introduction
 ```
 
 Each stage unlocks capability (e.g. voice notes at 2, wali visibility at 4, proposal at 5). Stage advancement is always **mutual and explicit**.
+
+**Stages and the family gate are independent.** The gate decides _whether_ there is a conversation; stages decide _what it unlocks_ once there is. A revocation at stage 3 freezes writes without resetting the stage.
 
 ### 5.4 Wali involvement
 
@@ -450,6 +659,34 @@ User → Invite family member (name + contact + tier + grants)
 → Sees exactly what was granted, nothing more
 → Every access logged and shown to the user
 → User can revoke instantly
+```
+
+### 5.4a Family review — the gate
+
+```
+Owner sets communicationPolicy = family_reviewed
+→ grants approve_communication to one or more delegates
+→ an interest is accepted → match enters PENDING FAMILY REVIEW
+→ every delegate holding the grant is notified
+→ delegate opens the review packet  ─ logged, with the permission used
+     ├─ approve   → conversation opens; provenance shown to the owner
+     ├─ reject    → closed; the OWNER may request review again
+     └─ more info → stays pending; the owner is told what was asked
+→ later, any such delegate — or the owner — may REVOKE
+     → writes stop immediately; history stays readable
+```
+
+**The owner's escape hatches, none requiring anyone's agreement:** change the policy, revoke the delegate, or ask again after a rejection. **What the owner cannot do is approve.** That asymmetry is the whole design ([R16](#16-risk-register)).
+
+### 5.4b Family call
+
+```
+Either side requests a call (principal, or a delegate with request_family_call)
+→ counterpart side accepts
+→ each side invites its approved family member(s)
+→ join: REFUSED until at least one family member is present on EACH side
+→ active — every participant sees the full participant list
+→ any participant may leave; the last principal leaving ends it
 ```
 
 ### 5.5 Safety
@@ -492,9 +729,9 @@ Three gates, enforced server-side and mirrored in routing: **not signed in** →
 
 _Alternative considered and rejected:_ 4 tabs with Family nested under Me. Fewer tabs is cleaner on small screens, but family involvement is a headline differentiator and burying it in settings would signal it is an afterthought.
 
-**Consequence for low-end devices:** 5 tabs on a 320dp-wide screen is tight, especially with Urdu labels, which run longer than English. The tab bar uses icon + short label with a tested minimum, and label length is a translation constraint recorded in `packages/i18n`.
+**Consequence for low-end devices:** 5 tabs on a 320dp-wide screen is tight. The tab bar uses icon + short label with a tested minimum, and label length is a constraint recorded and enforced in `packages/i18n` (`MAX_TAB_LABEL_CHARS`).
 
-### 6.3 Screen inventory (~72 screens)
+### 6.3 Screen inventory (~79 screens)
 
 #### Auth — 7
 
@@ -508,17 +745,17 @@ Age gate · Gender & intent · Name & date of birth · Location · Languages · 
 
 Discover home (sections) · Section detail (paginated) · Profile detail · **Compatibility breakdown** · Search · Filters · Shortlist · Who viewed me _(premium)_
 
-#### Interests & matches — 5
+#### Interests & matches — 6
 
-Interests received · Interests sent · Interest detail & respond · Matches list · Match detail
+Interests received · Interests sent · Interest detail & respond · Matches list · Match detail · **Awaiting family review** _(owner: who is reviewing, how long, ask again)_
 
-#### Messages — 9
+#### Messages — 10
 
-Conversation list · Conversation thread · Stage progress & advance · Suggested questions · Voice note recorder · Translation view · Conversation info & permissions · Report from thread · Block confirmation
+Conversation list · Conversation thread · **Locked thread state** _(why it is closed and what happens next)_ · Stage progress & advance · Suggested questions · Voice note recorder · Translation view · Conversation info & permissions · Report from thread · Block confirmation
 
-#### Family / Wali — 8
+#### Family / Wali — 13
 
-Family home · Invite family member · Permission editor · Member detail · Access log · Invitations received (as invitee) · Managed profiles (as delegate) · Supervised conversation view
+Family home · Invite family member · Permission editor · Member detail · Access log · Invitations received (as invitee) · Managed profiles (as delegate) · Supervised conversation view · **Family safety settings** _(owner: policy + who reviews)_ · **Review inbox** _(delegate)_ · **Review packet & decision** _(delegate)_ · **Call lobby** _(who has joined, who is still missing)_ · **In-call** _(participant list always on screen)_
 
 #### Proposal — 4
 
@@ -538,7 +775,7 @@ Notifications inbox · Notification preferences · Error / offline state · Main
 
 ### 6.4 Cross-cutting UI requirements
 
-- **RTL from the first screen.** Every layout uses `start`/`end`, never `left`/`right`. Urdu is RTL; this is not retrofittable.
+- **Left-to-right only.** English is the single launch locale, so there is no `direction` threading and no `I18nManager`. This reverses an earlier principle deliberately: RTL that nothing renders cannot be trusted without re-verification, so it buys no head start ([ADR 0012](docs/adr/0012-english-only.md)).
 - **Offline tolerance.** Cached reads, optimistic writes, explicit retry — target markets have unreliable networks.
 - **Image budgets.** Aggressive compression; never ship full-resolution photos to a list view.
 - **No hardcoded strings.** Every string from `packages/i18n`, enforced in CI.
@@ -654,58 +891,81 @@ Notifications inbox · Notification preferences · Error / offline state · Main
 
 ### 7.8 Interests — 6
 
-| Method | Endpoint                 | Purpose                                    | Access   |     |
-| ------ | ------------------------ | ------------------------------------------ | -------- | --- |
-| POST   | `/interests`             | Send — quota + entitlement + block checked | `member` | ⚙   |
-| GET    | `/interests`             | Filter by direction and status             | `self`   |     |
-| GET    | `/interests/:id`         | Detail                                     | `self`   |     |
-| POST   | `/interests/:id/respond` | Accept / decline / maybe-later             | `self`   | ⚙   |
-| DELETE | `/interests/:id`         | Withdraw                                   | `self`   |     |
-| GET    | `/me/quotas`             | Remaining daily allowances                 | `self`   | ⏱   |
+| Method | Endpoint                 | Purpose                                                                    | Access   |     |
+| ------ | ------------------------ | -------------------------------------------------------------------------- | -------- | --- |
+| POST   | `/interests`             | Send — quota + entitlement + block checked                                 | `member` | ⚙   |
+| GET    | `/interests`             | Filter by direction and status                                             | `self`   |     |
+| GET    | `/interests/:id`         | Detail                                                                     | `self`   |     |
+| POST   | `/interests/:id/respond` | Accept / decline / maybe-later — **accepting may NOT open a conversation** | `self`   | ⚙   |
+| DELETE | `/interests/:id`         | Withdraw                                                                   | `self`   |     |
+| GET    | `/me/quotas`             | Remaining daily allowances                                                 | `self`   | ⏱   |
 
-### 7.9 Matches — 3
+### 7.9 Matches — 5
 
-| Method | Endpoint               | Purpose        | Access  |     |
-| ------ | ---------------------- | -------------- | ------- | --- |
-| GET    | `/matches`             | Active matches | `self`  |     |
-| GET    | `/matches/:id`         | Detail         | `match` |     |
-| POST   | `/matches/:id/unmatch` | End it         | `match` | ⚙   |
+| Method | Endpoint                     | Purpose                                         | Access  |     |
+| ------ | ---------------------------- | ----------------------------------------------- | ------- | --- |
+| GET    | `/matches`                   | Active matches — each with `communicationState` | `self`  |     |
+| GET    | `/matches/:id`               | Detail                                          | `match` |     |
+| POST   | `/matches/:id/unmatch`       | End it                                          | `match` | ⚙   |
+| GET    | `/matches/:id/family-review` | Where this stands with my family                | `self`  |     |
+| POST   | `/matches/:id/family-review` | Ask my family to review again                   | `self`  | ⚙   |
 
 ### 7.10 Conversations & messages — 13
 
-| Method | Endpoint                                     | Purpose                             | Access  |     |
-| ------ | -------------------------------------------- | ----------------------------------- | ------- | --- |
-| GET    | `/conversations`                             | List with unread counts             | `self`  |     |
-| GET    | `/conversations/:id`                         | Metadata, stage, participants       | `match` |     |
-| GET    | `/conversations/:id/messages`                | Paginated history                   | `match` |     |
-| POST   | `/conversations/:id/messages`                | Send text                           | `match` | ⚙   |
-| POST   | `/conversations/:id/voice-url`               | Issue voice upload target           | `match` |     |
-| POST   | `/conversations/:id/voice/:id/finalize`      | Duration, transcription, moderation | `match` | ⚙   |
-| POST   | `/conversations/:id/messages/:mid/translate` | Translate                           | `match` | ⚙   |
-| POST   | `/conversations/:id/read`                    | Mark read                           | `match` |     |
-| GET    | `/conversations/:id/stage`                   | Current stage + what it unlocks     | `match` |     |
-| POST   | `/conversations/:id/stage/propose`           | Propose advancing                   | `match` | ⚙   |
-| POST   | `/conversations/:id/stage/respond`           | Accept / decline advancement        | `match` | ⚙   |
-| GET    | `/conversations/:id/suggestions`             | Stage-appropriate questions         | `match` | ⚙   |
-| POST   | `/conversations/:id/leave`                   | Exit conversation                   | `match` |     |
+| Method | Endpoint                                     | Purpose                                     | Access  |     |
+| ------ | -------------------------------------------- | ------------------------------------------- | ------- | --- |
+| GET    | `/conversations`                             | List with unread counts                     | `self`  |     |
+| GET    | `/conversations/:id`                         | Metadata, stage, participants               | `match` |     |
+| GET    | `/conversations/:id/messages`                | Paginated history                           | `match` |     |
+| POST   | `/conversations/:id/messages`                | Send text — **403 unless the gate is open** | `match` | ⚙   |
+| POST   | `/conversations/:id/voice-url`               | Issue voice upload target                   | `match` |     |
+| POST   | `/conversations/:id/voice/:id/finalize`      | Duration, transcription, moderation         | `match` | ⚙   |
+| POST   | `/conversations/:id/messages/:mid/translate` | Translate                                   | `match` | ⚙   |
+| POST   | `/conversations/:id/read`                    | Mark read                                   | `match` |     |
+| GET    | `/conversations/:id/stage`                   | Current stage + what it unlocks             | `match` |     |
+| POST   | `/conversations/:id/stage/propose`           | Propose advancing                           | `match` | ⚙   |
+| POST   | `/conversations/:id/stage/respond`           | Accept / decline advancement                | `match` | ⚙   |
+| GET    | `/conversations/:id/suggestions`             | Stage-appropriate questions                 | `match` | ⚙   |
+| POST   | `/conversations/:id/leave`                   | Exit conversation                           | `match` |     |
 
 > **Realtime delivery is a Supabase Realtime channel subscription, not an endpoint.** The API owns writes and authorization; Realtime owns push-to-device.
 
-### 7.11 Family / Wali — 11
+### 7.11 Family / Wali — 15
 
-| Method | Endpoint                                          | Purpose                          | Access |     |
-| ------ | ------------------------------------------------- | -------------------------------- | ------ | --- |
-| GET    | `/family/members`                                 | My family members + their grants | `self` |     |
-| POST   | `/family/invitations`                             | Invite with tier + grants        | `self` | ⚙   |
-| GET    | `/family/invitations`                             | Sent and received                | `self` |     |
-| POST   | `/family/invitations/:id/respond`                 | Accept / decline                 | `self` |     |
-| DELETE | `/family/invitations/:id`                         | Cancel                           | `self` |     |
-| PATCH  | `/family/members/:id/permissions`                 | Change grants                    | `self` |     |
-| DELETE | `/family/members/:id`                             | Revoke access                    | `self` | ⚙   |
-| GET    | `/family/access-log`                              | Every action a delegate took     | `self` |     |
-| GET    | `/family/managed`                                 | Profiles I have rights on        | `wali` |     |
-| GET    | `/family/managed/:id/conversations/:cid`          | Supervised view                  | `wali` |     |
-| POST   | `/family/managed/:id/conversations/:cid/messages` | Speak — **visibly attributed**   | `wali` | ⚙   |
+| Method | Endpoint                                          | Purpose                                         | Access |     |
+| ------ | ------------------------------------------------- | ----------------------------------------------- | ------ | --- |
+| GET    | `/family/members`                                 | My family members + their grants                | `self` |     |
+| POST   | `/family/invitations`                             | Invite with tier + grants                       | `self` | ⚙   |
+| GET    | `/family/invitations`                             | Sent and received                               | `self` |     |
+| POST   | `/family/invitations/:id/respond`                 | Accept / decline                                | `self` |     |
+| DELETE | `/family/invitations/:id`                         | Cancel                                          | `self` |     |
+| PATCH  | `/family/members/:id/permissions`                 | Change grants                                   | `self` |     |
+| DELETE | `/family/members/:id`                             | Revoke access                                   | `self` | ⚙   |
+| GET    | `/family/access-log`                              | Every action a delegate took, + permission used | `self` |     |
+| GET    | `/family/managed`                                 | Profiles I have rights on                       | `wali` |     |
+| GET    | `/family/reviews`                                 | **Matches awaiting my decision**                | `wali` |     |
+| GET    | `/family/reviews/:matchId`                        | **The review packet** — match-scoped            | `wali` | ⚙   |
+| POST   | `/family/reviews/:matchId/decide`                 | **Approve · reject · request more info**        | `wali` | ⚙   |
+| POST   | `/family/reviews/:matchId/revoke`                 | **Withdraw an approval**                        | `wali` | ⚙   |
+| GET    | `/family/managed/:id/conversations/:cid`          | Supervised view _(M2)_                          | `wali` |     |
+| POST   | `/family/managed/:id/conversations/:cid/messages` | Speak — **visibly attributed** _(M2)_           | `wali` | ⚙   |
+
+> `/family/reviews/:matchId` is **scoped to one match**. Holding `review_interest` never grants a directory — the delegate reaches a counterpart through a specific pairing and cannot search, browse or open an arbitrary profile. **The scope is the control.**
+
+### 7.11a Family calls — 8 _(M2)_
+
+| Method | Endpoint                    | Purpose                                           | Access   |     |
+| ------ | --------------------------- | ------------------------------------------------- | -------- | --- |
+| POST   | `/family/calls`             | Request a family call                             | `match`  | ⚙   |
+| GET    | `/family/calls`             | Calls I am part of                                | `member` |     |
+| GET    | `/family/calls/:id`         | One call + **everyone in it**                     | `member` |     |
+| POST   | `/family/calls/:id/respond` | Accept / decline                                  | `member` | ⚙   |
+| POST   | `/family/calls/:id/invite`  | Invite an approved family member                  | `member` | ⚙   |
+| POST   | `/family/calls/:id/join`    | Join — **409 until each side has family present** | `member` |     |
+| POST   | `/family/calls/:id/leave`   | Leave; last principal out ends it                 | `member` |     |
+| POST   | `/family/calls/:id/end`     | End for everyone, attributed                      | `member` | ⚙   |
+
+> **There is no direct 1:1 calling endpoint.** That is not an omission — the code path exists behind a `system_flags` entry that is off, so it is reviewed before it is ever switched on.
 
 ### 7.12 Proposals & journey — 7
 
@@ -808,10 +1068,10 @@ Not endpoints. **This list is the deciding evidence in [§11](#11-edge-functions
 
 |                                          | Count                |
 | ---------------------------------------- | -------------------- |
-| Member-facing endpoints                  | **~131**             |
+| Member-facing endpoints                  | **~145**             |
 | Admin endpoints                          | **~32**              |
-| **Total**                                | **~163**             |
-| Endpoints needing background/queued work | **~44**              |
+| **Total**                                | **~177**             |
+| Endpoints needing background/queued work | **~52**              |
 | Distinct scheduled jobs                  | **11**               |
 | Endpoints doing AI orchestration         | **6 + 4 background** |
 | Webhook receivers                        | **4**                |
@@ -839,17 +1099,19 @@ This is the entity inventory — _what will exist_, not the schema. Columns, typ
 
 **The authoritative list is [docs/ENTITIES.md](docs/ENTITIES.md)** — every entity with its purpose, release phase and access class. Summary:
 
-|                         | Entities |
-| ----------------------- | -------- |
-| Total                   | **90**   |
-| In v1                   | **71**   |
-| **In M1 (closed beta)** | **47**   |
+|                         | Entities | Was (D8) |
+| ----------------------- | -------- | -------- |
+| Total                   | **93**   | 90       |
+| In v1                   | **74**   | 71       |
+| **In M1 (closed beta)** | **52**   | 47       |
 
 Consolidated from the original 110-entity outline: reference data **19 tables to 2**, profile **6 tables to 3**. `profile_sensitive` remains separate as the privacy boundary.
 
-**Access-class distribution across the 71 v1 entities:** `owner` 20 · `shared` 17 · `restricted` 19 · `system` 12 · `public` 3.
+**D12 added three** — `family_reviews`, `family_calls`, `family_call_participants` — and moved five family tables into M1. Two gates are **columns, not tables**: `matches.communication_state` and `user_settings.communication_policy`. No existing table is restructured.
 
-> The **17 `shared` entities are where R6 lives.** They carry the permission-resolved policies and need the most test coverage. The other 54 have largely mechanical policies. For planning effort alone, that distribution matters more than the table count.
+**Access-class distribution across the 74 v1 entities:** `owner` 20 · `shared` 20 · `restricted` 19 · `system` 12 · `public` 3.
+
+> The **20 `shared` entities are where R6 lives.** They carry the permission-resolved policies and need the most test coverage. The other 54 have largely mechanical policies. For planning effort alone, that distribution matters more than the table count — and D12 put three more entities on the expensive side of it.
 
 ---
 
@@ -907,14 +1169,23 @@ Every request for another user's data resolves to one question: **who is asking,
 Viewer relationship:  self | stranger | interest-pending | mutual match
                     | own wali | counterpart's wali | moderator | admin | blocked
                               ×
+Family grant:         the delegate's explicit permissions, scoped to ONE owner
+                              ×
 Field visibility:     public | matched_only | on_request | private
                               ×
-Conversation stage  ×  Entitlement
+Conversation stage  ×  Communication state  ×  Entitlement
                               ↓
-                    → permitted fields + permitted media
+                    → permitted fields + permitted media + may-write
 ```
 
 Resolved **once, server-side, in one authorization service**. Never re-implemented per endpoint. Never implemented in the app.
+
+**Two rules keep the family dimension from multiplying the matrix out of control:**
+
+1. **Intersection, never union.** `delegate_view(target) = owner_view(target) ∩ delegate_grants`. A delegate is a _filter_ on what their principal can see, never a second source of access. This collapses a whole axis: the question "what can a wali see of a counterpart" reduces to a question already answered plus a mask.
+2. **Scope, not role.** `review_interest` grants sight of a counterpart _through one match_, not a directory. Every family read carries the resource it came through, so an over-broad grant cannot become an unbounded one.
+
+**Reading and writing are separate decisions.** Membership in a conversation decides reads; `matches.communication_state` decides writes. A revoked approval leaves the thread readable and closes it to new messages — for both principals and every delegate. Conflating the two is the single easiest mistake to make here, so they are resolved by different code paths and tested separately.
 
 ### 9.5 RLS requirements
 
@@ -982,12 +1253,12 @@ Private profile · private photos with request/approve · hide exact location ·
 
 Reciprocity is the one most products get wrong. Showing someone a profile that would never accept them is worse than showing nothing.
 
-**Explanations use translated templates, not free-form generation** — correct Urdu, zero hallucination risk, zero per-explanation cost, instant rendering:
+**Explanations use templates, not free-form generation** — zero hallucination risk, zero per-explanation cost, instant rendering:
 
 > **Why this profile may be compatible**
 > • Both want to marry within 12 months
 > • Both open to relocating
-> • Shared languages: Urdu, English
+> • Shared languages: English
 > • Similar expectations about living with family
 
 Gemini may later _polish the phrasing_. The facts always come from the engine.
@@ -1126,29 +1397,34 @@ You framed the order as _planning → database → backend → mobile app → AI
 
 ### 12.2 The phases
 
-| #      | Phase                            | Delivers                                                                                                                    | Exit criteria                                                                  |
-| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| **0**  | **Planning**                     | This document · ERD · OpenAPI contract · ADRs                                                                               | You approve [§14](#14-decisions-needing-your-approval)                         |
-| **1**  | **Foundations**                  | Monorepo, CI, 3 Supabase environments, design system, i18n + **RTL**, error handling, secrets management                    | App builds and runs; empty shell in 3 languages including RTL                  |
-| **2**  | **Core schema & auth**           | Identity + reference data tables, **RLS policies + tests**, sign-up/sign-in, verification, device management, audit logging | A user signs up, verifies, and is correctly locked out of everything else      |
-| **3**  | **Profile & preferences**        | Profile schema, reference data with translations, profile builder, per-field visibility, hard/soft preferences              | A complete, privacy-controlled profile exists                                  |
-| **4**  | **Photos & privacy**             | Private storage, server-side variants, permission tiers, photo requests, upload moderation                                  | No photo is reachable without an authorization decision                        |
-| **5**  | **Discovery & compatibility**    | Search, filters, candidate generation, **deterministic scoring engine**, explanations, discovery sections                   | Real profiles surfaced with truthful explanations                              |
-| **6**  | **Interest & match**             | Interest flow, quotas, mutual match, blocks, notifications                                                                  | Two users reach a mutual match                                                 |
-| **7**  | **Conversation**                 | Staged chat, Realtime, voice notes, read receipts, in-thread report/block                                                   | Two matched users converse safely                                              |
-| **8**  | **Safety, verification & admin** | Verification levels, report pipeline, moderation queue, risk signals, **admin panel v1 (web)**                              | A report reaches a human and produces an audited action                        |
-| **9**  | **Family / Wali**                | Invitations, permission tiers, supervised conversation, access log, revocation                                              | A wali participates with exactly the granted access, visibly                   |
-| **10** | **Proposal & journey**           | Formal proposal flow, responses, journey tracking                                                                           | A match becomes a proposal                                                     |
-| **11** | **AI layer (Gemini)**            | Moderation triage, scam detection, translation, bio assist, suggestions, embeddings                                         | Measurable safety and match-quality improvement; graceful degradation verified |
-| **12** | **Subscriptions**                | Entitlement enforcement, Play Billing via RevenueCat, premium features                                                      | Free vs premium differ, **server-enforced**                                    |
-| **13** | **Hardening & release testing**  | Load testing, **penetration testing**, RLS audit, accessibility audit, low-end device testing, beta programme               | Security review passed; no critical findings open                              |
-| **14** | **Play Store launch**            | Store listing, policy compliance, privacy policy, age rating, data safety form, staged rollout                              | **Live on Google Play**                                                        |
-| **15** | **iOS**                          | Apple Sign-In, platform polish, App Store review                                                                            | Live on the App Store                                                          |
-| **16** | _(Future)_ **Website**           | Public web frontend on the existing API                                                                                     | **Zero backend changes required**                                              |
+| #      | Phase                            | Delivers                                                                                                                    | Exit criteria                                                                                       |
+| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **0**  | **Planning**                     | This document · ERD · OpenAPI contract · ADRs                                                                               | You approve [§14](#14-decisions-needing-your-approval)                                              |
+| **1**  | **Foundations**                  | Monorepo, CI, 3 Supabase environments, design system, i18n, error handling, secrets management                              | App builds and runs; empty shell in English                                                         |
+| **2**  | **Core schema & auth**           | Identity + reference data tables, **RLS policies + tests**, sign-up/sign-in, verification, device management, audit logging | A user signs up, verifies, and is correctly locked out of everything else                           |
+| **3**  | **Profile & preferences**        | Profile schema, reference data with translations, profile builder, per-field visibility, hard/soft preferences              | A complete, privacy-controlled profile exists                                                       |
+| **4**  | **Photos & privacy**             | Private storage, server-side variants, permission tiers, photo requests, upload moderation                                  | No photo is reachable without an authorization decision                                             |
+| **5**  | **Discovery & compatibility**    | Search, filters, candidate generation, **deterministic scoring engine**, explanations, discovery sections                   | Real profiles surfaced with truthful explanations                                                   |
+| **6**  | **Interest & match**             | Interest flow, quotas, mutual match, **the communication state machine**, blocks, notifications                             | Two users reach a mutual match, correctly gated                                                     |
+| **6b** | **Family Safety core** 🆕        | Relationships, invitations, permission grants, **review + approve/reject/revoke**, access log, on-behalf report & block     | A family member approves a match and the two people can then — and only then — talk                 |
+| **7**  | **Conversation**                 | Staged chat, Realtime, voice notes, read receipts, in-thread report/block                                                   | Two matched users converse safely                                                                   |
+| **8**  | **Safety, verification & admin** | Verification levels, report pipeline, moderation queue, risk signals, **admin panel v1 (web)**                              | A report reaches a human and produces an audited action                                             |
+| **9**  | **Family participation & calls** | Supervised conversation view, in-thread family participation, **family-to-family voice and video**, call participants       | A family call runs with both households present, and the system and the room both know who is in it |
+| **10** | **Proposal & journey**           | Formal proposal flow, responses, journey tracking                                                                           | A match becomes a proposal                                                                          |
+| **11** | **AI layer (Gemini)**            | Moderation triage, scam detection, translation, bio assist, suggestions, embeddings                                         | Measurable safety and match-quality improvement; graceful degradation verified                      |
+| **12** | **Subscriptions**                | Entitlement enforcement, Play Billing via RevenueCat, premium features                                                      | Free vs premium differ, **server-enforced**                                                         |
+| **13** | **Hardening & release testing**  | Load testing, **penetration testing**, RLS audit, accessibility audit, low-end device testing, beta programme               | Security review passed; no critical findings open                                                   |
+| **14** | **Play Store launch**            | Store listing, policy compliance, privacy policy, age rating, data safety form, staged rollout                              | **Live on Google Play**                                                                             |
+| **15** | **iOS**                          | Apple Sign-In, platform polish, App Store review                                                                            | Live on the App Store                                                                               |
+| **16** | _(Future)_ **Website**           | Public web frontend on the existing API                                                                                     | **Zero backend changes required**                                                                   |
+
+> **D12 changed the order, not just the content.** Family review has to exist before conversation does — a gate built after the thing it gates is a gate that was never load-bearing. Hence **6b**, inserted rather than renumbering ten phases: the numbering is referenced from ADR 0003, §12.5, §12.6 and ENTITIES.md, and churning it would cost more than it clarifies.
+>
+> **Phase 9 is no longer "Family / Wali".** Its review half moved to 6b; what remains is participation and calls, which is genuinely later work — it needs a media transport decision that should be made against real usage, not in advance.
 
 ### 12.3 Definition of done — every phase
 
-RLS tests passing · no hardcoded strings (CI-enforced) · RTL verified · security review · **tested on a real low-end Android device** · documentation updated · **nothing marked BUILT until it is built and tested**
+RLS tests passing · strings routed through the i18n catalogue (reviewed, **not** CI-enforced — see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) §12) · security review · **tested on a real low-end Android device** · documentation updated · **nothing marked BUILT until it is built and tested**
 
 ### 12.4 Play Store readiness (Phase 14 depends on earlier phases)
 
@@ -1168,67 +1444,88 @@ RLS tests passing · no hardcoded strings (CI-enforced) · RTL verified · secur
 
 **The single largest risk in this plan is a solo developer building for ~10 months before any real user touches the product.** Option A's scope is right; what needs adjusting is _when feedback arrives_. So v1 ships in two milestones rather than one.
 
-| Milestone              | Phases                     | Target           | What it is                                                                                                                                                                      |
-| ---------------------- | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **M1 — Closed beta**   | 1–7 + minimal block/report | **~5–6 months**  | Invite-only, 50–100 users. No Play Store listing, no public marketing. The core loop working end to end: profile → discovery → compatibility → interest → match → conversation. |
-| **M2 — Public launch** | 8–9 + hardening + store    | **~9–11 months** | Full safety pipeline, admin panel, wali Observer tier, Phase 13 hardening, Play Store submission.                                                                               |
+| Milestone              | Phases                        | Target            | What it is                                                                                                                                                                                  |
+| ---------------------- | ----------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **M1 — Closed beta**   | 1–6b–7 + minimal block/report | **~6–7 months**   | Invite-only, 50–100 users. No Play Store listing, no public marketing. The core loop end to end: profile → discovery → compatibility → interest → match → **family review** → conversation. |
+| **M2 — Public launch** | 8–9 + hardening + store       | **~10–12 months** | Full safety pipeline, admin panel, **family participation and calls**, Phase 13 hardening, Play Store submission.                                                                           |
+
+> **D12 moved both dates by ~4–6 weeks.** Family review is not an add-on to M1 — it is in the middle of M1's core loop, and the loop is not demonstrable without it. Stating the slip here rather than discovering it in month 6.
 
 **Why M1 is worth the detour:** schema and UX mistakes found at month 5 with 50 real users cost days. The same mistakes found at month 10 with everything built on top of them cost weeks. For a solo build with no one to catch errors in review, that difference compounds.
 
 **What M1 can legitimately skip:** the admin panel. Moderating 50 invited users is done directly through Supabase Studio. Block and report still ship — even an invite-only beta has user-generated content between real people — but the queue can be a table you read by hand.
 
-**What M1 cannot skip:** RLS policies and their tests, photo privacy enforcement, and block/report. These are correctness, not polish, and retrofitting them means revisiting every table and endpoint.
+**What M1 cannot skip:** RLS policies and their tests, photo privacy enforcement, block/report, and — after D12 — **the family review gate**. These are correctness, not polish, and retrofitting them means revisiting every table and endpoint. A gate added after the thing it gates has to be threaded back through every write path that already assumed it was open.
 
 ### 12.6 Phase-to-release mapping (after D4)
 
-| Release   | Phases                                                               |
-| --------- | -------------------------------------------------------------------- |
-| **v1**    | 0–9 _(Phase 9 reduced to the wali Observer tier)_ + 13–14            |
-| **v1.1**  | 10 (proposals) · full wali tiers · voice notes · selfie verification |
-| **v1.2+** | 11 (Gemini) · 12 (subscriptions)                                     |
-| **Later** | 15 (iOS) · 16 (website)                                              |
+| Release   | Phases                                                                              |
+| --------- | ----------------------------------------------------------------------------------- |
+| **v1**    | 0–6b–9 + 13–14 _(Phase 9 = family participation and calls)_                         |
+| **v1.1**  | 10 (proposals) · Manager tier · voice notes · selfie verification                   |
+| **v1.2+** | 11 (Gemini) · 12 (subscriptions)                                                    |
+| **Later** | 15 (iOS) · 16 (website) · quorum approval · supervised group modes · direct calling |
 
 ---
 
 ## 13. Implementation status
 
-**Phase 1 COMPLETE. A row is marked 🔨 BUILT only when it has been built AND verified.**
+**A row is marked BUILT only when it has been built AND verified.** Phases 1-6 and the
+block/report safety layer are complete. Phase 6b onwards has not been started.
 
-| Component                                      | Status                                                                                                                                                                                                     |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Monorepo / pnpm workspace                      | 🔨 **BUILT** — 5 packages, TS strict, ESLint, Prettier                                                                                                                                                     |
-| ESLint architectural guardrails                | 🔨 **BUILT** — verified firing                                                                                                                                                                             |
-| `@nikahmate/domain` shared vocabulary          | 🔨 **BUILT** — 40 tests                                                                                                                                                                                    |
-| Migrations — identity + reference              | 🔨 **BUILT** — 9 tables, applied and asserted                                                                                                                                                              |
-| RLS policies — Phase 1 tables                  | 🔨 **BUILT** — 54 tests, positive and negative                                                                                                                                                             |
-| `@nikahmate/i18n` — en / ur                    | 🔨 **BUILT** — 17 tests, catalog parity + RTL                                                                                                                                                              |
-| API service — auth, bootstrap, /me, reference  | 🔨 **BUILT** — 32 integration tests                                                                                                                                                                        |
-| `dbAsUser` / `dbAsService` boundary            | 🔨 **BUILT** — compiler-enforced allowlist                                                                                                                                                                 |
-| Sentry (server)                                | 🔨 **BUILT** — PII scrubbing, UUID masking                                                                                                                                                                 |
-| Expo app shell — 3 route groups, 5 tabs        | 🔨 **BUILT** — bundles and runs                                                                                                                                                                            |
-| **Brand identity** — palette, type, components | 🔨 **BUILT** — emerald/gold, gradients, cards, buttons                                                                                                                                                     |
-| **NikahMate mark and app icons**               | 🔨 **BUILT** — generated from a committed script                                                                                                                                                           |
-| **Theme system, dark-ready**                   | 🔨 **BUILT** — semantic tokens; only light ships                                                                                                                                                           |
-| **English / Urdu at 320dp**                    | 🔨 **VERIFIED** — rendered and measured in both                                                                                                                                                            |
-| **RTL behaviour**                              | 🔨 **VERIFIED** — `dir=rtl`, mirrored layout, zero overflow                                                                                                                                                |
-| CI workflow                                    | 🔨 **BUILT** — lint, format, typecheck, test, Expo build, secret guard                                                                                                                                     |
-| Supabase projects (dev/staging/prod)           | ⛔ **Blocked** — requires your account. See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)                                                                                                               |
-| Supabase credentials                           | ⏳ Awaiting you — `.env` files created, empty                                                                                                                                                              |
-| Real sign-in flow                              | ❌ Phase 2 — needs the Supabase project                                                                                                                                                                    |
-| Dark theme                                     | ❌ Later — architecture ready, palette not authored                                                                                                                                                        |
-| Arabic locale                                  | ❌ Removed from v1 scope (ADR 0010)                                                                                                                                                                        |
-| Gemini integration                             | ❌ Not started — **not required for v1**                                                                                                                                                                   |
-| Gemini API key                                 | ❌ Not added, and rejected at boot if present                                                                                                                                                              |
-| Edge Functions                                 | ❌ Phase 2+                                                                                                                                                                                                |
-| Admin panel                                    | ❌ Phase 8                                                                                                                                                                                                 |
-| Mobile component tests                         | ❌ Phase 2 — shell verified in a browser instead                                                                                                                                                           |
-| Planning docs                                  | ✅ [ENTITIES](docs/ENTITIES.md) · [ERD](docs/ERD.md) · [openapi.yaml](docs/openapi.yaml) · [ADRs](docs/adr/) · [SERVICE_ROLE_USAGE](docs/SERVICE_ROLE_USAGE.md) · [SUPABASE_SETUP](docs/SUPABASE_SETUP.md) |
+### Built
 
-**Test count: 143 passing** (domain 40 · database 54 · i18n 17 · api 32).
-Lint, format check and typecheck clean across all 5 packages.
+| Component                                    | Status                                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Monorepo / pnpm workspace                    | **BUILT** - 6 packages, TS strict, ESLint, Prettier                                        |
+| ESLint architectural guardrails              | **BUILT** - verified firing                                                                |
+| `@nikahmate/domain` shared vocabulary        | **BUILT** - 122 tests                                                                      |
+| Database schema                              | **BUILT** - 23 migrations, 33 tables, applied to a fresh Postgres in CI                    |
+| RLS - every table                            | **BUILT** - enabled AND forced; 330 tests across 13 suites                                 |
+| `@nikahmate/i18n` - en                       | **BUILT** - English only (ADR 0012), catalog parity tested                                 |
+| Auth - sign up, sign in, verify, reset       | **BUILT** - Supabase Auth; session in SecureStore, chunked for Android's 2048-byte ceiling |
+| Onboarding - 5 steps + review                | **BUILT** - resumable, server-validated, submits for review                                |
+| Profile - create, edit, completion           | **BUILT** - 26 API tests                                                                   |
+| Photos - upload, variants, moderation, order | **BUILT** - private bucket, server-side blur, caller-JWT signing                           |
+| Per-field privacy - 14 keys                  | **BUILT** - owner-side; cross-viewer enforcement still to come (see limitations)           |
+| Discovery - sections, candidates, paging     | **BUILT** - 37 API tests                                                                   |
+| Compatibility engine                         | **BUILT** - deterministic, 11 dimensions, explanations with differences, 72 unit tests     |
+| Shortlist / dismiss                          | **BUILT** - 31 tests                                                                       |
+| Interests - send, respond, withdraw, quota   | **BUILT** - quota consumed in the same transaction as the insert                           |
+| Matches - create, unmatch, rematch           | **BUILT** - one row per pair; rematch re-gated                                             |
+| `communication_state` gate                   | **BUILT** - set at the birth of every match period by a database trigger                   |
+| Notifications - inbox, read, read-all        | **BUILT** - in-app only; no push                                                           |
+| Block & report                               | **BUILT** - 61 route tests + 17 policy tests                                               |
+| `dbAsUser` / `dbAsService` boundary          | **BUILT** - compiler-enforced allowlist, 18 keys                                           |
+| Sentry (server)                              | **BUILT** - PII scrubbing, UUID masking                                                    |
+| Mobile app - 5 tabs, 24 screens              | **BUILT** - emerald/gold design system, shared components                                  |
+| English at 320dp                             | **VERIFIED** - rendered and measured, zero horizontal overflow                             |
+| CI workflow                                  | **BUILT** - lint, format, typecheck, test, Expo web bundle, secret guard                   |
+
+**998 tests passing** - domain 122, database 330, api-client 31, i18n 14, API 501.
+Lint, format and typecheck clean across all 6 packages.
 
 Database tests run against a real Postgres via PGlite, in-process, applying the
 migration files exactly as written. No Docker or service container is needed.
+
+### Not built
+
+| Component                                 | Status                                                                                                                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Family / Wali (Phase 6b)**              | **DESIGNED, NOT BUILT** - [ADR 0011](docs/adr/0011-family-safety-wali-communication.md), ERD 12 + 21, 19 API operations. No table, no migration, no code. The Family tab is a placeholder. |
+| Chat / conversations (Phase 7)            | Not started - no `conversations` or `messages` table                                                                                                                                       |
+| Moderation tooling, admin panel (Phase 8) | Not started - reports are stored but nothing reads them                                                                                                                                    |
+| Family calls (Phase 9)                    | Not started                                                                                                                                                                                |
+| Push notifications                        | Not started - the in-app inbox is the only channel                                                                                                                                         |
+| Search and advanced filters               | Not started - `/discovery/search` unimplemented                                                                                                                                            |
+| Cross-user photo delivery                 | Blocked by design - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)                                                                                                             |
+| Account deletion / deactivation           | Not started - **required by Google Play** before launch                                                                                                                                    |
+| Subscriptions, entitlement UI (Phase 12)  | Backend primitives exist; no plans, no billing                                                                                                                                             |
+| Gemini / AI layer                         | Not started - **not required for v1**, and rejected at boot if a key is present                                                                                                            |
+| Dark theme                                | Architecture ready, palette not authored                                                                                                                                                   |
+| Deployment configuration                  | Not started - no Dockerfile, no `eas.json`                                                                                                                                                 |
+
+A full, evidence-backed list is in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ### Phase 1 verification evidence
 
@@ -1238,18 +1535,22 @@ The mobile shell was built (`expo export`), served, and measured in a browser at
 | Locale  | `dir` | Tabs | Labels clipped | Horizontal overflow |
 | ------- | ----- | ---- | -------------- | ------------------- |
 | English | `ltr` | 5    | none           | 0 elements          |
-| Urdu    | `rtl` | 5    | none           | 0 elements          |
 
-`scrollWidth` equals the 320px viewport in both locales, and tab navigation
-across all five routes was exercised in each.
+`scrollWidth` equals the 320px viewport, and tab navigation across all five
+routes was exercised.
 
-**A real bug was found and fixed during this verification.** Urdu tab labels
-were clipped: react-navigation places the label in a height-constrained flex
-column, and the default `flexShrink` pulled the box back to ~13px regardless of
-the `lineHeight` requested — cutting descenders while leaving English
-untouched. Fixed with an owned label component, an explicit height and
-`flexShrink: 0`. It was invisible in English, which is precisely why the exit
-criterion required every shipped language.
+> **Historical note.** This verification originally covered Urdu and `dir=rtl`
+> as well, and both passed. Urdu and all right-to-left handling were removed in
+> [ADR 0012](docs/adr/0012-english-only.md); the Urdu row is recorded here as
+> something that was true rather than something still tested.
+
+**A real bug was found and fixed during this verification.** Tab labels were
+clipped in the longer locale: react-navigation places the label in a
+height-constrained flex column, and the default `flexShrink` pulled the box
+back to ~13px regardless of the `lineHeight` requested — cutting descenders
+while leaving shorter labels untouched. Fixed with an owned label component, an
+explicit height and `flexShrink: 0`. The fix is still in place, and
+`MAX_TAB_LABEL_CHARS` still guards the budget that exposed it.
 
 The existing **Zufishan** Supabase project has **not** been touched and will not be. NikahMate gets its own projects.
 
@@ -1259,24 +1560,37 @@ The existing **Zufishan** Supabase project has **not** been touched and will not
 
 ### ✅ Decided
 
-| #       | Decision                                                           | Outcome                                                     |
-| ------- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
-| **D1**  | Backend runtime ([§11](#11-edge-functions-vs-nodejs-api))          | **Hybrid** — Node API primary + Edge Functions for webhooks |
-| **D2**  | Phasing style ([§12.1](#121-phasing-style--decided))               | Horizontal foundations, then **vertical feature slices**    |
-| **D3**  | Tab structure ([§6.2](#62-tab-bar--decided-5-tabs))                | **5 tabs**, Family as its own tab                           |
-| **D6**  | Matching approach ([§10.1](#101-the-core-recommendation--decided)) | **Deterministic scoring**, Gemini layered on top            |
-| **D4**  | MVP scope ([§4](#4-complete-feature-set))                          | **Option A** — core loop + safety + wali Observer tier      |
-| **D5**  | Gemini data governance ([§10.3](#103-data-governance--decided))    | **Principle locked**; access tier deferred to Phase 11      |
-| **D1a** | Job queue ([§11.5](#115-d1-revisit-flag--solo-build))              | **`pg-boss`**, Postgres-backed — no Redis in v1             |
-| **D7**  | Repository structure ([§3](#3-technology-direction))               | **pnpm workspaces** now; Turborepo deferred                 |
-| **D8**  | Entity design ([docs/ENTITIES.md](docs/ENTITIES.md))               | **Consolidated** — 90 entities, 71 in v1, 47 in M1          |
+| #       | Decision                                                            | Outcome                                                                     |
+| ------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **D1**  | Backend runtime ([§11](#11-edge-functions-vs-nodejs-api))           | **Hybrid** — Node API primary + Edge Functions for webhooks                 |
+| **D2**  | Phasing style ([§12.1](#121-phasing-style---decided))               | Horizontal foundations, then **vertical feature slices**                    |
+| **D3**  | Tab structure ([§6.2](#62-tab-bar---decided-5-tabs))                | **5 tabs**, Family as its own tab                                           |
+| **D6**  | Matching approach ([§10.1](#101-the-core-recommendation---decided)) | **Deterministic scoring**, Gemini layered on top                            |
+| **D4**  | MVP scope ([§4](#4-complete-feature-set))                           | **Option A** — core loop + safety + wali _(wali portion superseded by D12)_ |
+| **D5**  | Gemini data governance ([§10.3](#103-data-governance---decided))    | **Principle locked**; access tier deferred to Phase 11                      |
+| **D1a** | Job queue ([§11.5](#115-d1-revisit-flag--solo-build))               | **`pg-boss`**, Postgres-backed — no Redis in v1                             |
+| **D7**  | Repository structure ([§3](#3-technology-direction))                | **pnpm workspaces** now; Turborepo deferred                                 |
+| **D8**  | Entity design ([docs/ENTITIES.md](docs/ENTITIES.md))                | **Consolidated** — 93 entities, 74 in v1, 52 in M1 _(D12)_                  |
 
-| **D9** | API surface ([docs/openapi.yaml](docs/openapi.yaml)) | **Contract written** — 83 paths, 97 operations, 58 schemas, runtime-neutral |
+| **D9** | API surface ([docs/openapi.yaml](docs/openapi.yaml)) | **Contract written** — 95 paths, 111 operations, 68 schemas, runtime-neutral _(D12 added 14 operations)_ |
 | **D10** | `PROJECT_PLAN.md` | **Kept** as a superseded historical record, not deleted |
 | **A1–A11** | Product & schema policy ([§15](#15-open-questions)) | **All resolved** — see the Group A tables |
 | **E1–E6** | Schema & policy detail ([docs/ERD.md §20](docs/ERD.md)) | **All resolved** — retention, FK scope, distance banding, scoring weights, stage gates, visibility keys |
 
-### ⏸ Nothing blocking remains
+### 🟡 D12 — Family Safety — awaiting your approval
+
+| Question                                                | Recommendation                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Is family review **mandatory** or the owner's choice?   | **The owner's choice**, defaulting to `direct`. A mandatory gate hands any delegate an indefinite veto over an adult, and a product without family cannot be used at all. Option B and C are weighed in [ADR 0011](docs/adr/0011-family-safety-wali-communication.md) |
+| Does the **owner** ever get to approve their own match? | **No.** That asymmetry is the only thing that makes an approval worth anything. The owner's escape hatches are to change the policy, revoke the delegate, or ask again                                                                                                |
+| Does one side's policy gate **both** sides?             | **Yes.** The counterpart cannot see what the other household expects, so the stricter side governs                                                                                                                                                                    |
+| Several delegates with `approve_communication`?         | **First decision stands**, and which relationship decided is recorded. Quorum is additive later                                                                                                                                                                       |
+| Direct 1:1 voice/video in v1?                           | **No** — gated off by `system_flags`, not omitted                                                                                                                                                                                                                     |
+| Cost                                                    | **~4–6 weeks** on both milestone dates; M1 tables 47 → 52                                                                                                                                                                                                             |
+
+**If you disagree with any row, say which and I will revise before anything is built.** The one I would most want you to look at is the first: it is the decision the rest hangs on.
+
+### ⏸ Nothing else blocking
 
 Phase 0 is complete. The open items in [§15](#15-open-questions) Groups B and C are
 **launch and business questions, not architecture** — launch markets, moderation
@@ -1319,7 +1633,7 @@ Grouped so you can answer in one pass. **Group A blocks the ERD.**
 | #      | Question                                                                          |
 | ------ | --------------------------------------------------------------------------------- |
 | B1     | Launch countries — focused first market, or all at once? _(I recommend focused.)_ |
-| ~~B2~~ | ✅ **ANSWERED** — English + Urdu for v1 (ADR 0010). Arabic deferred.              |
+| ~~B2~~ | ✅ **ANSWERED** — English only for v1 (ADR 0012). Urdu and Arabic deferred.       |
 | B3     | Is messaging free at launch, or gated?                                            |
 | B4     | Voice/video calls — MVP or later? _(Proposed: later.)_                            |
 | B5     | Target launch date; any hard deadline?                                            |
@@ -1340,23 +1654,25 @@ Grouped so you can answer in one pass. **Group A blocks the ERD.**
 
 ## 16. Risk register
 
-| #       | Risk                                                                                                                        | Impact                                                      | Mitigation                                                                                                                                                                                                          |
-| ------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R1**  | **Religion is GDPR Article 9 special-category data** — and it is the core of the product                                    | Turnover-based fines; EU launch blocked                     | Explicit granular consent; documented lawful basis; minimise; restrict; log every access; legal review before EU launch                                                                                             |
-| **R2**  | **Romance-scam targeting.** Matrimonial platforms are among the most heavily targeted products that exist                   | Direct financial harm to users; trust destroyed; press risk | Verification tiers, velocity limits, device fingerprinting, Gemini triage, payment-keyword detection, **staffed** human moderation, visible Safety Center                                                           |
-| **R3**  | **Play Store rejection** under dating/social and UGC policies                                                               | Launch blocked for weeks                                    | Safety tooling before submission; published content policy; correct age rating; **web-accessible account deletion**; Data Safety form accuracy                                                                      |
-| **R4**  | **Erasure vs retention conflict.** GDPR says erase; safety says keep evidence; the counterpart's history is also their data | Legal and product conflict                                  | Written retention policy per data class; soft-delete + anonymise; preserve abuse evidence under documented lawful basis                                                                                             |
-| **R5**  | **Photo leakage.** Signed URLs get shared; iOS cannot prevent screenshots                                                   | Severe personal harm; catastrophic reputational damage      | Short-lived signed URLs, server-side blur, viewer watermarking, access logging, **honest UX about what we cannot prevent**                                                                                          |
-| **R6**  | **Permission-matrix complexity** (wali × privacy tier × stage × entitlement)                                                | One policy bug exposes private profiles                     | One central authorization service; RLS backstop; **mandatory automated policy tests**; written matrix reviewed before Phase 9                                                                                       |
-| **R7**  | **Gemini free-tier data usage** on special-category personal data                                                           | Compliance breach that is hard to undo                      | Paid tier / Vertex AI before any real user data; PII minimisation; disclosure + opt-out                                                                                                                             |
-| **R8**  | **Prompt injection** via bios and messages into moderation prompts                                                          | Attacker marks their own account safe                       | User content wrapped as data, never instructions; structured-schema validation of AI output; AI decisions advisory, never final on bans                                                                             |
-| **R9**  | **AI cost explosion** if scoring or translation is done naively per candidate                                               | Unsustainable unit economics                                | Deterministic scoring; batch precompute; caching; premium gating; per-user ceilings; cost monitoring from day one                                                                                                   |
-| **R10** | **Supabase constraints:** connection limits, no long-running jobs, Realtime scaling, auth coupling                          | Scaling wall at growth                                      | Supavisor pooling; jobs in the API service; standard Postgres SQL; internal user id independent of the Auth id                                                                                                      |
-| **R11** | **Low-end devices and poor networks** across target markets                                                                 | Unusable for a large share of the audience                  | Image budgets, APK size discipline, optimistic UI, offline tolerance, **test on a real 2GB Android device every phase**                                                                                             |
-| **R12** | **Cultural and sectarian conflict** in rules, terminology or filters                                                        | Community backlash                                          | Neutral terminology, optional sensitive fields, religious advisory review (C7), region-aware defaults                                                                                                               |
-| **R13** | **Moderation cannot cover launch languages**                                                                                | Reports go unanswered; users harmed                         | Staff for launch languages only; add languages only when moderation can follow                                                                                                                                      |
-| **R14** | **Scope overrun on a solo build.** Even at Option A scope, v1 is ~9–11 months for one developer                             | Burnout; nothing ships                                      | D4 cut scope to Option A; [§12.5](#125-solo-build-sequencing) splits v1 into a closed beta at ~5–6 months so feedback arrives early; no phase starts before the previous one's exit criteria are met                |
-| **R15** | **Solo bus factor.** One person holds all context; no code review; illness or a break stops everything                      | Project stalls or dies                                      | Documentation-first discipline (this README, ADRs, the ERD and OpenAPI contract); conventional tooling over clever tooling; automated tests as the reviewer you do not have; nothing undocumented in someone's head |
+| #       | Risk                                                                                                                                                                       | Impact                                                                             | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R1**  | **Religion is GDPR Article 9 special-category data** — and it is the core of the product                                                                                   | Turnover-based fines; EU launch blocked                                            | Explicit granular consent; documented lawful basis; minimise; restrict; log every access; legal review before EU launch                                                                                                                                                                                                                                                                                                                     |
+| **R2**  | **Romance-scam targeting.** Matrimonial platforms are among the most heavily targeted products that exist                                                                  | Direct financial harm to users; trust destroyed; press risk                        | Verification tiers, velocity limits, device fingerprinting, Gemini triage, payment-keyword detection, **staffed** human moderation, visible Safety Center                                                                                                                                                                                                                                                                                   |
+| **R3**  | **Play Store rejection** under dating/social and UGC policies                                                                                                              | Launch blocked for weeks                                                           | Safety tooling before submission; published content policy; correct age rating; **web-accessible account deletion**; Data Safety form accuracy                                                                                                                                                                                                                                                                                              |
+| **R4**  | **Erasure vs retention conflict.** GDPR says erase; safety says keep evidence; the counterpart's history is also their data                                                | Legal and product conflict                                                         | Written retention policy per data class; soft-delete + anonymise; preserve abuse evidence under documented lawful basis                                                                                                                                                                                                                                                                                                                     |
+| **R5**  | **Photo leakage.** Signed URLs get shared; iOS cannot prevent screenshots                                                                                                  | Severe personal harm; catastrophic reputational damage                             | Short-lived signed URLs, server-side blur, viewer watermarking, access logging, **honest UX about what we cannot prevent**                                                                                                                                                                                                                                                                                                                  |
+| **R6**  | **Permission-matrix complexity** (wali × privacy tier × stage × entitlement)                                                                                               | One policy bug exposes private profiles                                            | One central authorization service; RLS backstop; **mandatory automated policy tests**; written matrix reviewed before Phase 9                                                                                                                                                                                                                                                                                                               |
+| **R7**  | **Gemini free-tier data usage** on special-category personal data                                                                                                          | Compliance breach that is hard to undo                                             | Paid tier / Vertex AI before any real user data; PII minimisation; disclosure + opt-out                                                                                                                                                                                                                                                                                                                                                     |
+| **R8**  | **Prompt injection** via bios and messages into moderation prompts                                                                                                         | Attacker marks their own account safe                                              | User content wrapped as data, never instructions; structured-schema validation of AI output; AI decisions advisory, never final on bans                                                                                                                                                                                                                                                                                                     |
+| **R9**  | **AI cost explosion** if scoring or translation is done naively per candidate                                                                                              | Unsustainable unit economics                                                       | Deterministic scoring; batch precompute; caching; premium gating; per-user ceilings; cost monitoring from day one                                                                                                                                                                                                                                                                                                                           |
+| **R10** | **Supabase constraints:** connection limits, no long-running jobs, Realtime scaling, auth coupling                                                                         | Scaling wall at growth                                                             | Supavisor pooling; jobs in the API service; standard Postgres SQL; internal user id independent of the Auth id                                                                                                                                                                                                                                                                                                                              |
+| **R11** | **Low-end devices and poor networks** across target markets                                                                                                                | Unusable for a large share of the audience                                         | Image budgets, APK size discipline, optimistic UI, offline tolerance, **test on a real 2GB Android device every phase**                                                                                                                                                                                                                                                                                                                     |
+| **R12** | **Cultural and sectarian conflict** in rules, terminology or filters                                                                                                       | Community backlash                                                                 | Neutral terminology, optional sensitive fields, religious advisory review (C7), region-aware defaults                                                                                                                                                                                                                                                                                                                                       |
+| **R13** | **Moderation cannot cover launch languages**                                                                                                                               | Reports go unanswered; users harmed                                                | Staff for launch languages only; add languages only when moderation can follow                                                                                                                                                                                                                                                                                                                                                              |
+| **R14** | **Scope overrun on a solo build.** Even at Option A scope, v1 is ~9–11 months for one developer                                                                            | Burnout; nothing ships                                                             | D4 cut scope to Option A; [§12.5](#125-solo-build-sequencing) splits v1 into a closed beta at ~5–6 months so feedback arrives early; no phase starts before the previous one's exit criteria are met                                                                                                                                                                                                                                        |
+| **R15** | **Solo bus factor.** One person holds all context; no code review; illness or a break stops everything                                                                     | Project stalls or dies                                                             | Documentation-first discipline (this README, ADRs, the ERD and OpenAPI contract); conventional tooling over clever tooling; automated tests as the reviewer you do not have; nothing undocumented in someone's head                                                                                                                                                                                                                         |
+| **R16** | **Family review as a coercion tool.** A gate that protects a person can also be used to stop an adult ever speaking to anyone — an indefinite veto held by a relative      | Real harm to the users this feature exists to protect; a safety story that inverts | The policy is the **owner's** and reversible by them; the owner can never be required to keep a delegate; revocation is instant and needs nobody's agreement; the owner may re-request after a rejection; a stalled review breaches an SLA and surfaces to the owner; `family_access_log` shows the owner every action taken in their name **and the permission used**; the support channel stays invisible to every delegate at every tier |
+| **R17** | **Real-time media is a new operational surface.** A WebRTC provider means a new vendor, new cost, new data-residency questions and a new abuse channel — for one developer | Cost and compliance surprises; an abuse vector with no moderation story            | Calls are **M2, not M1** — text is proven first; transport deliberately undecided in the contract (ADR 0011) so the choice is made against real usage; participant lists visible to all and join/leave timestamped; **no recording**, which would need consent analysis in every jurisdiction in scope; honest UX about what cannot be prevented, as with R5                                                                                |
 
 ---
 
@@ -1373,41 +1689,30 @@ Grouped so you can answer in one pass. **Group A blocks the ERD.**
 
 ---
 
-## Planning complete
+## Where things stand
 
-Every planning deliverable exists. **Nothing has been implemented.**
+**Phase 1 is built and tested. Everything beyond it is designed and not built.**
 
-| Document                                   | Contents                                                                               |
-| ------------------------------------------ | -------------------------------------------------------------------------------------- |
-| **README.md**                              | This document — product, architecture, decisions, risks                                |
-| **[docs/ENTITIES.md](docs/ENTITIES.md)**   | 90 entities · 71 in v1 · 47 in M1, with purpose, phase and access class                |
-| **[docs/ERD.md](docs/ERD.md)**             | All 71 v1 entities: columns, types, indexes, RLS strategy, test matrix, E1–E6 resolved |
-| **[docs/openapi.yaml](docs/openapi.yaml)** | 83 paths · 97 operations · 58 schemas · runtime-neutral                                |
-| **[docs/adr/](docs/adr/)**                 | 9 architecture decision records                                                        |
-| `PROJECT_PLAN.md`                          | Superseded, retained as a historical record                                            |
+| Document                                             | Contents                                                                                                                |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **README.md**                                        | This document — product, architecture, decisions, risks                                                                 |
+| **[docs/ENTITIES.md](docs/ENTITIES.md)**             | 93 entities · 74 in v1 · 52 in M1, with purpose, phase and access class                                                 |
+| **[docs/ERD.md](docs/ERD.md)**                       | All 74 v1 entities: columns, types, indexes, RLS strategy, test matrix, the communication state machine, E1–E6 resolved |
+| **[docs/openapi.yaml](docs/openapi.yaml)**           | 95 paths · 111 operations · 68 schemas · runtime-neutral                                                                |
+| **[docs/adr/](docs/adr/)**                           | 11 architecture decision records                                                                                        |
+| **[docs/BRAND.md](docs/BRAND.md)**                   | The identity, its six official versions, and how every asset is derived                                                 |
+| **[docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)** | Three environments, and the Zufishan prohibition                                                                        |
+| `PROJECT_PLAN.md`                                    | Superseded, retained as a historical record                                                                             |
 
-### Phase 1 — what it would do
+### What is blocked, and on what
 
-Foundations only. No product features.
-
-|                   |                                                                                          |
-| ----------------- | ---------------------------------------------------------------------------------------- |
-| **Repository**    | pnpm workspace, TypeScript config, lint, CI                                              |
-| **Environments**  | Three Supabase projects — dev, staging, prod. **New projects. Zufishan is not touched.** |
-| **Mobile shell**  | Expo app, expo-router, three route groups, design tokens                                 |
-| **i18n + RTL**    | i18next, catalogs for English / Urdu, RTL layout verified at 320dp                       |
-| **Auth**          | Email, phone OTP, Google · `users` + `user_auth_links` · `app.current_user_id()`         |
-| **Core schema**   | Identity and reference domains only — ~9 tables, with RLS policies and their tests       |
-| **Observability** | Sentry, structured logging, audit table                                                  |
-
-**Exit criteria:** a user signs up, verifies email or phone, sees an empty app in
-three languages including RTL on a real low-end Android device, and is correctly
-locked out of everything else. RLS tests green in CI.
-
-**Not in Phase 1:** profiles, photos, discovery, matching, messaging, Gemini, any
-API key beyond what Supabase auth needs.
+| Blocked                      | On                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| Phase 2 — real auth          | A NikahMate Supabase project. **Zufishan is not touched and will not be.** |
+| Family Safety implementation | **Your approval of D12** ([§14](#14-decisions-needing-your-approval))      |
 
 ### Approval required
 
-Phase 1 creates a Supabase project, writes migrations and installs dependencies.
-**None of that begins without your explicit go-ahead.**
+D12 changes MVP scope, supersedes part of D4, and moves both milestone dates by
+~4–6 weeks. **No table, no migration and no line of code for it exists.** Nothing
+is built against it without your explicit go-ahead.

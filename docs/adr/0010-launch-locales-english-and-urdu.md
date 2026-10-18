@@ -1,6 +1,10 @@
 # 0010 — Launch locales: English and Urdu only
 
-**Status:** Accepted · **Date:** 2026-09-24 · **Supersedes the language scope referenced in** [0001](0001-deterministic-compatibility-scoring.md) and [0004](0004-five-tab-navigation.md)
+**Status:** Superseded by [0012](0012-english-only.md) · **Date:** 2026-09-24 · **Supersedes the language scope referenced in** [0001](0001-deterministic-compatibility-scoring.md) and [0004](0004-five-tab-navigation.md)
+
+> **Superseded on 2026-10-01.** v1 now ships English only, and all right-to-left
+> handling has been removed. See [0012](0012-english-only.md). The reasoning
+> below is left exactly as written — it was accurate when the decision was made.
 
 ## Context
 

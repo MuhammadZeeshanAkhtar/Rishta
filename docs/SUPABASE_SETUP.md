@@ -84,11 +84,25 @@ projects to keep in sync for no benefit.
 Open **`services/api/.env`**. It already exists with the right variable names
 and empty values. Fill in these three:
 
-| Variable              | Where to find it                                                                                                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`        | **Project Settings → Database → Connection string → URI**. Use the **pooled / transaction mode** string (port `6543`). Replace `[YOUR-PASSWORD]` with the password from step 1.                                    |
-| `SUPABASE_URL`        | **Project Settings → Data API → Project URL**. Looks like `https://abcdefgh.supabase.co`                                                                                                                           |
-| `SUPABASE_JWT_SECRET` | **Project Settings → JWT Keys**. Fill this in **only** if the project uses a legacy shared secret. If the project uses asymmetric signing keys, **leave it blank** — verification goes through JWKS automatically. |
+| Variable              | Where to find it                                                                                                                                                                                                            |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`        | **Project Settings → Database → Connection string → Session pooler**. Host `aws-<n>-<region>.pooler.supabase.com`, **port `5432`**, user `postgres.<project-ref>`. Replace `[YOUR-PASSWORD]` with the password from step 1. |
+| `SUPABASE_URL`        | **Project Settings → Data API → Project URL**. Looks like `https://abcdefgh.supabase.co`                                                                                                                                    |
+| `SUPABASE_JWT_SECRET` | **Project Settings → JWT Keys**. Fill this in **only** if the project uses a legacy shared secret. If the project uses asymmetric signing keys, **leave it blank** — verification goes through JWKS automatically.          |
+
+> **Session pooler, not the transaction pooler.** Supabase offers three strings and
+> they are not interchangeable:
+>
+> | String             | Port   | Use                                                                                              |
+> | ------------------ | ------ | ------------------------------------------------------------------------------------------------ |
+> | Direct connection  | `5432` | Migrations — but **IPv6-only** without the IPv4 add-on, so often unreachable from a home network |
+> | **Session pooler** | `5432` | **What to use here.** IPv4, and a connection that outlives one transaction                       |
+> | Transaction pooler | `6543` | A running app at scale. **No prepared statements, no session state**                             |
+>
+> Schema changes need a connection that survives longer than a single
+> transaction, so the migration runner **refuses to start** against port `6543`
+> rather than failing halfway through. Session mode serves the API service
+> perfectly well too, so one value covers both in development.
 
 Leave `SUPABASE_JWKS_URL` blank unless your endpoint is non-standard; it is
 derived from `SUPABASE_URL`.
@@ -137,20 +151,56 @@ a web page, it does not belong in `apps/mobile/.env`.
 
 ---
 
-## Step 4 — what happens next (Phase 2, not now)
+## Step 4 — applying the schema (Phase 2)
 
-Once the values are in, migrations can be applied to `nikahmate-dev`:
+Migrations are verified against an in-process Postgres first. No project is
+needed for this, and it is how the schema has been checked so far:
 
 ```bash
 pnpm --filter @nikahmate/db test
 ```
 
-That runs the full schema and RLS suite against an in-process Postgres first —
-no project needed, and it is how the migrations have been verified so far.
-Applying them to your real dev project is a Phase 2 step and needs your
-go-ahead.
+Then, once `DATABASE_URL` is filled in, against the real dev project:
 
-Nothing in this repository has touched a Supabase project yet.
+```bash
+pnpm --filter @nikahmate/api migrate:status
+```
+
+Reports what would be applied and writes nothing. When it looks right:
+
+```bash
+pnpm --filter @nikahmate/api migrate
+```
+
+Finally, confirm the schema actually landed as intended:
+
+```bash
+pnpm --filter @nikahmate/api verify:db
+```
+
+### What the runner refuses to do
+
+It is deliberately hard to point at the wrong database:
+
+- **It refuses if `public` contains tables it did not create.** That is the
+  Zufishan prohibition enforced in code rather than in prose — a wrong
+  connection string fails loudly instead of merging this schema into someone
+  else's project.
+- **It refuses against port `6543`**, the transaction pooler, and tells you to
+  use the session pooler.
+- **It refuses if an already-applied migration file has changed**, because the
+  database would no longer match the files that supposedly produced it. Roll the
+  change forward in a new migration instead.
+- Each migration runs in its own transaction alongside the row recording it, so
+  a failure can never leave a half-applied schema or a lying ledger.
+- **`DATABASE_URL` is never printed** — not in output, not in an error. Only a
+  masked host, so you can confirm the target.
+
+`verify:db` then checks the live database directly: every table, RLS enabled
+**and forced**, restricted tables carrying zero policies, the exact grant list,
+that no automatic grants remain for future tables, and a set of behavioural RLS
+probes — run inside a transaction that is always rolled back, so it leaves
+nothing behind.
 
 ---
 
@@ -166,6 +216,27 @@ In **Authentication → Providers**, for `nikahmate-dev`:
 
 In **Authentication → URL Configuration**, add the app's redirect scheme:
 `nikahmate://` (matches `scheme` in `apps/mobile/app.json`).
+
+### Confirmed on the dev project — 2026-09-25
+
+Checked by a read-only request to the project's own public endpoints:
+
+| Setting                | State                          | Meaning                                                               |
+| ---------------------- | ------------------------------ | --------------------------------------------------------------------- |
+| Email provider         | ✅ enabled                     | Nothing to do                                                         |
+| Email confirmation     | ✅ required (no auto-confirm)  | Sign-up sends a confirmation mail, which is what we want              |
+| Sign-ups               | ✅ allowed                     |                                                                       |
+| Phone / Google / Apple | not enabled                    | Expected — each needs a paid or external credential                   |
+| JWT signing            | **asymmetric, ES256 via JWKS** | **Leave `SUPABASE_JWT_SECRET` blank.** The API verifies through JWKS  |
+| `public` schema        | empty                          | A genuinely fresh project. Not Zufishan, and no migration applied yet |
+
+**Still to do in the dashboard:** add `nikahmate://` under
+**Authentication → URL Configuration**. Nothing else is blocking.
+
+> **The Data API root now requires a secret key.** Supabase changed this: the
+> publishable key can still read tables that policies permit, but it can no
+> longer enumerate the schema. That is a welcome default and nothing here
+> depends on the old behaviour.
 
 ---
 

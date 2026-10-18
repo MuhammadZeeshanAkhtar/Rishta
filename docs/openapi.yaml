@@ -6,9 +6,17 @@ openapi: 3.1.0
 # STATUS: Proposed for review. NOTHING IS IMPLEMENTED.
 # No server exists, no Supabase project exists, no code has been written.
 #
-# Scope: the 96 member-facing endpoints of v1 (D4 = Option A).
+# Scope: the 111 member-facing operations of v1 (D4 = Option A, revised by D12).
+# Was 97 before Family Safety; +14 for review and calls.
 # Deferred and therefore ABSENT: proposals, AI/Gemini, payments, voice notes,
-# translation, selfie/KYC verification, audio/video calling, admin endpoints.
+# translation, selfie/KYC verification, direct 1:1 calling, admin endpoints.
+#
+# FAMILY SAFETY (ADR 0011). Accepting an interest does not open a conversation.
+# `matches.communicationState` is the gate; a delegate holding
+# `approve_communication` stands between acceptance and chat when the owner has
+# chosen `family_reviewed`. Voice and video exist only as FAMILY CALLS, which
+# require a family participant on each side. Direct owner-to-owner calling is
+# not in this contract.
 #
 # This contract is deliberately RUNTIME-NEUTRAL (D1). Nothing here assumes
 # Node, Deno, Supabase or any particular host. That is what keeps the backend
@@ -72,7 +80,9 @@ tags:
   - name: Conversations
     description: Staged messaging
   - name: Family
-    description: Wali invitations and scoped access (Observer tier in v1)
+    description: Wali invitations, scoped access, communication review
+  - name: Family calls
+    description: Family-mediated voice and video (M2). No direct 1:1 calling exists
   - name: Verification
     description: Email and phone verification
   - name: Safety
@@ -864,8 +874,7 @@ paths:
       description: |
         Reasons are regenerated from `compatibility_factors` — the values that
         were actually compared — not narrated after the fact. Rendered from
-        translated templates, so Urdu is correct and nothing is
-        invented about a real person.
+        templates, so nothing is invented about a real person.
       tags: [Compatibility]
       x-access: member
       parameters:
@@ -981,7 +990,17 @@ paths:
       operationId: respondToInterest
       summary: Accept, decline or defer an interest
       description: |
-        Accepting creates a match and opens a conversation at stage 1.
+        Accepting creates a match. It does **not** necessarily open a
+        conversation (ADR 0011).
+
+        If either side has `communicationPolicy: family_reviewed`, the match is
+        created in `pending_family_review` with `conversationId: null`, and a
+        delegate holding `approve_communication` must decide before anyone can
+        write. If neither side does, the match opens directly and a conversation
+        is created at stage 1.
+
+        Read `match.communicationState` — never assume acceptance means chat.
+
         A decline tells the sender it was declined and nothing more — no reason,
         no detail. `maybe_later` parks it and remains revisitable.
       tags: [Interests]
@@ -1153,6 +1172,12 @@ paths:
       operationId: sendMessage
       summary: Send a text message
       description: |
+        **Gated on `match.communicationState`** (ADR 0011). Writing is permitted
+        only in `open`, `family_approved` or `active`; every other state returns
+        403 while the history stays readable. Membership in the conversation is
+        necessary and not sufficient — a revoked approval leaves the participant
+        rows intact and closes writes.
+
         Stage 1 caps a conversation at 30 messages per day; the cap lifts at
         stage 2. Realtime delivery is a Supabase Realtime channel subscription,
         not a response to this call — this endpoint owns the write and the
@@ -1178,7 +1203,15 @@ paths:
         '201': { description: Sent, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: |
+            Communication is not open. `Problem.code` distinguishes
+            `family_review_pending`, `family_rejected`, `communication_revoked`
+            and `blocked`, so the app can explain which and offer the right next
+            step instead of a generic refusal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
@@ -1284,7 +1317,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ===========================================================================
-  # FAMILY / WALI — 9  (Observer tier only in v1)
+  # FAMILY / WALI — 9  (invitations, grants, access log)
   # ===========================================================================
 
   /family/members:
@@ -1309,10 +1342,13 @@ paths:
       operationId: inviteFamilyMember
       summary: Invite a family member
       description: |
-        v1 accepts `tier: observer` only. Participant and Manager arrive in 1.1;
-        sending them now returns 400 rather than silently downgrading, so a
-        client built against a future version fails loudly instead of quietly
-        granting less than the user intended.
+        v1 accepts `observer` and `reviewer`. `participant` arrives at M2 and
+        `manager` at 1.1; sending either now returns 400 rather than silently
+        downgrading, so a client built against a future version fails loudly
+        instead of quietly granting less than the user intended.
+
+        The same rule applies per permission: one outside its phase is a 400,
+        never a silent drop.
       tags: [Family]
       x-access: self
       x-async: true
@@ -1326,10 +1362,10 @@ paths:
               properties:
                 contact: { type: string, description: Email or E.164 phone }
                 relationshipCode: { type: string, enum: [father, mother, brother, sister, guardian, other] }
-                tier: { type: string, enum: [observer] }
+                tier: { type: string, enum: [observer, reviewer] }
                 permissions:
                   type: array
-                  items: { type: string, enum: [view_profile, view_matches] }
+                  items: { $ref: '#/components/schemas/FamilyPermission' }
       responses:
         '201': { description: Sent, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyInvitation' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1403,7 +1439,7 @@ paths:
               properties:
                 permissions:
                   type: array
-                  items: { type: string, enum: [view_profile, view_matches] }
+                  items: { $ref: '#/components/schemas/FamilyPermission' }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyMember' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1467,6 +1503,360 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/ManagedProfile' } }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # FAMILY REVIEW — 6  (ADR 0011, M1)
+  # ===========================================================================
+
+  /family/reviews:
+    get:
+      operationId: listFamilyReviews
+      summary: Matches awaiting my decision as a family member
+      description: |
+        The delegate's inbox. Requires `approve_communication` on at least one
+        relationship. A delegate acting for several people sees all of them,
+        each attributed to its owner (A6).
+      tags: [Family]
+      x-access: wali
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [pending, approved, rejected, more_info_requested, revoked] } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/FamilyReview' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /family/reviews/{matchId}:
+    get:
+      operationId: getFamilyReviewPacket
+      summary: What the family member reviews
+      description: |
+        Scoped to THIS match. Holding `review_interest` does not grant a
+        directory: the delegate reaches this counterpart through a specific
+        match and cannot search, browse or open an arbitrary profile. The scope
+        is the control.
+
+        Bound by the intersection rule — the packet can never contain more of
+        the counterpart than the principal themselves can see. Every read is
+        written to `family_access_log` with the permission used, and the owner
+        can read that log.
+      tags: [Family]
+      x-access: wali
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyReviewPacket' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/reviews/{matchId}/decide:
+    post:
+      operationId: decideFamilyReview
+      summary: Approve, reject, or ask for more information
+      description: |
+        Requires `approve_communication`. Approving every gated side moves the
+        match to `family_approved` and creates the conversation.
+
+        `more_info` notifies the owner and **does not move the state** — the
+        match stays in `pending_family_review`. A third outcome that quietly
+        behaved like approval would be the worst possible default.
+
+        Where an owner has several delegates holding this permission, the FIRST
+        decision stands and the deciding relationship is recorded. Quorum rules
+        are a future extension.
+      tags: [Family]
+      x-access: wali
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject, more_info] }
+                note: { type: string, maxLength: 1000, description: Visible to the owner. Never sent to the counterpart. }
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  review: { $ref: '#/components/schemas/FamilyReview' }
+                  match: { $ref: '#/components/schemas/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /family/reviews/{matchId}/revoke:
+    post:
+      operationId: revokeFamilyApproval
+      summary: Withdraw an approval already granted
+      description: |
+        Moves the match to `revoked`. History stays readable; writing stops at
+        once, for both principals and any family participant. Re-approval is
+        possible and is recorded as a separate transition.
+
+        The OWNER may also revoke, through this endpoint, on their own match.
+      tags: [Family]
+      x-access: wali
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 1000 }
+      responses:
+        '200': { description: Revoked, content: { application/json: { schema: { $ref: '#/components/schemas/Match' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /matches/{matchId}/family-review:
+    get:
+      operationId: getMatchFamilyReview
+      summary: Where my match stands with my family
+      description: |
+        The owner's view. Shows their own side in full — who is reviewing, what
+        they wrote, how long it has been waiting — and the counterpart's side as
+        a bare pending/decided flag. The counterpart's reviewer is never named
+        and their note is never returned.
+      tags: [Family]
+      x-access: self
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyReviewSummary' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: requestFamilyReview
+      summary: Ask my family to review again
+      description: |
+        Available to the owner after a rejection, and when a review has stalled
+        past its SLA. Resets their side to pending and re-notifies every
+        delegate holding `approve_communication`.
+
+        This is the owner's escape hatch from an indefinite veto (R16). It does
+        NOT let the owner approve — only ask again.
+      tags: [Family]
+      x-access: self
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/MatchId' }]
+      responses:
+        '200': { description: Re-requested, content: { application/json: { schema: { $ref: '#/components/schemas/Match' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # ===========================================================================
+  # FAMILY CALLS — 8  (ADR 0011, M2)
+  #
+  # Voice and video exist ONLY as family-mediated sessions. A call may not
+  # reach `active` without at least one FAMILY participant on each side.
+  # Direct owner-to-owner calling is refused by a server-side rule gated on a
+  # `system_flags` entry that is off, and is absent from this contract.
+  # ===========================================================================
+
+  /family/calls:
+    post:
+      operationId: requestFamilyCall
+      summary: Request a family call
+      description: |
+        Requires the match to permit communication. A principal may request; so
+        may a delegate holding `request_family_call`, in which case `actedBy` is
+        set and always returned.
+      tags: [Family calls]
+      x-access: match
+      x-async: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [matchId]
+              properties:
+                matchId: { type: string, format: uuid }
+                scheduledAt: { type: string, format: date-time, description: Omit to request one now }
+      responses:
+        '201': { description: Requested, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyCall' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    get:
+      operationId: listFamilyCalls
+      summary: Calls I am part of
+      tags: [Family calls]
+      x-access: member
+      parameters:
+        - { name: matchId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [requested, accepted, declined, active, ended, cancelled, expired] } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/FamilyCall' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /family/calls/{callId}:
+    get:
+      operationId: getFamilyCall
+      summary: One call and everyone in it
+      description: The participant list is returned to every participant. The room knows who is in it, and so does everybody in it.
+      tags: [Family calls]
+      x-access: member
+      parameters: [{ $ref: '#/components/parameters/CallId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyCall' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/calls/{callId}/respond:
+    post:
+      operationId: respondToFamilyCall
+      summary: Accept or decline a requested call
+      description: |
+        The counterpart principal decides. A delegate may decide in their place
+        only with `approve_communication`, and it is attributed.
+      tags: [Family calls]
+      x-access: member
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/CallId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [accept, decline] }
+      responses:
+        '200': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyCall' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /family/calls/{callId}/invite:
+    post:
+      operationId: inviteToFamilyCall
+      summary: Invite an approved family member
+      description: |
+        Only a delegate of the inviting principal, holding `join_family_call`,
+        may be invited. A principal cannot invite the counterpart's family, and
+        cannot invite someone who holds no grant.
+      tags: [Family calls]
+      x-access: member
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/CallId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [relationshipId]
+              properties:
+                relationshipId: { type: string, format: uuid }
+      responses:
+        '200': { description: Invited, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyCall' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/calls/{callId}/join:
+    post:
+      operationId: joinFamilyCall
+      summary: Join, and receive a transport token
+      description: |
+        Returns 409 until the safety precondition holds: **at least one family
+        participant present on each side**. The call cannot reach `active`
+        without it, and that is the entire point of the model.
+
+        `joinToken` is opaque and short-lived. Media transport is deliberately
+        undecided (ADR 0011) — binding this contract to a vendor before that
+        analysis exists would be the wrong kind of irreversible.
+      tags: [Family calls]
+      x-access: member
+      parameters: [{ $ref: '#/components/parameters/CallId' }]
+      responses:
+        '200': { description: Joined, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyCallJoin' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Not ready — a family participant is still missing on one side.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /family/calls/{callId}/leave:
+    post:
+      operationId: leaveFamilyCall
+      summary: Leave the call
+      description: Recorded with a timestamp. The last principal leaving ends the call.
+      tags: [Family calls]
+      x-access: member
+      parameters: [{ $ref: '#/components/parameters/CallId' }]
+      responses:
+        '204': { description: Left }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /family/calls/{callId}/end:
+    post:
+      operationId: endFamilyCall
+      summary: End the call for everyone
+      description: Either principal, or a delegate holding `approve_communication`. Attributed.
+      tags: [Family calls]
+      x-access: member
+      x-async: true
+      parameters: [{ $ref: '#/components/parameters/CallId' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 200 }
+      responses:
+        '200': { description: Ended, content: { application/json: { schema: { $ref: '#/components/schemas/FamilyCall' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ===========================================================================
   # VERIFICATION — 4
@@ -1907,7 +2297,7 @@ components:
     Locale:
       name: locale
       in: query
-      schema: { type: string, default: en, examples: [en, ur] }
+      schema: { type: string, default: en, enum: [en] }
     UserId:
       name: userId
       in: path
@@ -1938,6 +2328,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    CallId:
+      name: callId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
     RelationshipId:
       name: relationshipId
       in: path
@@ -2015,7 +2411,7 @@ components:
       type: object
       required: [locale, timezone]
       properties:
-        locale: { type: string }
+        locale: { type: string, enum: [en], default: en }
         timezone: { type: string, description: IANA identifier }
         deviceId: { type: string }
         platform: { type: string, enum: [android, ios] }
@@ -2030,23 +2426,46 @@ components:
         status: { type: string, enum: [onboarding, active, deactivated, suspended, banned, pending_deletion] }
         onboardingStep: { type: [string, 'null'] }
         profileCompleted: { type: boolean }
-        locale: { type: string }
+        locale: { type: string, enum: [en], default: en }
         timezone: { type: string }
         showOnlineStatus: { type: boolean }
         sendReadReceipts: { type: boolean }
         incognito: { type: boolean }
         discoveryPaused: { type: boolean }
+        communicationPolicy: { $ref: '#/components/schemas/CommunicationPolicy' }
+        familyReviewersCount:
+          type: integer
+          description: |
+            Delegates currently holding `approve_communication`. Zero while the
+            policy is `family_reviewed` means every new match will stall — the
+            app must say so at the moment the policy is set, not later.
         verification: { $ref: '#/components/schemas/VerificationStatus' }
+
+    CommunicationPolicy:
+      type: string
+      description: |
+        The owner's Family Safety gate (ADR 0011). `family_reviewed` means no
+        conversation opens on this side until a delegate holding
+        `approve_communication` decides.
+
+        It is the OWNER'S setting and reversible by them; changing it notifies
+        every review-holding delegate. What the owner can never do is approve in
+        a delegate's place — that is what makes the approval mean anything.
+
+        Changing it never retroactively re-gates a live match.
+      enum: [direct, family_reviewed]
+      default: direct
 
     UserSettingsUpdate:
       type: object
       properties:
-        locale: { type: string }
+        locale: { type: string, enum: [en], default: en }
         timezone: { type: string }
         showOnlineStatus: { type: boolean }
         sendReadReceipts: { type: boolean }
         incognito: { type: boolean }
         discoveryPaused: { type: boolean }
+        communicationPolicy: { $ref: '#/components/schemas/CommunicationPolicy' }
 
     Device:
       type: object
@@ -2477,15 +2896,61 @@ components:
         remaining: { type: integer }
         resetsAt: { type: string, format: date-time, description: Midnight in the user's timezone }
 
+    CommunicationState:
+      type: string
+      description: |
+        The Family Safety gate (ADR 0011). Writing is permitted only in
+        `open`, `family_approved` and `active`.
+
+        `active` is DERIVED, not stored — it means a writable state plus at
+        least one message. Clients must treat it as writable, never as a
+        separate permission.
+      enum:
+        - pending_family_review
+        - family_rejected
+        - open
+        - family_approved
+        - active
+        - revoked
+        - blocked
+
     Match:
       type: object
       properties:
         id: { type: string, format: uuid }
         counterpart: { $ref: '#/components/schemas/ProfileCard' }
-        conversationId: { type: [string, 'null'], format: uuid }
+        conversationId:
+          type: [string, 'null']
+          format: uuid
+          description: Null until the gate first permits writing. A match can exist with no thread.
         stage: { type: integer, minimum: 1, maximum: 5 }
+        communicationState: { $ref: '#/components/schemas/CommunicationState' }
+        familyReview:
+          description: |
+            Present whenever either side required review. The counterpart sees
+            only that a review is pending and never who is reviewing, their
+            note, or which side they are on.
+          oneOf:
+            - $ref: '#/components/schemas/FamilyReviewSummary'
+            - type: 'null'
         createdAt: { type: string, format: date-time }
         endedAt: { type: [string, 'null'], format: date-time }
+
+    FamilyReviewSummary:
+      type: object
+      description: The owner's and counterpart's view of a review. Field visibility differs by viewer.
+      properties:
+        state: { type: string, enum: [pending, approved, rejected, more_info_requested, revoked] }
+        mySideRequiresReview: { type: boolean }
+        counterpartSideRequiresReview: { type: boolean }
+        decidedBy:
+          description: Own side only. Null for the counterpart's reviewer, always.
+          oneOf:
+            - $ref: '#/components/schemas/ActorRef'
+            - type: 'null'
+        decidedAt: { type: [string, 'null'], format: date-time }
+        note: { type: [string, 'null'], description: Own side only. Never sent to the counterpart. }
+        requestedAt: { type: [string, 'null'], format: date-time }
 
     # --- Conversations -------------------------------------------------------
 
@@ -2500,7 +2965,18 @@ components:
         unreadCount: { type: integer }
         lastMessageAt: { type: [string, 'null'], format: date-time }
         counterpartOnline: { type: [boolean, 'null'], description: Null when the counterpart hides their online status }
-        status: { type: string, enum: [active, archived, ended] }
+        status:
+          type: string
+          enum: [active, archived, ended]
+          description: The participants' own archive/end control. Independent of the family gate.
+        communicationState: { $ref: '#/components/schemas/CommunicationState' }
+        canWrite:
+          type: boolean
+          description: Resolved server-side from the gate, the stage cap and the viewer's role. The client renders this; it never computes it.
+        familyParticipants:
+          type: array
+          description: Family members present in the thread, always visible to both sides. Never covert.
+          items: { $ref: '#/components/schemas/Participant' }
 
     Participant:
       type: object
@@ -2565,6 +3041,37 @@ components:
 
     # --- Family --------------------------------------------------------------
 
+    FamilyPermission:
+      type: string
+      description: |
+        The authority on what a delegate may do (ADR 0011). `tier` is a preset
+        label for the invite UI and is never an authorization input.
+
+        A permission outside its phase is REJECTED with 400 at grant time, not
+        accepted and ignored — a grant that silently does nothing is worse than
+        a refusal, because the owner believes they granted it.
+      enum:
+        - view_profile          # M1
+        - view_matches          # M1
+        - review_interest       # M1
+        - approve_communication # M1
+        - report_on_behalf      # M1
+        - block_on_behalf       # M1
+        - view_conversation     # M2
+        - join_conversation     # M2
+        - request_family_call   # M2
+        - join_family_call      # M2
+        - receive_proposal      # 1.1
+        - manage_profile        # 1.1
+
+    FamilyTier:
+      type: string
+      description: |
+        Preset that expands into permissions at grant time. v1 accepts
+        `observer` and `reviewer`; `participant` arrives at M2 and `manager`
+        at 1.1.
+      enum: [observer, reviewer, participant, manager]
+
     FamilyMember:
       type: object
       properties:
@@ -2572,11 +3079,108 @@ components:
         userId: { type: string, format: uuid }
         displayName: { type: string }
         relationshipCode: { type: string }
-        tier: { type: string, enum: [observer], description: 'v1: observer only. Participant and Manager arrive in 1.1.' }
-        permissions: { type: array, items: { type: string, enum: [view_profile, view_matches] } }
+        tier: { $ref: '#/components/schemas/FamilyTier' }
+        permissions: { type: array, items: { $ref: '#/components/schemas/FamilyPermission' } }
         status: { type: string, enum: [active, revoked] }
+        pendingReviewCount: { type: integer, description: Matches awaiting this member's decision }
         lastAccessAt: { type: [string, 'null'], format: date-time }
         createdAt: { type: string, format: date-time }
+
+    FamilyReview:
+      type: object
+      description: One review, one side of one match. The delegate's view.
+      properties:
+        matchId: { type: string, format: uuid }
+        owner: { $ref: '#/components/schemas/ActorRef' }
+        relationshipCode: { type: string, description: The delegate's relationship to the owner }
+        counterpart: { $ref: '#/components/schemas/ProfileCard' }
+        decision: { type: string, enum: [pending, approved, rejected, more_info_requested, revoked] }
+        decidedBy:
+          oneOf:
+            - $ref: '#/components/schemas/ActorRef'
+            - type: 'null'
+        note: { type: [string, 'null'] }
+        requestedAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+
+    FamilyReviewPacket:
+      type: object
+      description: |
+        The enumerated projection a reviewing delegate receives. It is a
+        DISTINCT schema, not a profile read with fields removed, so a new
+        profile column cannot leak into it by default.
+
+        Bound by the intersection rule: `delegate_view = owner_view ∩ grants`.
+        `profile_sensitive` (phone, email, employer), exact location and photos
+        outside the principal's own grants are unreachable at every tier.
+      properties:
+        matchId: { type: string, format: uuid }
+        owner: { $ref: '#/components/schemas/ActorRef' }
+        counterpart: { $ref: '#/components/schemas/PublicProfile' }
+        photos:
+          type: array
+          description: Exactly the set the principal can see. Never more.
+          items: { $ref: '#/components/schemas/VisiblePhoto' }
+        compatibility: { $ref: '#/components/schemas/CompatibilityScore' }
+        verification: { $ref: '#/components/schemas/VerificationBadges' }
+        marriagePreferences:
+          type: object
+          description: The counterpart's stated timeline, relocation and children answers.
+          additionalProperties: true
+        safety:
+          type: object
+          description: Signals a reviewer needs and nothing that identifies a reporter.
+          properties:
+            profileApproved: { type: boolean }
+            accountAgeDays: { type: integer }
+            hasVerifiedPhone: { type: boolean }
+            reportedByOwner: { type: boolean }
+        interestNote: { type: [string, 'null'] }
+        requestedAt: { type: string, format: date-time }
+
+    FamilyCall:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        matchId: { type: string, format: uuid }
+        status: { type: string, enum: [requested, accepted, declined, active, ended, cancelled, expired] }
+        requestedBy: { $ref: '#/components/schemas/ActorRef' }
+        actedBy:
+          oneOf:
+            - $ref: '#/components/schemas/ActorRef'
+            - type: 'null'
+        scheduledAt: { type: [string, 'null'], format: date-time }
+        participants: { type: array, items: { $ref: '#/components/schemas/FamilyCallParticipant' } }
+        readyToStart:
+          type: boolean
+          description: True only once at least one FAMILY participant is present on each side. The safety model, reported as a field so the UI can explain the wait.
+        startedAt: { type: [string, 'null'], format: date-time }
+        endedAt: { type: [string, 'null'], format: date-time }
+
+    FamilyCallParticipant:
+      type: object
+      description: Visible to every participant. The room knows who is in it.
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        role: { type: string, enum: [principal, family] }
+        sideOwnerUserId: { type: string, format: uuid, description: Which side this person is on }
+        relationshipCode: { type: [string, 'null'] }
+        invitedAt: { type: [string, 'null'], format: date-time }
+        joinedAt: { type: [string, 'null'], format: date-time }
+        leftAt: { type: [string, 'null'], format: date-time }
+
+    FamilyCallJoin:
+      type: object
+      properties:
+        callId: { type: string, format: uuid }
+        joinToken:
+          type: string
+          description: |
+            Opaque and short-lived. Media transport is deliberately undecided
+            (ADR 0011) — the contract must not bind to a vendor before that
+            analysis exists.
+        expiresAt: { type: string, format: date-time }
 
     FamilyInvitation:
       type: object
@@ -2586,8 +3190,8 @@ components:
         ownerDisplayName: { type: [string, 'null'] }
         contactMasked: { type: [string, 'null'], description: Masked, never the full address }
         relationshipCode: { type: string }
-        tier: { type: string }
-        permissions: { type: array, items: { type: string } }
+        tier: { $ref: '#/components/schemas/FamilyTier' }
+        permissions: { type: array, items: { $ref: '#/components/schemas/FamilyPermission' } }
         status: { type: string, enum: [pending, accepted, declined, expired, cancelled] }
         expiresAt: { type: string, format: date-time }
 
@@ -2608,8 +3212,9 @@ components:
         ownerUserId: { type: string, format: uuid }
         ownerDisplayName: { type: string }
         relationshipCode: { type: string }
-        tier: { type: string }
-        permissions: { type: array, items: { type: string } }
+        tier: { $ref: '#/components/schemas/FamilyTier' }
+        permissions: { type: array, items: { $ref: '#/components/schemas/FamilyPermission' } }
+        pendingReviewCount: { type: integer }
 
     # --- Verification & safety ----------------------------------------------
 

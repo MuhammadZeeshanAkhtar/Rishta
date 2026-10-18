@@ -119,8 +119,7 @@ accent from looking cheap.
 ## Typography
 
 The **system sans** — SF Pro on iOS, Roboto on Android. Modern, neutral,
-international; no font file, no network fetch, no dependency, and both already
-carry the Urdu coverage the secondary locale needs.
+international; no font file, no network fetch and no dependency.
 
 The wordmark is weight 700 at `-0.5` tracking, with **Nikah** in the neutral and
 **Mate** in gold.
@@ -135,10 +134,10 @@ The wordmark is weight 700 at `-0.5` tracking, with **Nikah** in the neutral and
 | `overline` | 11 / 16, tracked   | Eyebrows         |
 | `tabLabel` | 11 / 16            | Tab bar          |
 
-**Leading is generous — roughly 1.4–1.5 — on purpose.** Urdu glyphs occupy more
-vertical space than Latin at the same size. Tight leading looks fine in English
-and clips in Urdu, a bug that only shows in the language nobody on the team
-reads. It has already happened once, in the tab bar.
+**Leading is generous — roughly 1.4–1.5 — on purpose.** Tight leading clips
+descenders inside height-constrained containers, which is a bug that renders
+fine at one string length and badly at another. It has already happened once,
+in the tab bar, and `MAX_TAB_LABEL_CHARS` guards the budget that exposed it.
 
 ---
 

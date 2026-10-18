@@ -1,6 +1,6 @@
 # NikahMate — Entity Inventory
 
-**Status:** ✅ **D8 APPROVED** — consolidated design locked · **Version:** 0.2 · **Date:** 2026-09-24
+**Status:** ✅ **D8 APPROVED** · 🟡 **D12 PROPOSED** (Family Safety) · **Version:** 0.3 · **Date:** 2026-09-25
 **Parent document:** [../README.md](../README.md)
 
 > ## ⚠️ NOTHING IS CREATED
@@ -19,13 +19,13 @@ you can accept or reject each one individually.
 
 ### Phase
 
-| Mark      | Meaning                                                                     |
-| --------- | --------------------------------------------------------------------------- |
-| **M1**    | Closed beta — Phases 1–7, ~5–6 months solo                                  |
-| **M2**    | Public launch — Phases 8–9 + hardening                                      |
-| **1.1**   | Next release — proposals, full wali tiers, voice notes, selfie verification |
-| **1.2**   | Gemini features and payments                                                |
-| **later** | Beyond v1.2                                                                 |
+| Mark      | Meaning                                                                  |
+| --------- | ------------------------------------------------------------------------ |
+| **M1**    | Closed beta — Phases 1–6b–7, ~6–7 months solo                            |
+| **M2**    | Public launch — Phases 8–9 + hardening                                   |
+| **1.1**   | Next release — proposals, Manager tier, voice notes, selfie verification |
+| **1.2**   | Gemini features and payments                                             |
+| **later** | Beyond v1.2                                                              |
 
 ### Access class — _drives the RLS policy shape_
 
@@ -52,7 +52,7 @@ you can accept or reject each one individually.
 | 7. Discovery & matching          | 7        | 6      | 6      |
 | 8. Interest & match              | 4        | 4      | 4      |
 | 9. Conversation                  | 9        | 6      | 6      |
-| 10. Family / Wali                | 5        | 4      | 0      |
+| 10. Family / Wali                | 8        | 7      | 5      |
 | 11. Proposal & journey           | 5        | 0      | 0      |
 | 12. Verification                 | 5        | 3      | 2      |
 | 13. Safety & moderation          | 9        | 9      | 3      |
@@ -60,12 +60,16 @@ you can accept or reject each one individually.
 | 15. Subscriptions & entitlements | 6        | 4      | 2      |
 | 16. AI                           | 5        | 0      | 0      |
 | 17. Admin, audit & ops           | 8        | 8      | 1      |
-| **Total**                        | **90**   | **71** | **47** |
+| **Total**                        | **93**   | **74** | **52** |
 
-**47 tables for the closed beta.** That is the number that matters for your next five months.
+**52 tables for the closed beta.** That is the number that matters for your next six or seven months.
 
-By access class across the 71 v1 entities: `owner` 20 · `shared` 17 · `restricted` 19 · `system` 12 · `public` 3.
-The **17 `shared` entities are where R6 lives** — they carry the permission-resolved policies and need the most test coverage.
+By access class across the 74 v1 entities: `owner` 20 · `shared` 20 · `restricted` 19 · `system` 12 · `public` 3.
+The **20 `shared` entities are where R6 lives** — they carry the permission-resolved policies and need the most test coverage.
+
+> **Revised by [ADR 0011](adr/0011-family-safety-wali-communication.md) (D12).** Family Safety became a core
+> layer, so domain 10 grew from 5 entities to 8 and five of them moved into M1. The closed beta went
+> from 47 tables to 52. Everything else in this inventory is unchanged from the D8 approval.
 
 ---
 
@@ -184,17 +188,32 @@ The **17 `shared` entities are where R6 lives** — they carry the permission-re
 
 ---
 
-## 10. Family / Wali — 5
+## 10. Family / Wali — 8 ⬅ _core safety layer (ADR 0011)_
 
-| Entity                 | Purpose                                                                                                                  | Phase | Access   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----- | -------- |
-| `family_relationships` | The granted relationship between an owner and a family member.                                                           | M2    | `shared` |
-| `family_invitations`   | Invite workflow: send, accept, decline, cancel.                                                                          | M2    | `owner`  |
-| `family_permissions`   | What each relationship grants. **v1 populates Observer only**; the table shape already supports Participant and Manager. | M2    | `shared` |
-| `family_access_log`    | Every delegate action, surfaced to the owner. Anti-coercion.                                                             | M2    | `system` |
-| `delegated_actions`    | Actions taken on the owner's behalf, attributed and never disguised.                                                     | 1.1   | `system` |
+| Entity                     | Purpose                                                                                                              | Phase | Access   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----- | -------- |
+| `family_relationships`     | The granted relationship between an owner and a family member. `tier` is a preset label, not an authorization input. | M1    | `shared` |
+| `family_invitations`       | Invite workflow: send, accept, decline, cancel.                                                                      | M1    | `owner`  |
+| `family_permissions`       | **The authority on what a delegate may do.** One row per granted permission. Explicit, revocable, auditable.         | M1    | `shared` |
+| `family_reviews`           | **NEW.** One review per match per side: approve · reject · request more info · revoke, with who decided and why.     | M1    | `shared` |
+| `family_access_log`        | Every delegate action and the permission used, surfaced to the owner. Anti-coercion.                                 | M1    | `system` |
+| `family_calls`             | **NEW.** A family-mediated call session attached to a match.                                                         | M2    | `shared` |
+| `family_call_participants` | **NEW.** Who is in the call: side, role, relationship, join and leave times.                                         | M2    | `shared` |
+| `delegated_actions`        | Manager-tier writes taken on the owner's behalf. `family_access_log` covers M1; this arrives with the tier.          | 1.1   | `system` |
 
-> **v1 ships the Observer tier only** (read-only on profile and matches). The permission model is designed now so 1.1 **extends** it rather than replacing it. This is the deliberate R6 reduction from D4.
+> **Family involvement is no longer a v1 reduction.** ADR 0005 shipped an Observer tier only, to shrink R6.
+> [ADR 0011](adr/0011-family-safety-wali-communication.md) reverses that for the review layer: accepting an
+> interest no longer opens a conversation, and a delegate holding `approve_communication` stands between the
+> two. Five of these tables move into the closed beta as a result.
+>
+> **Two things did not change.** `family_permissions` and `family_access_log` ship exactly as designed in D8 —
+> the permission vocabulary widens, the table shape does not. And `acted_by_user_id` (A7) remains the single
+> attribution mechanism across `interests`, `messages`, `reports` and `blocks`.
+>
+> **Calls are the deferred half.** `family_calls` and `family_call_participants` land at M2, after the text
+> gate is proven. Direct owner-to-owner calling is not built in v1 and is gated by a `system_flags` entry
+> that is off — a switched-off path gets reviewed before it is switched on; an absent one gets rebuilt under
+> deadline pressure.
 
 ---
 
@@ -305,6 +324,7 @@ These follow from decisions already locked in the README. Flag any you disagree 
 5. **Scores are stored with their inputs** (`compatibility_factors`), because D6 requires explanations to be regenerable and auditable.
 6. **Evidence is snapshotted at report time**, so a bad actor deleting their content cannot destroy the case against them.
 7. **The entitlement abstraction ships in v1** with money switched off.
+8. **A delegate's sight is an intersection, never a union** — `delegate_view(target) = owner_view(target) ∩ delegate_grants`. A family member can never see more of a counterpart than the person they act for (ADR 0011).
 
 ---
 
@@ -322,12 +342,26 @@ All Group A questions are answered (README §15). Net effect on this inventory:
 
 > **A gap this review caught:** consolidating profile 6→3 left languages, hobbies and lifestyle attributes — all many-to-many — without a home. Resolved as `text[]` columns of reference codes with GIN indexes rather than three join tables. Had it gone the other way, the inventory would be 93, and discovery would join three extra tables on its hottest read path.
 
-**The approved count is unchanged: 90 total, 71 in v1, 47 in M1.**
+**These decisions left the count at 90.** It moved later, for one reason only — see D12 below.
 
 ---
 
 ## Decision — ✅ D8 LOCKED
 
 Approved as listed: **90 entities · 71 in v1 · 47 in M1.** Both consolidations taken (reference 19→2, profile 6→3), `profile_sensitive` kept separate as the privacy boundary, `blocks` / `reports` / `report_evidence` and `usage_counters` / `user_entitlements` kept in M1, deferred entities phased as marked.
+
+## Revision — 🟡 D12 PROPOSED _(Family Safety)_
+
+**93 entities · 74 in v1 · 52 in M1.** Three new tables in domain 10
+(`family_reviews`, `family_calls`, `family_call_participants`) and five family tables moved
+into M1, per [ADR 0011](adr/0011-family-safety-wali-communication.md).
+
+Two columns are added to existing tables rather than modelled as new ones:
+`matches.communication_state` (the authorization gate) and
+`user_settings.communication_policy` (the owner's choice of whether family review applies).
+`match_events` gains `acted_by_user_id` and `relationship_id` so the state machine's history
+carries the full attribution chain.
+
+**No existing table is restructured, and no D8 consolidation is reopened.**
 
 Next deliverable: `docs/ERD.md` — columns, types, relationships, indexes and RLS policy outlines. **Still no tables created.**

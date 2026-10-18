@@ -1,6 +1,8 @@
 # 0009 — Consolidated entity design: 90 entities
 
 **Status:** Accepted · **Date:** 2026-09-24 · **Ref:** README D8, docs/ENTITIES.md
+**Superseded in part by:** [0011](0011-family-safety-wali-communication.md) — the counts below
+became **93 / 74 / 52**. The consolidations and the design rules stand unchanged.
 
 ## Context
 

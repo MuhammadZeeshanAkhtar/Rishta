@@ -1,6 +1,8 @@
 # 0005 — MVP scope: core loop, safety, and a wali Observer tier
 
 **Status:** Accepted · **Date:** 2026-09-24 · **Ref:** README D4, §4, §12.5
+**Superseded in part by:** [0011](0011-family-safety-wali-communication.md) — the wali
+Observer-only reduction below no longer holds. Everything else in this ADR stands.
 
 ## Context
 

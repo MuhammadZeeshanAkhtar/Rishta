@@ -1,6 +1,9 @@
 # 0004 — Five main tabs, including a dedicated Family tab
 
 **Status:** Accepted · **Date:** 2026-09-24 · **Ref:** README D3, §6.2
+**Superseded in part by:** [0011](0011-family-safety-wali-communication.md) — the Family tab carries
+the review layer from M1, not a read-only Observer tier. The five-tab decision itself stands, and
+0011 is the strongest argument for it: the tab is now load-bearing.
 
 ## Context
 
