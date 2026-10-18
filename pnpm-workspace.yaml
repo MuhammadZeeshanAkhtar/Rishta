@@ -3,8 +3,18 @@ packages:
   - 'services/*'
   - 'packages/*'
 
+# Both packages are already justified in `onlyBuiltDependencies` below; this is
+# the consent pnpm asks for separately before it will run their install
+# scripts. It arrived as the literal placeholder "set this to true or false",
+# which pnpm treats as undecided — so `pnpm install --frozen-lockfile` exited 1
+# on every fresh clone with ERR_PNPM_IGNORED_BUILDS, including in CI.
 allowBuilds:
-  esbuild: set this to true or false
+  # Bundler. Ships prebuilt binaries and needs its postinstall to select one.
+  esbuild: true
+  # Native image processing, and NOT optional: the blurred photo variant must
+  # be produced server-side (ERD §7). Without its install script there is no
+  # binary, and the privacy tier silently degrades to serving originals.
+  sharp: true
 
 minimumReleaseAgeExclude:
   - '@expo/cli@57.0.27'
@@ -18,6 +28,10 @@ minimumReleaseAgeExclude:
 # disabling the check. Every entry is a package we have chosen to trust.
 onlyBuiltDependencies:
   - esbuild
+  # Native image processing. The blurred variant must be generated and STORED
+  # server-side (ERD §7) — a client-side blur means the original already
+  # reached the device, which makes the privacy tier decorative.
+  - sharp
   - babel-preset-expo
   - expo-modules-core
   - expo-modules-jsi

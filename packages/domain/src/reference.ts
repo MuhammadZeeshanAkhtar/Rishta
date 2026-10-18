@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { REFERENCE_TYPES } from './constants';
-import { localeSchema, referenceCodeSchema } from './common';
+import { referenceCodeSchema, requestedLocaleSchema } from './common';
 
 /**
  * Reference data — the generic `(type, code)` vocabulary that replaced nineteen
@@ -38,7 +38,7 @@ export const referenceManifestSchema = z.record(referenceTypeSchema, z.string())
 export type ReferenceManifest = z.infer<typeof referenceManifestSchema>;
 
 export const referenceQuerySchema = z.object({
-  locale: localeSchema.optional(),
+  locale: requestedLocaleSchema.optional(),
   parentCode: referenceCodeSchema.optional(),
 });
 export type ReferenceQuery = z.infer<typeof referenceQuerySchema>;

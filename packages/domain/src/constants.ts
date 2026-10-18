@@ -127,23 +127,20 @@ export const V1_VERIFICATION_BADGES: readonly VerificationBadgeKey[] = [
 /**
  * Launch locales.
  *
- * English is primary and the fallback for everything. Urdu is the secondary
- * locale and is right-to-left.
+ * English only. Urdu was a launch locale and was removed, along with all
+ * right-to-left handling — the product ships in one language.
  *
- * Adding a locale is deliberately cheap: add the code here, add a catalog
- * beside the others, and add its metadata in @nikahmate/i18n. Nothing else
- * changes — direction, resolution, persistence and the selector all read from
- * this list. Arabic was in scope earlier and was removed from v1; re-adding it
- * is those three steps and no restructuring.
+ * The list stays an array rather than collapsing to the literal `'en'`, so
+ * adding a locale remains a data change: add the code here and add a catalog
+ * beside the others in @nikahmate/i18n. Resolution, persistence and lookup all
+ * read from this list.
+ *
+ * A second locale that is right-to-left would need direction handling built
+ * again; it was removed deliberately rather than left dormant, because
+ * untested RTL code is worse than none.
  */
-export const LOCALES = ['en', 'ur'] as const;
+export const LOCALES = ['en'] as const;
 export type Locale = (typeof LOCALES)[number];
-
-export const RTL_LOCALES: readonly Locale[] = ['ur'];
-
-export function isRtl(locale: string): boolean {
-  return (RTL_LOCALES as readonly string[]).includes(locale);
-}
 
 export const DEFAULT_LOCALE: Locale = 'en';
 

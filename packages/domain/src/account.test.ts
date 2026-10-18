@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   MINIMUM_AGE_YEARS,
   ageFromDateOfBirth,
@@ -7,7 +7,7 @@ import {
   meetsMinimumAge,
   userSettingsUpdateSchema,
 } from './account';
-import { isRtl, LOCALES, REFERENCE_TYPES, FREE_PLAN_ENTITLEMENTS } from './constants';
+import { DEFAULT_LOCALE, LOCALES, REFERENCE_TYPES, FREE_PLAN_ENTITLEMENTS } from './constants';
 import { phoneE164Schema, referenceCodeSchema, timezoneSchema } from './common';
 
 describe('ageFromDateOfBirth', () => {
@@ -62,8 +62,23 @@ describe('identitySchema', () => {
     expect(identitySchema.safeParse(valid).success).toBe(true);
   });
 
-  it('rejects a lowercase country code', () => {
-    expect(identitySchema.safeParse({ ...valid, countryCode: 'pk' }).success).toBe(false);
+  it('canonicalises a country code to lower case', () => {
+    // Lower case is what the database requires: country codes live in
+    // `reference_items`, whose code shape forbids upper case, and
+    // `users.country_code` carries a composite FK to it. Accepting 'PK' and
+    // storing 'pk' keeps the ISO-canonical form working for clients while the
+    // one form the schema can actually store reaches Postgres.
+    //
+    // This reverses an earlier expectation that upper case was required. That
+    // expectation could never have been satisfied by a real insert.
+    expect(identitySchema.parse({ ...valid, countryCode: 'PK' }).countryCode).toBe('pk');
+    expect(identitySchema.parse({ ...valid, countryCode: 'pk' }).countryCode).toBe('pk');
+  });
+
+  it('still rejects a country code that is not two letters', () => {
+    for (const bad of ['p', 'pak', '1k', 'p k', '']) {
+      expect(identitySchema.safeParse({ ...valid, countryCode: bad }).success).toBe(false);
+    }
   });
 
   it('rejects a country code that is not two letters', () => {
@@ -82,8 +97,16 @@ describe('identitySchema', () => {
 describe('bootstrapRequestSchema', () => {
   it('accepts locale and timezone alone', () => {
     expect(
-      bootstrapRequestSchema.safeParse({ locale: 'ur', timezone: 'Asia/Karachi' }).success,
+      bootstrapRequestSchema.safeParse({ locale: 'en', timezone: 'Asia/Karachi' }).success,
     ).toBe(true);
+  });
+
+  it('rejects a locale the product no longer ships', () => {
+    // Urdu was a launch locale. A client still sending it must be refused
+    // rather than storing a value nothing has a catalog for.
+    expect(
+      bootstrapRequestSchema.safeParse({ locale: 'ur', timezone: 'Asia/Karachi' }).success,
+    ).toBe(false);
   });
 
   it('rejects a bogus timezone', () => {
@@ -150,26 +173,91 @@ describe('timezoneSchema', () => {
     expect(timezoneSchema.safeParse(tz).success).toBe(true);
   });
 
-  it('rejects a non-IANA value', () => {
-    expect(timezoneSchema.safeParse('PKT').success).toBe(false);
+  it.each([
+    ['an abbreviation', 'PKT'],
+    ['a plain country name', 'Pakistan'],
+    ['an invented zone', 'Not/AZone'],
+    ['an empty string', ''],
+    ['whitespace', '   '],
+  ])('rejects %s', (_label, tz) => {
+    const result = timezoneSchema.safeParse(tz);
+    expect(result.success).toBe(false);
+  });
+
+  it('reports a rejection as a validation issue, not an exception', () => {
+    // The caller's contract: a bad identifier is ordinary input validation and
+    // comes back in `error`, so the API answers 400 rather than 500.
+    const result = timezoneSchema.safeParse('PKT');
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toContain('IANA timezone');
+  });
+
+  /**
+   * The regression this schema was changed for.
+   *
+   * `Intl.DateTimeFormat` throws a RangeError for an unrecognised identifier,
+   * and nothing else. Every other exception describes the RUNTIME — a build
+   * without full ICU, an allocation failure under load — and reporting it as
+   * invalid input tells the caller to fix something that was never wrong while
+   * leaving the operator with no signal at all.
+   *
+   * Stubbing the constructor is the only way to exercise this: a real
+   * environment failure cannot be provoked on demand, which is precisely why
+   * the old behaviour went unnoticed.
+   */
+  describe('when Intl itself fails', () => {
+    const original = Intl.DateTimeFormat;
+
+    afterEach(() => {
+      Intl.DateTimeFormat = original;
+    });
+
+    function stubIntl(error: unknown): void {
+      Intl.DateTimeFormat = function stub() {
+        throw error;
+      } as unknown as typeof Intl.DateTimeFormat;
+    }
+
+    it('propagates a non-RangeError instead of calling the input invalid', () => {
+      stubIntl(new TypeError('ICU data unavailable'));
+      // Propagates rather than returning { success: false }: zod does not
+      // swallow a throw from inside a refinement, so this reaches the API's
+      // error handler and becomes a logged 500.
+      expect(() => timezoneSchema.safeParse('Asia/Karachi')).toThrow('ICU data unavailable');
+    });
+
+    it('propagates a thrown non-Error value too', () => {
+      // Nothing guarantees a throw is an Error. The check must not treat an
+      // arbitrary value as "this identifier is invalid".
+      stubIntl('something went wrong');
+      expect(() => timezoneSchema.safeParse('Asia/Karachi')).toThrow();
+    });
+
+    it('still rejects, without throwing, when the error IS a RangeError', () => {
+      // The other half of the same decision: the spec's signal for a bad
+      // identifier must stay ordinary validation.
+      stubIntl(new RangeError('Invalid time zone specified: PKT'));
+      const result = timezoneSchema.safeParse('PKT');
+      expect(result.success).toBe(false);
+    });
   });
 });
 
 describe('locale constants', () => {
-  it('ships English and Urdu in v1', () => {
-    expect([...LOCALES]).toEqual(['en', 'ur']);
+  it('ships English only', () => {
+    expect([...LOCALES]).toEqual(['en']);
   });
 
-  it('marks Urdu as RTL and English as LTR', () => {
-    expect(isRtl('ur')).toBe(true);
-    expect(isRtl('en')).toBe(false);
+  it('defaults to English', () => {
+    expect(DEFAULT_LOCALE).toBe('en');
+    expect([...LOCALES]).toContain(DEFAULT_LOCALE);
   });
 
   it('does not treat a removed locale as supported', () => {
-    // Arabic was in scope earlier and was removed from v1. It must not linger
-    // as a half-supported locale that resolves or reports a direction.
+    // Urdu and Arabic were both in scope earlier and were removed. Neither may
+    // linger as a half-supported locale that resolves to a missing catalog.
+    expect([...LOCALES]).not.toContain('ur');
     expect([...LOCALES]).not.toContain('ar');
-    expect(isRtl('ar')).toBe(false);
   });
 });
 

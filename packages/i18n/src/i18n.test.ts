@@ -3,7 +3,6 @@ import {
   MAX_TAB_LABEL_CHARS,
   SUPPORTED_LOCALES,
   catalogs,
-  directionFor,
   flattenKeys,
   resolveLocale,
   translate,
@@ -12,19 +11,19 @@ import {
 describe('catalog parity', () => {
   const englishKeys = flattenKeys(catalogs.en).sort();
 
-  it('ships English and Urdu', () => {
-    expect([...SUPPORTED_LOCALES]).toEqual(['en', 'ur']);
+  it('ships English only', () => {
+    expect([...SUPPORTED_LOCALES]).toEqual(['en']);
   });
 
   it('carries no catalog for a removed locale', () => {
-    // Arabic must not survive as a hidden or partially supported locale.
-    expect(Object.keys(catalogs)).toEqual(['en', 'ur']);
+    // Urdu and Arabic were both supported earlier. Neither may survive as a
+    // hidden or partially supported catalog.
+    expect(Object.keys(catalogs)).toEqual(['en']);
   });
 
   it.each(SUPPORTED_LOCALES)('%s has exactly the English key set', (locale) => {
-    // A missing key is a blank screen for a real person mid-signup, and it is
-    // the kind of thing that only shows up in the language nobody on the team
-    // reads. Cheap to catch here.
+    // A missing key is a blank screen for a real person mid-signup. Cheap to
+    // catch here, and the check keeps its value the moment a locale is added.
     expect(flattenKeys(catalogs[locale]).sort()).toEqual(englishKeys);
   });
 
@@ -34,43 +33,27 @@ describe('catalog parity', () => {
     );
     expect(empty).toEqual([]);
   });
-
-  it.each(['ur'] as const)('%s is actually translated, not copied from English', (locale) => {
-    // Guards against a catalog that was duplicated and never filled in.
-    // `continueWithGoogle` is excluded: "Google" is a brand name and legitimately
-    // stays Latin script in both.
-    const identical = englishKeys.filter(
-      (key) => key !== 'auth.continueWithGoogle' && translate(locale, key) === translate('en', key),
-    );
-    expect(identical).toEqual([]);
-  });
-});
-
-describe('direction', () => {
-  it('marks Urdu RTL and English LTR', () => {
-    expect(directionFor('ur')).toBe('rtl');
-    expect(directionFor('en')).toBe('ltr');
-  });
 });
 
 describe('resolveLocale', () => {
   it('matches an exact locale', () => {
-    expect(resolveLocale('ur')).toBe('ur');
+    expect(resolveLocale('en')).toBe('en');
   });
 
-  it('falls back by language before falling back to English', () => {
-    // A device set to ur-PK should get Urdu, not English.
-    expect(resolveLocale('ur-PK')).toBe('ur');
+  it('falls back by language before falling back to the default', () => {
     expect(resolveLocale('en-GB')).toBe('en');
+    expect(resolveLocale('en-PK')).toBe('en');
   });
 
   it('walks the preference list in order', () => {
-    expect(resolveLocale(['fr-FR', 'ur-PK', 'en'])).toBe('ur');
+    expect(resolveLocale(['fr-FR', 'en-GB', 'ja'])).toBe('en');
   });
 
   it('falls back to English for an unsupported language', () => {
     expect(resolveLocale('ja')).toBe('en');
-    // Including one that used to be supported.
+    // Including the ones that used to be supported.
+    expect(resolveLocale('ur')).toBe('en');
+    expect(resolveLocale('ur-PK')).toBe('en');
     expect(resolveLocale('ar')).toBe('en');
     expect(resolveLocale('ar-EG')).toBe('en');
   });
@@ -86,16 +69,46 @@ describe('translate', () => {
     expect(translate('en', 'tabs.discover')).toBe('Discover');
   });
 
-  it('falls back to English rather than showing a raw key', () => {
-    expect(translate('ur', 'nope.missing')).toBe('nope.missing');
+  it('returns the key rather than blank when nothing matches', () => {
+    expect(translate('en', 'nope.missing')).toBe('nope.missing');
     expect(translate('en', 'tabs.discover')).not.toContain('.');
+  });
+});
+
+describe('catalog is free of right-to-left text', () => {
+  /** Arabic, Arabic Supplement, Arabic Presentation Forms A and B. */
+  const RTL_BLOCKS: ReadonlyArray<readonly [number, number]> = [
+    [0x0600, 0x06ff],
+    [0x0750, 0x077f],
+    [0xfb50, 0xfdff],
+    [0xfe70, 0xfeff],
+  ];
+
+  const hasRtlScript = (text: string): boolean =>
+    [...text].some((ch) => {
+      const cp = ch.codePointAt(0) ?? 0;
+      return RTL_BLOCKS.some(([lo, hi]) => cp >= lo && cp <= hi);
+    });
+
+  it('contains no Arabic-script characters', () => {
+    // The Urdu catalog is gone. This proves none of it was pasted into the
+    // English one, which would render as right-to-left text in an app that no
+    // longer has any direction handling.
+    const offenders = flattenKeys(catalogs.en).filter((key) => hasRtlScript(translate('en', key)));
+    expect(offenders).toEqual([]);
+  });
+
+  it('detects right-to-left script when it is present', () => {
+    // Guards the guard: a check that can never fire is not a check.
+    expect(hasRtlScript('Pakistan')).toBe(false);
+    expect(hasRtlScript(String.fromCodePoint(0x067e, 0x0627))).toBe(true);
   });
 });
 
 describe('tab labels fit a 320dp screen (ADR 0004)', () => {
   // Five tabs was chosen deliberately, and label length was the recorded cost.
-  // This is that cost made testable: if a translation grows past the budget,
-  // CI says so rather than a cramped tab bar shipping to Urdu users.
+  // This is that cost made testable: if a label grows past the budget, CI says
+  // so rather than a cramped tab bar shipping.
   const tabKeys = ['discover', 'interests', 'messages', 'family', 'me'] as const;
 
   it.each(SUPPORTED_LOCALES)('%s labels stay within budget', (locale) => {

@@ -5,11 +5,18 @@
  * It must stay free of platform dependencies: no React, no React Native, no
  * Fastify, no Supabase client. ESLint enforces this (eslint.config.mjs).
  *
- * Phase 1 covers identity and reference data only. Profile, preferences,
- * discovery, interests and conversations arrive with their phases.
+ * Phases 1-4 cover identity, reference data, profile, preferences and photos.
+ * Phase 5 adds the deterministic compatibility engine, which lives here
+ * because it is pure: no I/O, no clock, and nothing platform-specific.
+ * Interests and conversations arrive with their phases.
  */
 
 export * from './constants';
 export * from './common';
 export * from './account';
 export * from './reference';
+export * from './profile';
+export * from './media';
+export * from './compatibility';
+export * from './discovery';
+export * from './safety';
