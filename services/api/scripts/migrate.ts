@@ -34,55 +34,57 @@ const STATUS = process.argv.includes('--status');
 const DRY_RUN = process.argv.includes('--dry-run') || STATUS;
 
 /**
- * Tables this schema is allowed to find already present.
+ * Tables this schema is allowed to find already present, READ FROM THE
+ * MIGRATIONS rather than listed here.
  *
  * Anything else in `public` means the connection string points somewhere
  * unexpected, and we stop.
+ *
+ * This used to be a hand-maintained Set, and it drifted exactly as you would
+ * expect: it ended at `notifications`, so once 0022 added `reports` the guard
+ * classified our own table as someone else's and refused to run against any
+ * database carrying the current schema — including `--status`, which writes
+ * nothing. The runner became unusable at precisely the point the schema was
+ * complete, and the failure looked like "you are pointed at the wrong project",
+ * which is the most alarming thing it can say.
+ *
+ * Deriving it removes the failure mode instead of correcting one instance of
+ * it. The migrations are the only authority on what this schema creates, so a
+ * table cannot be added without the guard learning about it in the same commit.
  */
-const OURS = new Set([
-  'schema_migrations',
-  // Phase 1/2 — identity and reference
-  'reference_items',
-  'reference_translations',
-  'users',
-  'user_auth_links',
-  'user_settings',
-  'user_devices',
-  'user_consents',
-  'security_events',
-  'verification_status',
-  // Phase 3 — profile, location and preferences
-  'profiles',
-  'profile_sensitive',
-  'profile_field_visibility',
-  'user_locations',
-  'partner_preferences',
-  'preference_rules',
-  // Phase 4 — photos
-  'photos',
-  'photo_variants',
-  'media_moderation_results',
-  // Phase 5 Slice 1 — cross-user visibility
-  'blocks',
-  // Phase 5 Slice 2 — entitlements
-  'user_entitlements',
-  // Phase 5 Slice 4 — compatibility and candidates
-  'compatibility_scores',
-  'compatibility_factors',
-  'match_candidates',
-  // Phase 5 Slice 6 — owner actions
-  'shortlists',
-  'dismissed_profiles',
-  // Phase 6 Slice 1 — interests and quotas
-  'interests',
-  'interest_events',
-  'usage_counters',
-  // Phase 6 Slice 2 — matches
-  'matches',
-  'match_events',
-  // Phase 6 Slice 5 — notifications
-  'notifications',
-]);
+function tablesCreatedBy(migrations: Migration[]): Set<string> {
+  // `schema_migrations` is the ledger. This runner creates it, and no migration
+  // file does, so it is the one name that has to be named.
+  const ours = new Set(['schema_migrations']);
+
+  // Matches `create table public.foo` and `create table if not exists
+  // public.foo`, optionally quoted. Every migration uses this form; a future
+  // one that does not will fail the assertion below rather than silently
+  // leaving a table out of the guard.
+  const pattern =
+    /^\s*create\s+table\s+(?:if\s+not\s+exists\s+)?"?public"?\."?([a-z_][a-z0-9_]*)"?/gim;
+
+  for (const { filename, sql } of migrations) {
+    const found = [...sql.matchAll(pattern)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
+    for (const name of found) ours.add(name);
+
+    // A `create table` the pattern did not understand would leave one of our
+    // own tables out of the guard, and the symptom would be this runner
+    // refusing to touch a correct database. Fail here, where the cause is
+    // obvious, rather than there.
+    const statements = (sql.match(/^\s*create\s+table\s/gim) ?? []).length;
+    if (statements !== found.length) {
+      throw new Error(
+        `${filename}: found ${statements} "create table" statement(s) but could ` +
+          `only identify ${found.length}. The guard in scripts/migrate.ts parses ` +
+          `"create table public.<name>"; update tablesCreatedBy() to cover the ` +
+          `form this migration uses.`,
+      );
+    }
+  }
+
+  return ours;
+}
 
 interface Migration {
   filename: string;
@@ -179,7 +181,8 @@ async function main(): Promise<void> {
     const { rows: existing } = await client.query<{ tablename: string }>(
       `select tablename from pg_tables where schemaname = 'public' order by tablename`,
     );
-    const foreign = existing.map((r) => r.tablename).filter((t) => !OURS.has(t));
+    const ours = tablesCreatedBy(migrations);
+    const foreign = existing.map((r) => r.tablename).filter((t) => !ours.has(t));
 
     if (foreign.length > 0) {
       console.error(
