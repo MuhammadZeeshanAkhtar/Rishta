@@ -6,6 +6,7 @@ import type { Config } from '../src/config';
 import type { Db, DbSession, ServiceRoleUse } from '../src/db/types';
 import type { AuthContext, TokenVerifier } from '../src/auth/verify';
 import { unauthenticated } from '../src/errors';
+import type { StorageClient } from '../src/storage/client';
 
 /**
  * Test harness.
@@ -24,20 +25,66 @@ export interface TestHarness {
   db: Db;
   raw: PGlite;
   serviceUses: ServiceRoleUse[];
+  storage: MemoryStorage;
   close(): Promise<void>;
+}
+
+/**
+ * Supabase Storage, in memory.
+ *
+ * Substituted for the same reason the Postgres driver is: a unit test should
+ * not need a network or a bucket. What it does NOT fake is the route logic
+ * around it — paths, ordering, variant generation and the moderation write all
+ * run for real, and `objects` can be inspected afterwards to assert that the
+ * blurred file was actually produced and stored.
+ */
+export interface MemoryStorage extends StorageClient {
+  objects: Map<string, { body: Buffer; contentType: string }>;
+  /** Simulates a client having uploaded to a signed target. */
+  put(path: string, body: Buffer, contentType?: string): void;
+}
+
+export function createMemoryStorage(): MemoryStorage {
+  const objects = new Map<string, { body: Buffer; contentType: string }>();
+
+  return {
+    objects,
+    put(path, body, contentType = 'image/jpeg') {
+      objects.set(path, { body, contentType });
+    },
+    async createSignedUploadUrl(_token, path) {
+      return { uploadUrl: `https://storage.test/upload/${path}?token=t`, token: 't' };
+    },
+    async createSignedUrl(_token, path) {
+      return objects.has(path) ? `https://storage.test/signed/${path}?token=t` : null;
+    },
+    async download(_token, path) {
+      const object = objects.get(path);
+      if (!object) throw new Error(`No object at ${path}`);
+      return object.body;
+    },
+    async upload(_token, path, body, contentType) {
+      objects.set(path, { body, contentType });
+    },
+    async remove(_token, paths) {
+      for (const path of paths) objects.delete(path);
+    },
+  };
 }
 
 const TEST_CONFIG: Config = {
   NODE_ENV: 'test',
   PORT: 0,
   HOST: '127.0.0.1',
-  LOG_LEVEL: 'fatal',
+  LOG_LEVEL: (process.env.TEST_LOG_LEVEL as Config['LOG_LEVEL']) ?? 'fatal',
   DATABASE_URL: 'postgres://unused-in-tests',
   SUPABASE_URL: 'https://test.supabase.co',
   SUPABASE_JWT_SECRET: undefined,
   SUPABASE_JWKS_URL: undefined,
+  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
   SENTRY_DSN: undefined,
   RATE_LIMIT_PER_MINUTE: 10_000,
+  CORS_ALLOWED_ORIGINS: undefined,
   jwksUrl: 'https://test.supabase.co/auth/v1/.well-known/jwks.json',
 };
 
@@ -126,7 +173,8 @@ export async function createHarness(): Promise<TestHarness> {
 
   const serviceUses: ServiceRoleUse[] = [];
   const db = createPgliteDb(pg, serviceUses);
-  const app = await buildApp({ config: TEST_CONFIG, db, verifier: testVerifier });
+  const storage = createMemoryStorage();
+  const app = await buildApp({ config: TEST_CONFIG, db, verifier: testVerifier, storage });
   await app.ready();
 
   return {
@@ -134,6 +182,7 @@ export async function createHarness(): Promise<TestHarness> {
     db,
     raw: pg,
     serviceUses,
+    storage,
     async close() {
       await app.close();
       await pg.close();
@@ -158,13 +207,9 @@ export async function seedReferenceData(pg: PGlite): Promise<void> {
   for (const item of items.rows) {
     await pg.query(
       `insert into public.reference_translations (reference_item_id, locale, label)
-       values ($1, 'en', $2), ($1, 'ur', $3)
+       values ($1, 'en', $2)
        on conflict do nothing`,
-      [
-        item.id,
-        item.code === 'edu_bachelors' ? 'Bachelor degree' : 'Master degree',
-        item.code === 'edu_bachelors' ? 'بیچلر ڈگری' : 'ماسٹر ڈگری',
-      ],
+      [item.id, item.code === 'edu_bachelors' ? 'Bachelor degree' : 'Master degree'],
     );
   }
 }

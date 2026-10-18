@@ -2,6 +2,7 @@ import { assertNoForbiddenSecrets, loadConfig } from './config';
 import { buildApp } from './app';
 import { createPgDb } from './db/pg';
 import { createTokenVerifier } from './auth/verify';
+import { createStorageClient } from './storage/client';
 import { flushSentry, initSentry } from './observability/sentry';
 import type { ServiceRoleUse } from './db/types';
 
@@ -25,7 +26,19 @@ async function main(): Promise<void> {
     },
   });
 
-  const app = await buildApp({ config, db, verifier: createTokenVerifier(config) });
+  // Storage is called with each caller's own JWT, so this client holds no
+  // credential of its own beyond the project's public identifier.
+  const storage = createStorageClient({
+    supabaseUrl: config.SUPABASE_URL,
+    publishableKey: config.SUPABASE_PUBLISHABLE_KEY ?? '',
+  });
+
+  const app = await buildApp({
+    config,
+    db,
+    verifier: createTokenVerifier(config),
+    storage,
+  });
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'Shutting down');

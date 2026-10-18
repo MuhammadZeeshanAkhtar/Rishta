@@ -42,17 +42,52 @@ const schema = z.object({
   /** Defaults to the project's standard JWKS endpoint. */
   SUPABASE_JWKS_URL: z.string().url().optional(),
 
+  /**
+   * The project's PUBLISHABLE key, sent as `apikey` on Storage calls.
+   *
+   * Public by design — it identifies the project and grants nothing on its
+   * own, which is why the same value ships inside the mobile app. Storage
+   * authorises on the forwarded member JWT and its RLS policies, never on
+   * this. It is NOT the service-role key, which this service refuses to hold.
+   */
+  SUPABASE_PUBLISHABLE_KEY: z.string().min(1).optional(),
+
   /** Server-only. Absent in development, which is fine. */
   SENTRY_DSN: z.string().url().optional(),
 
   /** Requests per minute per client, before rate limiting kicks in. */
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
+
+  /**
+   * Browser origins allowed to call this API, comma-separated.
+   *
+   * Empty by default, which is the safe direction: a native app sends no
+   * Origin header and is unaffected, so nothing is permitted that was not
+   * named. The future website (README §19) adds its origin here rather than
+   * needing a backend change — which is the promise the plan makes.
+   *
+   * Development additionally allows localhost on any port; see app.ts.
+   */
+  CORS_ALLOWED_ORIGINS: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema> & { jwksUrl: string };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = schema.safeParse(env);
+  // An .env file has no way to say "absent" other than an empty value, and
+  // docs/SUPABASE_SETUP.md tells you to leave SUPABASE_JWT_SECRET,
+  // SUPABASE_JWKS_URL and SENTRY_DSN blank. Zod's .optional() only covers a
+  // MISSING key, so an empty string reaches .min(16) or .url() and fails —
+  // meaning the documented setup produced a service that could not boot.
+  //
+  // Empty and unset mean the same thing here, so make that true before parsing.
+  const present: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === 'string' && value.trim().length === 0) continue;
+    present[key] = value;
+  }
+
+  const parsed = schema.safeParse(present);
 
   if (!parsed.success) {
     const detail = parsed.error.issues

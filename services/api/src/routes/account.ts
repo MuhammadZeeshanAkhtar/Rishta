@@ -1,5 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { bootstrapRequestSchema, userSettingsUpdateSchema, type Me } from '@nikahmate/domain';
+import {
+  DEFAULT_LOCALE,
+  LOCALES,
+  bootstrapRequestSchema,
+  userSettingsUpdateSchema,
+  type Locale,
+  type Me,
+} from '@nikahmate/domain';
 import { requireAuthContext } from '../auth/plugin';
 import { badRequest, notFound } from '../errors';
 import type { Db, DbSession } from '../db/types';
@@ -40,6 +47,19 @@ const ME_SELECT = `
   join public.verification_status v on v.user_id = u.id
 `;
 
+/**
+ * Narrows a stored locale to one the product actually ships.
+ *
+ * The column is a language-tag shape rather than an enum, so it still holds
+ * `ur` for anyone who chose Urdu before the app became English-only. Returning
+ * it would hand the client a locale with no catalog behind it, so it reads as
+ * English instead. The stored value is left alone; this is a read-time
+ * narrowing, not a migration.
+ */
+function toLocale(stored: string): Locale {
+  return (LOCALES as readonly string[]).includes(stored) ? (stored as Locale) : DEFAULT_LOCALE;
+}
+
 function toMe(row: MeRow): Me {
   return {
     userId: row.id,
@@ -47,7 +67,7 @@ function toMe(row: MeRow): Me {
     status: row.status,
     onboardingStep: row.onboarding_step,
     profileCompleted: row.profile_completed_at !== null,
-    locale: row.locale,
+    locale: toLocale(row.locale),
     timezone: row.timezone,
     showOnlineStatus: row.show_online_status,
     sendReadReceipts: row.send_read_receipts,

@@ -91,13 +91,13 @@ describe('POST /account/bootstrap', () => {
       method: 'POST',
       url: '/account/bootstrap',
       headers: authHeader(authId),
-      payload: { locale: 'ur', timezone: 'Asia/Karachi' },
+      payload: { locale: 'en', timezone: 'Asia/Karachi' },
     });
     const second = await h.app.inject({
       method: 'POST',
       url: '/account/bootstrap',
       headers: authHeader(authId),
-      payload: { locale: 'ur', timezone: 'Asia/Karachi' },
+      payload: { locale: 'en', timezone: 'Asia/Karachi' },
     });
 
     expect(first.statusCode).toBe(201);
@@ -251,10 +251,10 @@ describe('PATCH /me', () => {
       method: 'PATCH',
       url: '/me',
       headers: authHeader(authId),
-      payload: { locale: 'ur', incognito: true },
+      payload: { locale: 'en', incognito: true },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().locale).toBe('ur');
+    expect(res.json().locale).toBe('en');
     expect(res.json().incognito).toBe(true);
   });
 
@@ -305,13 +305,18 @@ describe('reference endpoints', () => {
     expect(res.statusCode).toBe(200);
     const list = referenceListSchema.parse(res.json());
     expect(list.items.map((i) => i.code)).toContain('edu_bachelors');
-    expect(list.items.find((i) => i.code === 'edu_bachelors')?.label).toBe('Bachelor degree');
+    // The label now comes from the 0005 seed, which is the source of truth
+    // for reference data. The old fixture value lost to `on conflict do nothing`.
+    expect(list.items.find((i) => i.code === 'edu_bachelors')?.label).toBe("Bachelor's degree");
   });
 
-  it('serves Urdu labels', async () => {
+  it('falls back to English for a locale that was removed', async () => {
+    // Urdu was a launch locale. A client still asking for it must get English
+    // rather than an empty list or raw codes.
     const res = await h.app.inject({ method: 'GET', url: '/reference/education_level?locale=ur' });
+    expect(res.statusCode).toBe(200);
     expect(res.json().items.find((i: { code: string }) => i.code === 'edu_bachelors').label).toBe(
-      'بیچلر ڈگری',
+      "Bachelor's degree",
     );
   });
 
@@ -320,7 +325,7 @@ describe('reference endpoints', () => {
     // someone has to choose from to finish signing up.
     const res = await h.app.inject({ method: 'GET', url: '/reference/education_level?locale=fr' });
     expect(res.json().items.find((i: { code: string }) => i.code === 'edu_bachelors').label).toBe(
-      'Bachelor degree',
+      "Bachelor's degree",
     );
   });
 
@@ -350,7 +355,9 @@ describe('reference endpoints', () => {
     const again = (await h.app.inject({ method: 'GET', url: '/reference/country' })).json().hash;
     expect(again).toBe(before);
 
-    await h.raw.exec(`insert into public.reference_items (type, code) values ('country', 'ae')`);
+    // A code the 0005 seed does not contain — 'ae' now does, and reusing it
+    // would test the unique index rather than the hash.
+    await h.raw.exec(`insert into public.reference_items (type, code) values ('country', 'xx')`);
     const after = (await h.app.inject({ method: 'GET', url: '/reference/country' })).json().hash;
     expect(after).not.toBe(before);
   });
