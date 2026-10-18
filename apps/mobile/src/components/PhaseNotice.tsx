@@ -1,6 +1,5 @@
 import { StyleSheet, Text } from 'react-native';
 import { Card, CardHeading } from './Card';
-import { useLocale } from '../i18n/LocaleProvider';
 import { useTheme } from '../theme/ThemeProvider';
 import { spacing, typography } from '../theme/tokens';
 
@@ -11,20 +10,12 @@ import { spacing, typography } from '../theme/tokens';
  * app honest to anyone opening it, rather than implying something works.
  */
 export function PhaseNotice({ phase, feature }: { phase: string; feature: string }) {
-  const { direction } = useLocale();
   const theme = useTheme();
 
   return (
     <Card tone="sunken" style={styles.card}>
       <CardHeading overline={phase} title="Not built yet" />
-      <Text
-        style={[
-          styles.body,
-          { color: theme.colors.textMuted, writingDirection: direction, textAlign: 'left' },
-        ]}
-      >
-        {feature}
-      </Text>
+      <Text style={[styles.body, { color: theme.colors.textMuted }]}>{feature}</Text>
     </Card>
   );
 }

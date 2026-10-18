@@ -1,6 +1,5 @@
 import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { useLocale } from '../i18n/LocaleProvider';
 import { radius, spacing, typography } from '../theme/tokens';
 
 /**
@@ -37,27 +36,14 @@ export function Card({
 /** Eyebrow + body pairing used inside cards. */
 export function CardHeading({ overline, title }: { overline?: string; title: string }) {
   const theme = useTheme();
-  const { direction } = useLocale();
   return (
     <View>
       {overline ? (
-        <Text
-          style={[
-            styles.overline,
-            { color: theme.colors.brand, writingDirection: direction, textAlign: 'left' },
-          ]}
-        >
+        <Text style={[styles.overline, { color: theme.colors.brand }]}>
           {overline.toUpperCase()}
         </Text>
       ) : null}
-      <Text
-        style={[
-          styles.title,
-          { color: theme.colors.text, writingDirection: direction, textAlign: 'left' },
-        ]}
-      >
-        {title}
-      </Text>
+      <Text style={[styles.title, { color: theme.colors.text }]}>{title}</Text>
     </View>
   );
 }

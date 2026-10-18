@@ -1,16 +1,14 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocale } from '../i18n/LocaleProvider';
 import { useTheme } from '../theme/ThemeProvider';
 import { layout, spacing, typography } from '../theme/tokens';
 
 /**
  * Screen scaffold.
  *
- * Every text style here sets `writingDirection` from the active locale, so
- * Urdu reads right-to-left without any screen having to think about it.
- * Hardcoding 'left' in a screen is the bug this exists to prevent.
+ * Owns the title/subtitle block so screens do not each re-derive the same
+ * spacing and type scale.
  */
 export function Screen({
   title,
@@ -21,7 +19,6 @@ export function Screen({
   subtitle?: string;
   children?: React.ReactNode;
 }) {
-  const { direction } = useLocale();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -34,23 +31,9 @@ export function Screen({
       ]}
     >
       <View style={styles.inner}>
-        <Text
-          style={[
-            styles.title,
-            { color: theme.colors.text, writingDirection: direction, textAlign: 'left' },
-          ]}
-        >
-          {title}
-        </Text>
+        <Text style={[styles.title, { color: theme.colors.text }]}>{title}</Text>
         {subtitle ? (
-          <Text
-            style={[
-              styles.subtitle,
-              { color: theme.colors.textMuted, writingDirection: direction, textAlign: 'left' },
-            ]}
-          >
-            {subtitle}
-          </Text>
+          <Text style={[styles.subtitle, { color: theme.colors.textMuted }]}>{subtitle}</Text>
         ) : null}
         {children}
       </View>

@@ -14,8 +14,8 @@ import { layout, spacing, typography } from '../../../src/theme/tokens';
  * anti-coercion control — burying either in a settings screen would be the
  * wrong signal.
  *
- * Five labels must fit 320dp, and Urdu runs longer than English. The label
- * character budget is enforced as a test in @nikahmate/i18n.
+ * Five labels must fit 320dp. The label character budget is enforced as a
+ * test in @nikahmate/i18n.
  *
  * Icons are outline when inactive and filled when active: a second, redundant
  * signal alongside colour, which matters for anyone who cannot rely on the
@@ -26,10 +26,9 @@ import { layout, spacing, typography } from '../../../src/theme/tokens';
  * The label is rendered here rather than through `tabBarLabelStyle`.
  *
  * react-navigation places the label in a height-constrained flex column and
- * writes its own height, sized for Latin text. The default `flexShrink` then
- * pulls the box back to ~13px whatever lineHeight is asked for, which clipped
- * Urdu descenders while leaving English untouched. Owning the element, with an
- * explicit height and `flexShrink: 0`, is the reliable fix.
+ * writes its own height. The default `flexShrink` then pulls the box back to
+ * ~13px whatever lineHeight is asked for, which clipped descenders. Owning the
+ * element, with an explicit height and `flexShrink: 0`, is the reliable fix.
  */
 function TabLabel({ label, color }: { label: string; color: ColorValue }) {
   return (
@@ -42,7 +41,7 @@ function TabLabel({ label, color }: { label: string; color: ColorValue }) {
 type IconName = keyof typeof Ionicons.glyphMap;
 
 export default function TabsLayout() {
-  const { t, isRtl } = useLocale();
+  const { t } = useLocale();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -57,12 +56,7 @@ export default function TabsLayout() {
       paddingBottom: insets.bottom + spacing.xs,
       paddingTop: spacing.sm,
     },
-    // The tab bar mirrors with the locale, so the first tab sits where the
-    // reader's eye starts.
-    sceneStyle: {
-      backgroundColor: theme.colors.background,
-      direction: isRtl ? 'rtl' : 'ltr',
-    } as const,
+    sceneStyle: { backgroundColor: theme.colors.background } as const,
   };
 
   const tab = (name: string, key: string, icon: IconName, iconActive: IconName) => (

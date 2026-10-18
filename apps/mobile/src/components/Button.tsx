@@ -1,5 +1,13 @@
 import { useRef } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Animated,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type ViewStyle,
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../theme/ThemeProvider';
 import { MIN_TOUCH_TARGET, motion, radius, spacing, typography } from '../theme/tokens';
@@ -23,10 +31,20 @@ export interface ButtonProps {
   onPress?: () => void;
   variant?: ButtonVariant;
   disabled?: boolean;
+  /**
+   * Shows a spinner and blocks presses.
+   *
+   * The label stays in place underneath rather than being replaced, so the
+   * button keeps its width and the layout does not jump the moment someone
+   * submits — which on a slow connection is exactly when a shifting screen
+   * makes people tap the wrong thing.
+   */
+  loading?: boolean;
   /** Renders to the start of the label. */
   icon?: React.ReactNode;
   style?: ViewStyle;
   testID?: string;
+  accessibilityHint?: string;
 }
 
 export function Button({
@@ -34,9 +52,11 @@ export function Button({
   onPress,
   variant = 'primary',
   disabled = false,
+  loading = false,
   icon,
   style,
   testID,
+  accessibilityHint,
 }: ButtonProps) {
   const theme = useTheme();
   const scale = useRef(new Animated.Value(1)).current;
@@ -66,12 +86,22 @@ export function Button({
     },
   }[variant];
 
+  const blocked = disabled || loading;
+
   const content = (
     <View style={styles.content}>
-      {icon ? <View style={styles.icon}>{icon}</View> : null}
-      <Text style={[styles.label, { color: labelColor }]} numberOfLines={1}>
+      {icon && !loading ? <View style={styles.icon}>{icon}</View> : null}
+      <Text
+        style={[styles.label, { color: labelColor }, loading && styles.labelHidden]}
+        numberOfLines={1}
+      >
         {label}
       </Text>
+      {loading ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <ActivityIndicator style={styles.spinner} color={labelColor} />
+        </View>
+      ) : null}
     </View>
   );
 
@@ -80,12 +110,15 @@ export function Button({
       <Pressable
         testID={testID}
         onPress={onPress}
-        disabled={disabled}
+        disabled={blocked}
         onPressIn={() => animate(motion.pressScale, motion.pressIn)}
         onPressOut={() => animate(1, motion.pressOut)}
         accessibilityRole="button"
-        accessibilityState={{ disabled }}
-        style={[styles.base, surface, disabled && styles.disabled]}
+        // `busy` is what a screen reader announces during a submit. Without it
+        // the button simply goes quiet and sounds broken.
+        accessibilityState={{ disabled: blocked, busy: loading }}
+        {...(accessibilityHint ? { accessibilityHint } : {})}
+        style={[styles.base, surface, blocked && styles.disabled]}
       >
         {variant === 'primary' ? (
           <LinearGradient
@@ -113,5 +146,8 @@ const styles = StyleSheet.create({
   content: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   icon: { alignItems: 'center', justifyContent: 'center' },
   label: { ...typography.bodyStrong },
+  // Hidden but still laid out, so the button keeps its width while loading.
+  labelHidden: { opacity: 0 },
+  spinner: { flex: 1 },
   disabled: { opacity: 0.45 },
 });

@@ -30,9 +30,9 @@ export const radius = {
  * Type scale.
  *
  * `lineHeight` is generous relative to `fontSize` — roughly 1.4–1.5 — because
- * Urdu glyphs occupy more vertical space than Latin at the same size. Tight
- * leading looks fine in English and clips in Urdu, which is a bug that only
- * appears in the language nobody on the team reads.
+ * tight leading clips descenders inside height-constrained containers. That
+ * renders fine at one string length and badly at another, which is how it
+ * ships unnoticed. It has already happened once, in the tab bar.
  */
 export const typography = {
   display: { fontSize: 30, lineHeight: 40, fontWeight: '700', letterSpacing: -0.4 },
@@ -43,7 +43,7 @@ export const typography = {
   caption: { fontSize: 13, lineHeight: 19, fontWeight: '400' },
   /** Small caps-ish label for section eyebrows. */
   overline: { fontSize: 11, lineHeight: 16, fontWeight: '700', letterSpacing: 0.8 },
-  /** Five tab labels must fit 320dp, and Urdu runs longer than English (ADR 0004). */
+  /** Five tab labels must fit 320dp (ADR 0004). */
   tabLabel: { fontSize: 11, lineHeight: 16, fontWeight: '600' },
 } as const;
 
@@ -75,4 +75,39 @@ export const motion = {
   pressIn: 90,
   pressOut: 140,
   pressScale: 0.97,
+  /** Fade-and-rise for a card arriving on screen. */
+  entrance: 300,
+  /** Delay per position down a list, so a page assembles rather than blinks. */
+  stagger: 55,
+  /**
+   * Positions after which the stagger stops growing.
+   *
+   * Uncapped, the twentieth card waits over a second while the reader is
+   * already looking at it — the animation stops being an entrance and becomes
+   * a delay.
+   */
+  staggerCap: 6,
+} as const;
+
+/**
+ * Icon sizes.
+ *
+ * Named because the alternative is what this file used to allow: twelve
+ * different literals — 13, 14, 15, 17, 18, 19, 20, 24, 26, 30 — chosen
+ * per-component with no relationship between them. Nobody can name the
+ * difference between a 17 and a 19, but the eye reads the inconsistency as
+ * carelessness.
+ *
+ * `md` is 24, which is the platform default and the size at which a standalone
+ * icon control remains legible.
+ */
+export const iconSize = {
+  /** Inside a chip or beside caption text. */
+  xs: 14,
+  /** Inline with body text — list rows, section marks. */
+  sm: 18,
+  /** Standalone controls, tab bar, navigation. */
+  md: 24,
+  /** A control that is the focus of its own row. */
+  lg: 28,
 } as const;
