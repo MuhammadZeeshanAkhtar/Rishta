@@ -17,6 +17,10 @@ export const MIGRATIONS_DIR = join(here, '..', '..', '..', 'supabase', 'migratio
  * The implementation matches Supabase's: read the JWT subject out of the
  * `request.jwt.claims` GUC, which PostgREST sets per request and which a test
  * sets with `set local`.
+ *
+ * It also reproduces the platform's roles and its automatic grants on `public`.
+ * Those are what make a table reachable through the Data API, so a suite that
+ * leaves them out tests a stricter database than the one that ships.
  */
 export const SUPABASE_SHIM = `
   create schema if not exists auth;
@@ -48,6 +52,38 @@ export const SUPABASE_SHIM = `
   $$;
 
   grant usage on schema auth to public;
+
+  -- Supabase's API roles exist before any migration runs. Migration 0001 guards
+  -- its own role creation, so on a real project it is a no-op — as it is here.
+  do $$
+  begin
+    if not exists (select 1 from pg_roles where rolname = 'anon') then
+      create role anon nologin noinherit;
+    end if;
+    if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+      create role authenticated nologin noinherit;
+    end if;
+    if not exists (select 1 from pg_roles where rolname = 'service_role') then
+      create role service_role nologin noinherit bypassrls;
+    end if;
+  end
+  $$;
+
+  -- The platform's automatic grants on public. On existing Supabase projects
+  -- every new table in public is readable and writable by anon and
+  -- authenticated the moment it is created, and the Data API exposes it
+  -- (supabase.com/docs/guides/database/hardening-data-api). Newer projects are
+  -- moving to opt-in, so a given project may or may not have these.
+  --
+  -- Emulating the worst case is the point. Without this, every "permission
+  -- denied" assertion in the suite passes because PGlite grants nothing — and
+  -- would silently become "RLS returned zero rows" on a real project.
+  alter default privileges in schema public
+    grant all on tables to anon, authenticated, service_role;
+  alter default privileges in schema public
+    grant all on sequences to anon, authenticated, service_role;
+  alter default privileges in schema public
+    grant all on functions to anon, authenticated, service_role;
 `;
 
 export type Actor = 'anon' | 'authenticated' | 'service_role';

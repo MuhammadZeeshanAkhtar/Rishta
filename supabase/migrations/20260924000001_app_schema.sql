@@ -37,6 +37,25 @@ $$;
 grant usage on schema public to anon, authenticated, service_role;
 grant usage on schema app to anon, authenticated, service_role;
 
+-- Supabase's platform defaults make every new table in `public` readable AND
+-- writable by anon and authenticated the moment it is created, and the Data
+-- API (PostgREST) exposes it: anon to anyone holding the publishable key, which
+-- ships in the app; authenticated to any member holding their own JWT
+-- (supabase.com/docs/guides/database/hardening-data-api). Newer projects are
+-- moving to opt-in, so a given project may or may not have them.
+--
+-- Revoked here, before any table exists, so the schema behaves the same
+-- whichever default a project has. From this point a client role reaches a
+-- table only through a GRANT written in the migration that creates it — and
+-- the grant tests in packages/db pin that list. Deny by default, including at
+-- the privilege layer, not just in RLS.
+alter default privileges in schema public
+  revoke all on tables from anon, authenticated;
+alter default privileges in schema public
+  revoke all on sequences from anon, authenticated;
+alter default privileges in schema public
+  revoke all on functions from anon, authenticated;
+
 -- service_role carries BYPASSRLS, which bypasses row-level security — but NOT
 -- table-level privileges. Without these grants the API's dbAsService() client
 -- fails with "permission denied" on every table, RLS notwithstanding. Supabase

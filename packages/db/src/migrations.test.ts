@@ -22,17 +22,42 @@ afterAll(async () => {
 });
 
 describe('migrations apply', () => {
-  it('creates every Phase 1 table', async () => {
+  it('creates every table through Phase 6 Slice 5, plus reports', async () => {
     const rows = await db.admin<{ tablename: string }>(
       `select tablename from pg_tables where schemaname = 'public' order by tablename`,
     );
     expect(rows.map((r) => r.tablename)).toEqual([
+      // Sorted, because the query is. Phases 1-6 Slice 2.
+      'blocks',
+      'compatibility_factors',
+      'compatibility_scores',
+      'discovery_generation_runs',
+      'dismissed_profiles',
+      'interest_events',
+      'interests',
+      'match_candidates',
+      'match_events',
+      'matches',
+      'media_moderation_results',
+      'notifications',
+      'partner_preferences',
+      'photo_variants',
+      'photos',
+      'preference_rules',
+      'profile_field_visibility',
+      'profile_sensitive',
+      'profiles',
       'reference_items',
       'reference_translations',
+      'reports',
       'security_events',
+      'shortlists',
+      'usage_counters',
       'user_auth_links',
       'user_consents',
       'user_devices',
+      'user_entitlements',
+      'user_locations',
       'user_settings',
       'users',
       'verification_status',
@@ -52,7 +77,7 @@ describe('migrations apply', () => {
        where n.nspname = 'public' and c.relkind = 'r'
        order by c.relname`,
     );
-    expect(rows.length).toBe(9);
+    expect(rows.length).toBe(33);
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} must have RLS enabled`).toBe(true);
       expect(row.relforcerowsecurity, `${row.relname} must FORCE RLS`).toBe(true);
@@ -64,10 +89,16 @@ describe('migrations apply', () => {
       `select t.tablename, count(p.policyname)::int as n
        from pg_tables t
        left join pg_policies p on p.tablename = t.tablename and p.schemaname = 'public'
-       where t.schemaname = 'public' and t.tablename in ('user_auth_links', 'user_consents')
+       where t.schemaname = 'public'
+         and t.tablename in (
+           'user_auth_links', 'user_consents', 'profile_sensitive',
+           'media_moderation_results'
+         )
        group by t.tablename order by t.tablename`,
     );
     expect(rows).toEqual([
+      { tablename: 'media_moderation_results', n: 0 },
+      { tablename: 'profile_sensitive', n: 0 },
       { tablename: 'user_auth_links', n: 0 },
       { tablename: 'user_consents', n: 0 },
     ]);
@@ -84,6 +115,270 @@ describe('migrations apply', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.provolatile).toBe('s');
     expect(rows[0]!.prosecdef).toBe(true);
+  });
+
+  it('gates every match period through one trigger, on matches', async () => {
+    // Migration 0021. The gate being a trigger rather than a line in a route
+    // is what makes "a new match period starts at the gate the current policy
+    // requires" true for paths that have not been written yet. A second
+    // trigger doing the same job, or this one firing on the wrong events,
+    // would be the hole reopening.
+    const rows = await db.admin<{ tgname: string; timing: string; events: string }>(
+      `select t.tgname,
+              case when (t.tgtype & 2) <> 0 then 'before' else 'after' end as timing,
+              concat_ws(',',
+                case when (t.tgtype &  4) <> 0 then 'insert' end,
+                case when (t.tgtype &  8) <> 0 then 'delete' end,
+                case when (t.tgtype & 16) <> 0 then 'update' end
+              ) as events
+       from pg_trigger t
+       join pg_class c on c.oid = t.tgrelid
+       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       where c.relname = 'matches' and not t.tgisinternal
+       order by t.tgname`,
+    );
+    expect(rows).toEqual([
+      { tgname: 'matches_gate_new_period', timing: 'before', events: 'insert,update' },
+      { tgname: 'matches_touch', timing: 'before', events: 'update' },
+    ]);
+  });
+
+  it('keeps the gate predicate out of every member role', async () => {
+    // `app.required_communication_state` answers "does either of these two
+    // require family review?". Reachable by `authenticated` it would answer
+    // that about anybody, and ADR 0011 is explicit that a counterpart never
+    // learns what the other household expects.
+    //
+    // Asked with has_function_privilege rather than by reading proacl: a
+    // function with default privileges has a NULL acl, so aclexplode would
+    // return nothing and the assertion would pass for a function that is in
+    // fact world-executable.
+    const rows = await db.admin<{ role: string; allowed: boolean }>(
+      `select r.rolname as role,
+              has_function_privilege(
+                r.rolname, 'app.required_communication_state(uuid,uuid)', 'execute'
+              ) as allowed
+       from pg_roles r
+       where r.rolname in ('anon', 'authenticated', 'service_role')
+       order by r.rolname`,
+    );
+    expect(rows).toEqual([
+      { role: 'anon', allowed: false },
+      { role: 'authenticated', allowed: false },
+      { role: 'service_role', allowed: true },
+    ]);
+  });
+});
+
+/**
+ * The Data API turns every privilege below into something callable directly:
+ * `anon` by anyone holding the publishable key (which ships in the app), and
+ * `authenticated` by any member holding their own JWT. These lists are the
+ * complete reachable surface, pinned. A new grant has to be added here on
+ * purpose, in the same change that needs it.
+ *
+ * Sorted in JS rather than SQL so the order does not depend on collation.
+ */
+describe('grants — the surface the Data API exposes', () => {
+  it('grants anon and authenticated exactly these table privileges', async () => {
+    const rows = await db.admin<{ g: string }>(
+      `select c.relname || ' ' || r.rolname || ' ' || a.privilege_type as g
+       from pg_class c
+       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       cross join lateral aclexplode(c.relacl) a
+       join pg_roles r on r.oid = a.grantee
+       where c.relkind = 'r' and r.rolname in ('anon', 'authenticated')`,
+    );
+    expect(rows.map((r) => r.g).sort()).toEqual([
+      // Sorted, because the assertion sorts. Writes are the exception and
+      // each one is deliberate: blocks, the owner actions, and interests.
+      'blocks authenticated DELETE',
+      'blocks authenticated INSERT',
+      'blocks authenticated SELECT',
+      'compatibility_factors authenticated SELECT',
+      'compatibility_scores authenticated SELECT',
+      'dismissed_profiles authenticated DELETE',
+      'dismissed_profiles authenticated INSERT',
+      'dismissed_profiles authenticated SELECT',
+      'interests authenticated INSERT',
+      'interests authenticated SELECT',
+      'match_candidates authenticated SELECT',
+      'matches authenticated SELECT',
+      'notifications authenticated SELECT',
+      'partner_preferences authenticated SELECT',
+      'photo_variants authenticated SELECT',
+      'photos authenticated SELECT',
+      'preference_rules authenticated DELETE',
+      'preference_rules authenticated SELECT',
+      'profile_field_visibility authenticated DELETE',
+      'profile_field_visibility authenticated SELECT',
+      'profiles authenticated SELECT',
+      'reference_items anon SELECT',
+      'reference_items authenticated SELECT',
+      'reference_translations anon SELECT',
+      'reference_translations authenticated SELECT',
+      // Reports: SELECT only. The reporter is promised the outcome (ERD §14);
+      // writes belong to the moderation pipeline, so there is no member path.
+      'reports authenticated SELECT',
+      'security_events authenticated SELECT',
+      'shortlists authenticated DELETE',
+      'shortlists authenticated INSERT',
+      'shortlists authenticated SELECT',
+      'usage_counters authenticated SELECT',
+      'user_devices authenticated SELECT',
+      'user_entitlements authenticated SELECT',
+      'user_locations authenticated SELECT',
+      'user_settings authenticated SELECT',
+      'users authenticated SELECT',
+      'verification_status authenticated SELECT',
+    ]);
+    // profile_sensitive is absent, and that absence is the whole control.
+    expect(rows.some((r) => r.g.startsWith('profile_sensitive'))).toBe(false);
+  });
+
+  it('never exposes a system-owned column to a member', async () => {
+    // Phase 2 enumerated the twelve writable columns literally. With Phase 3
+    // that list is 135 entries, which is unreadable and would be updated by
+    // reflex rather than by thought — the failure mode where a test stops
+    // being a control and becomes a chore.
+    //
+    // Stated instead as the property that actually matters: these columns are
+    // server-owned, and a member who could write any one of them could make
+    // themselves discoverable, un-suspend themselves, or rewrite history.
+    const forbidden = [
+      // Identity state
+      'users.status',
+      'users.deleted_at',
+      'users.profile_completed_at',
+      'users.created_at',
+      // Review state — writing this means discoverable without passing review
+      'profiles.review_status',
+      'profiles.user_id',
+      'profiles.completion_score',
+      'profiles.submitted_at',
+      'profiles.reviewed_at',
+      'profiles.rejection_reason_key',
+      'profiles.deleted_at',
+      // Ownership. INSERT on user_id is legitimate — a new row must name its
+      // owner, and the insert policy pins it to app.current_user_id(). UPDATE
+      // is not: it would move an existing row to another account.
+      'partner_preferences.user_id',
+      'user_locations.user_id',
+      'profile_field_visibility.user_id',
+      'preference_rules.user_id',
+      // Audit
+      'security_events.event_type',
+      // Phase 4 — moderation and deletion are the server's. A member who could
+      // write moderation_status would publish an unchecked photo; deleted_at
+      // cannot be member-written at all under FORCE RLS (migration 0008).
+      'photos.moderation_status',
+      'photos.rejection_reason_key',
+      'photos.deleted_at',
+      'photos.user_id',
+      'photos.storage_path',
+      'verification_status.email_verified_at',
+      'verification_status.phone_verified_at',
+      // Migration 0021 — the Family Safety gate's input (ADR 0011). Writable
+      // here, someone could choose `family_reviewed` before Phase 6b exists to
+      // open it and stall every match they make. It joins the grant in the
+      // slice that can honour it, not before.
+      'user_settings.communication_policy',
+    ];
+
+    // UPDATE only. INSERT on an ownership column is safe because the insert
+    // policy pins the value; UPDATE on one is not.
+    const rows = await db.admin<{ g: string }>(
+      `select c.relname || '.' || att.attname as g
+       from pg_attribute att
+       join pg_class c on c.oid = att.attrelid
+       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       cross join lateral aclexplode(att.attacl) a
+       join pg_roles r on r.oid = a.grantee
+       where c.relkind = 'r' and att.attnum > 0 and not att.attisdropped
+         and r.rolname in ('anon', 'authenticated')
+         and a.privilege_type = 'UPDATE'`,
+    );
+    const granted = new Set(rows.map((r) => r.g));
+    expect(forbidden.filter((f) => granted.has(f))).toEqual([]);
+  });
+
+  it('confines column grants to the tables that are meant to have them', async () => {
+    // The companion to the check above: it catches a NEW table becoming
+    // member-writable, which a denylist of known columns cannot see.
+    const rows = await db.admin<{ relname: string }>(
+      `select distinct c.relname
+       from pg_attribute att
+       join pg_class c on c.oid = att.attrelid
+       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       cross join lateral aclexplode(att.attacl) a
+       join pg_roles r on r.oid = a.grantee
+       where c.relkind = 'r' and att.attnum > 0 and not att.attisdropped
+         and r.rolname in ('anon', 'authenticated')
+       order by 1`,
+    );
+    expect(rows.map((r) => r.relname)).toEqual([
+      // Phase 6 Slice 5: `update (read_at)` only, so marking a notification
+      // read cannot become rewriting its type or payload.
+      'notifications',
+      'partner_preferences',
+      'photos',
+      'preference_rules',
+      'profile_field_visibility',
+      'profiles',
+      'user_devices',
+      'user_locations',
+      'user_settings',
+      'users',
+    ]);
+  });
+
+  it('gives anon no write access anywhere', async () => {
+    // anon holds the publishable key, which ships inside the app.
+    const rows = await db.admin<{ g: string }>(
+      `select c.relname || ' ' || a.privilege_type as g
+       from pg_class c
+       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       cross join lateral aclexplode(c.relacl) a
+       join pg_roles r on r.oid = a.grantee
+       where c.relkind = 'r' and r.rolname = 'anon' and a.privilege_type <> 'SELECT'
+       union all
+       select c.relname || '.' || att.attname || ' ' || a.privilege_type
+       from pg_attribute att
+       join pg_class c on c.oid = att.attrelid
+       join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       cross join lateral aclexplode(att.attacl) a
+       join pg_roles r on r.oid = a.grantee
+       where c.relkind = 'r' and att.attnum > 0 and r.rolname = 'anon'`,
+    );
+    expect(rows.map((r) => r.g)).toEqual([]);
+  });
+
+  it('leaves no automatic grants for tables that later migrations create', async () => {
+    // The forward guard. Supabase's platform defaults would otherwise hand
+    // anon and authenticated full access to every table Phase 2 onwards adds,
+    // the moment it is created — before anyone has written its policies.
+    //
+    // Asked by creating a table and looking at what it got, not by reading
+    // pg_default_acl. Default privileges apply per GRANTOR, so a catalog row
+    // may be entirely irrelevant to the role that actually runs migrations —
+    // reading it directly invites a confident wrong answer in both directions.
+    await db.admin(`create table public.zz_grant_probe (id int)`);
+    try {
+      const rows = await db.admin<{ grantee: string; privs: string }>(
+        `select r.rolname as grantee,
+                string_agg(a.privilege_type, ',' order by a.privilege_type) as privs
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+         cross join lateral aclexplode(c.relacl) a
+         join pg_roles r on r.oid = a.grantee
+         where c.relname = 'zz_grant_probe'
+           and r.rolname in ('anon', 'authenticated')
+         group by 1`,
+      );
+      expect(rows).toEqual([]);
+    } finally {
+      await db.admin(`drop table public.zz_grant_probe`);
+    }
   });
 });
 
@@ -222,11 +517,96 @@ describe('reference data constraints', () => {
   });
 
   it('accepts a lower_snake_case code', async () => {
+    // A code the 0005 seed does not already contain — the point is the shape
+    // constraint, and reusing a seeded code would test the unique index instead.
     await expect(
       db.admin(
-        `insert into public.reference_items (type, code) values ('education_level', 'edu_bachelors')`,
+        `insert into public.reference_items (type, code) values ('education_level', 'edu_test_shape')`,
       ),
     ).resolves.toBeDefined();
+    // Removed again: an untranslated item left behind would fail the
+    // translation-completeness check below, which is a genuine assertion about
+    // seeded data rather than about this fixture.
+    await db.admin(`delete from public.reference_items where code = 'edu_test_shape'`);
+  });
+
+  it('seeds reference data for every type onboarding needs', async () => {
+    const rows = await db.admin<{ type: string; n: number }>(
+      `select type, count(*)::int as n from public.reference_items group by type order by type`,
+    );
+    const byType = Object.fromEntries(rows.map((r) => [r.type, r.n]));
+
+    // Every reference-backed field the Phase 3 screens offer. An empty list
+    // here is a dropdown a user cannot answer, which blocks onboarding.
+    for (const type of [
+      'country',
+      'language',
+      'education_level',
+      'field_of_study',
+      'profession',
+      'industry',
+      'employment_status',
+      'marital_status',
+      'religious_practice',
+      'sect',
+      'prayer_frequency',
+      'quran_level',
+      'marriage_timeline',
+      'relocation_option',
+      'hobby',
+      'lifestyle_attribute',
+      'personality_trait',
+      'dress_practice',
+      'diet',
+      'smoking',
+    ]) {
+      expect(byType[type], `${type} has no reference items`).toBeGreaterThan(0);
+    }
+  });
+
+  it('translates every seeded item into English', async () => {
+    // A missing translation renders as the raw code — `edu_bachelors` in a
+    // dropdown — which is the kind of thing that ships unnoticed.
+    const rows = await db.admin<{ locale: string; missing: number }>(
+      `select l.locale, count(*)::int as missing
+       from public.reference_items i
+       cross join (values ('en')) as l(locale)
+       left join public.reference_translations t
+         on t.reference_item_id = i.id and t.locale = l.locale
+       where t.id is null
+       group by l.locale`,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('carries no locale other than English', async () => {
+    // 0005 seeds Urdu and 0009 removes it. Running both must leave a
+    // single-locale catalog, or a fresh database and an existing one disagree.
+    const rows = await db.admin<{ locale: string }>(
+      `select distinct locale from public.reference_translations order by locale`,
+    );
+    expect(rows.map((r) => r.locale)).toEqual(['en']);
+  });
+
+  it('refuses to store a translation in a removed locale', async () => {
+    const item = await db.admin<{ id: string }>(`select id from public.reference_items limit 1`);
+    await expect(
+      db.admin(
+        `insert into public.reference_translations (reference_item_id, locale, label)
+         values ($1::uuid, 'ur', 'test')`,
+        [item[0]!.id],
+      ),
+    ).rejects.toThrow(/reference_translations_locale_supported/);
+  });
+
+  it('keeps country codes lower-case so they satisfy the reference FK', async () => {
+    // reference_items_code_shape forbids upper case, and users.country_code
+    // carries a composite FK to (type, code). An upper-case 'PK' anywhere in
+    // this chain fails at insert time, not at validation time.
+    const rows = await db.admin<{ code: string }>(
+      `select code from public.reference_items where type = 'country' and code <> lower(code)`,
+    );
+    expect(rows).toEqual([]);
   });
 
   it('rejects an unknown reference type', async () => {

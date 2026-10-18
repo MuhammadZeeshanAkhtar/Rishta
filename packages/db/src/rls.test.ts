@@ -177,6 +177,47 @@ describe('users', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Columns — what a member could do directly through the Data API
+//
+// On Supabase, PostgREST exposes `public` to anyone holding a member JWT, and
+// every member can extract their own from the app. Any column `authenticated`
+// may UPDATE is therefore a column a member can set with one PATCH request,
+// bypassing the API and every business rule in it. Row scoping says whose row;
+// only column grants say which fields.
+// ---------------------------------------------------------------------------
+
+describe('users — system columns are not member-writable', () => {
+  it('does NOT let a suspended member lift their own suspension', async () => {
+    const suspended = await seedUser(db, { displayName: 'Suspended', status: 'suspended' });
+    await expect(
+      db.as('authenticated', suspended.authUserId, `update public.users set status = 'active'`),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it('does NOT let a member clear profile_completed_at — which would unlock their gender', async () => {
+    // The immutability trigger keys on profile_completed_at. A member who could
+    // null it could then change gender in a second request.
+    const done = await seedUser(db, { displayName: 'Completed' });
+    await db.admin(`update public.users set profile_completed_at = now() where id = $1`, [
+      done.userId,
+    ]);
+    await expect(
+      db.as(
+        'authenticated',
+        done.authUserId,
+        `update public.users set profile_completed_at = null`,
+      ),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it('does NOT let a member soft-delete themselves outside the deletion workflow', async () => {
+    await expect(
+      db.as('authenticated', alice.authUserId, `update public.users set deleted_at = now()`),
+    ).rejects.toThrow(/permission denied/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Restricted tables — zero policies, and the absence IS the control
 // ---------------------------------------------------------------------------
 
@@ -274,6 +315,16 @@ describe('user_settings (owner)', () => {
     );
     expect(rows).toHaveLength(0);
   });
+
+  it('does NOT let a member write a column that is not a setting', async () => {
+    await expect(
+      db.as(
+        'authenticated',
+        alice.authUserId,
+        `update public.user_settings set created_at = now() - interval '5 years'`,
+      ),
+    ).rejects.toThrow(/permission denied/);
+  });
 });
 
 describe('user_devices (owner)', () => {
@@ -300,6 +351,54 @@ describe('user_devices (owner)', () => {
       `select device_id from public.user_devices`,
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it('lets a member revoke their own device', async () => {
+    const rows = await db.as(
+      'authenticated',
+      alice.authUserId,
+      `update public.user_devices set revoked_at = now() where device_id = 'dev-a' returning id`,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it('does NOT let a member un-revoke a device — revocation is one-way', async () => {
+    // Otherwise a stolen session could restore the device its owner just cut
+    // off. A revoked device is outside the update policy entirely, so the
+    // attempt matches nothing.
+    await db.admin(
+      `insert into public.user_devices (user_id, device_id, platform, revoked_at)
+       values ($1, 'dev-revoked', 'android', now())`,
+      [alice.userId],
+    );
+    const rows = await db.as(
+      'authenticated',
+      alice.authUserId,
+      `update public.user_devices set revoked_at = null where device_id = 'dev-revoked' returning id`,
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('does NOT let a member "revoke" a device into a live state', async () => {
+    // The check half of the policy: whatever an update does, the row must end
+    // up revoked.
+    await expect(
+      db.as(
+        'authenticated',
+        alice.authUserId,
+        `update public.user_devices set revoked_at = null where device_id = 'dev-a'`,
+      ),
+    ).rejects.toThrow(/row-level security/);
+  });
+
+  it('does NOT let a member rewrite what a device is', async () => {
+    await expect(
+      db.as(
+        'authenticated',
+        alice.authUserId,
+        `update public.user_devices set platform = 'ios' where device_id = 'dev-a'`,
+      ),
+    ).rejects.toThrow(/permission denied/);
   });
 });
 

@@ -339,7 +339,18 @@ grant all on public.verification_status to service_role;
 
 -- --- users: owner-only in Phase 1 -------------------------------------------
 
-grant select, update on public.users to authenticated;
+grant select on public.users to authenticated;
+
+-- Column-level, deliberately. The Data API lets a member PATCH their own row
+-- directly, so every column listed here is one they can set without going
+-- through the API. Onboarding fields only.
+--
+-- status, profile_completed_at and deleted_at are system state and change only
+-- through the service role. A member who could write status could lift their
+-- own suspension; one who could clear profile_completed_at could then change
+-- gender, because app.enforce_gender_immutable keys on it.
+grant update (display_name, gender, date_of_birth, country_code, onboarding_step)
+  on public.users to authenticated;
 
 create policy users_select_own
   on public.users for select to authenticated
@@ -363,7 +374,15 @@ create policy users_update_own
 
 -- --- user_settings: owner ----------------------------------------------------
 
-grant select, update on public.user_settings to authenticated;
+grant select on public.user_settings to authenticated;
+
+-- The settings the API's PATCH /me writes, and nothing else.
+--
+-- `incognito` is entitlement-gated in the product (ERD §3). While it is
+-- member-writable here, the Data API can flip it without an entitlement check.
+-- When entitlements are enforced it leaves this list and moves behind the API.
+grant update (locale, timezone, show_online_status, send_read_receipts, incognito, discovery_paused)
+  on public.user_settings to authenticated;
 
 create policy user_settings_select_own
   on public.user_settings for select to authenticated
@@ -376,17 +395,22 @@ create policy user_settings_update_own
 
 -- --- user_devices: owner -----------------------------------------------------
 
-grant select, update on public.user_devices to authenticated;
+grant select on public.user_devices to authenticated;
+grant update (revoked_at) on public.user_devices to authenticated;
 
 create policy user_devices_select_own
   on public.user_devices for select to authenticated
   using (user_id = app.current_user_id());
 
--- Update is limited to revocation; the API owns registration.
+-- Update is revocation and nothing else; the API owns registration. The column
+-- grant limits WHAT can change; this policy limits it to one direction, once.
+-- Only a live device can be revoked, and the result must be revoked — so a
+-- stolen session cannot restore a device its owner just cut off, and the
+-- original revocation time is never overwritten.
 create policy user_devices_revoke_own
   on public.user_devices for update to authenticated
-  using (user_id = app.current_user_id())
-  with check (user_id = app.current_user_id());
+  using (user_id = app.current_user_id() and revoked_at is null)
+  with check (user_id = app.current_user_id() and revoked_at is not null);
 
 -- --- security_events: system, read-own only ----------------------------------
 
