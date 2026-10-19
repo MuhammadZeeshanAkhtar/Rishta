@@ -506,15 +506,47 @@ describe('quota is untouched by responding', () => {
 // ---------------------------------------------------------------------------
 
 describe('later slices remain unbuilt', () => {
-  it('creates no conversation anywhere', async () => {
+  it('opens a conversation ONLY because the gate permits it', async () => {
+    // This used to assert that no `conversations` table existed at all — a
+    // boundary marker for a slice that had not been written. Phase 7 built
+    // it, so the marker is replaced by the property that now matters: a
+    // thread appears because the GATE allowed it, not because an interest was
+    // accepted. Both sides here are `direct`, so the match opens and the
+    // trigger builds the thread.
     const { interestId, recipient } = await pending();
-    await respond(recipient, interestId, 'accept');
+    const matchId = (await respond(recipient, interestId, 'accept')).json().match.id as string;
 
-    const tables = await harness.raw.query<{ n: string }>(
-      `select count(*)::text as n from information_schema.tables
-        where table_schema = 'public' and table_name in ('conversations', 'messages')`,
+    const rows = await harness.raw.query<{ n: string }>(
+      `select count(*)::text as n from public.conversations where match_id = $1::uuid`,
+      [matchId],
     );
-    expect(Number.parseInt(tables.rows[0]!.n, 10)).toBe(0);
+    expect(Number.parseInt(rows.rows[0]!.n, 10)).toBe(1);
+  });
+
+  it('opens NO conversation when a side requires family review', async () => {
+    // The half that is still a boundary, and the stronger statement: an
+    // accepted interest is not permission to talk. Putting the gate on the
+    // thread would mean creating a thread in order to forbid it (ERD §11).
+    const { interestId, recipient } = await pending();
+    await harness.raw.query(
+      `update public.user_settings set communication_policy = 'family_reviewed'
+        where user_id = $1::uuid`,
+      [recipient.userId],
+    );
+
+    const matchId = (await respond(recipient, interestId, 'accept')).json().match.id as string;
+
+    const state = await harness.raw.query<{ communication_state: string }>(
+      `select communication_state from public.matches where id = $1::uuid`,
+      [matchId],
+    );
+    expect(state.rows[0]!.communication_state).toBe('pending_family_review');
+
+    const rows = await harness.raw.query<{ n: string }>(
+      `select count(*)::text as n from public.conversations where match_id = $1::uuid`,
+      [matchId],
+    );
+    expect(Number.parseInt(rows.rows[0]!.n, 10)).toBe(0);
   });
 
   it('exposes no match MUTATION surface', async () => {

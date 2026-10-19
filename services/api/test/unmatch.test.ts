@@ -489,15 +489,43 @@ describe('nothing else is touched', () => {
     expect(await used(alice.userId)).toBe(before);
   });
 
-  it('creates no conversation', async () => {
-    // Notifications arrived in Slice 5, so that half is superseded — and
-    // unmatching still writes none of them, which notifications.test.ts pins.
-    // Conversations remain the chat slice's.
-    const rows = await harness.raw.query<{ n: string }>(
-      `select count(*)::text as n from information_schema.tables
-        where table_schema = 'public' and table_name in ('conversations', 'messages')`,
+  it('leaves the conversation and its history in place', async () => {
+    // This used to assert that no `conversations` table existed. Phase 7
+    // built it, and the property that replaces the marker is the one that
+    // matters here: unmatching ENDS the relationship and must not destroy
+    // what two people already said. The thread stops accepting writes
+    // because `app.can_write_message()` requires a live match, which
+    // conversations.test.ts covers from the route side.
+    const { alice, bilal, matchId } = await matched();
+
+    const threads = await harness.raw.query<{ id: string }>(
+      `select id from public.conversations where match_id = $1::uuid`,
+      [matchId],
     );
-    expect(Number.parseInt(rows.rows[0]!.n, 10)).toBe(0);
+    expect(threads.rows, 'an open match should have a thread').toHaveLength(1);
+
+    await harness.raw.query(
+      `insert into public.messages (conversation_id, sender_user_id, body)
+       values ($1::uuid, $2::uuid, 'Said before the unmatch.')`,
+      [threads.rows[0]!.id, alice.userId],
+    );
+
+    await unmatch(alice, matchId);
+
+    const after = await harness.raw.query<{ n: string }>(
+      `select count(*)::text as n from public.messages where conversation_id = $1::uuid`,
+      [threads.rows[0]!.id],
+    );
+    expect(Number.parseInt(after.rows[0]!.n, 10), 'the history must survive').toBe(1);
+
+    // And the counterpart is still a participant, so a report filed later
+    // still names who was there.
+    const participants = await harness.raw.query<{ n: string }>(
+      `select count(*)::text as n from public.conversation_participants
+        where conversation_id = $1::uuid and user_id = $2::uuid`,
+      [threads.rows[0]!.id, bilal.userId],
+    );
+    expect(Number.parseInt(participants.rows[0]!.n, 10)).toBe(1);
   });
 
   it('exposes no family-review surface', async () => {

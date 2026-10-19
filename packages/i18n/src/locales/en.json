@@ -586,5 +586,37 @@
       "guardian": "Guardian",
       "other": "Other relative"
     }
+  },
+  "chat": {
+    "title": "Messages",
+    "subtitle": "Conversations with the people you have matched with.",
+    "emptyTitle": "No conversations yet",
+    "emptyBody": "When a match is open, your conversation appears here. If your family reviews matches, it begins after they approve.",
+    "noMessages": "No messages yet. Say salaam.",
+    "composerPlaceholder": "Write a message",
+    "send": "Send",
+    "loadEarlier": "Load earlier messages",
+    "unreadOne": "1 unread",
+    "unreadMany": "{{count}} unread",
+    "readAt": "Read",
+    "stage": "Stage {{stage}} of 5",
+    "stageAdvance": "Suggest moving to stage {{stage}}",
+    "stageWaiting": "Waiting for them to agree",
+    "stageAsked": "They suggested moving to stage {{stage}}",
+    "stageAccept": "Agree",
+    "stageDecline": "Not yet",
+    "stageFinal": "This is the final stage.",
+    "leave": "Leave conversation",
+    "leaveConfirm": "Leave this conversation? You will stop receiving messages. This does not end the match — you can do that from the match itself.",
+    "closedPending_family_review": "Waiting for family approval before this conversation can begin.",
+    "closedFamily_rejected": "Your family declined this match, so messages are closed.",
+    "closedFamily_revoked": "Family approval was withdrawn. You can still read what was said.",
+    "closedBlocked": "Messages are closed because of a block.",
+    "closedMatch_ended": "This match has ended. You can still read what was said.",
+    "closedArchived": "This conversation is archived.",
+    "closedLeft": "You left this conversation.",
+    "closedRead_only": "You can read this conversation but not write in it.",
+    "errorLoad": "Could not load your conversations.",
+    "errorSend": "That message did not send. Please try again."
   }
 }

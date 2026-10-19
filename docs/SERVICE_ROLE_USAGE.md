@@ -443,6 +443,106 @@ inserts one notification each. Swept on read because pg-boss was deferred (ADR 0
 
 ---
 
+### `conversation.read_participants`
+
+**Where:** [`routes/conversations.ts:150,185`](../services/api/src/routes/conversations.ts)
+
+**Why:** two reads that a member's own session cannot serve.
+
+`users` is owner-only, so a conversation list cannot name the other person
+without this. `discovery.read_cards` cannot serve it either: that path
+re-applies `app.can_view_profile()`, and two people in a live conversation may
+legitimately fail it — a block closes the thread to writes and leaves the
+history readable, which is the design.
+
+`user_settings` is owner-only too, which is the subtler half. Reading the
+counterpart's `send_read_receipts` through the caller's own session returns no
+row at all, so the suppression silently became "always hidden": the flag read
+as off for everyone, including the people who leave it on.
+
+**Safety:** confined by the caller's own membership. Every query under this key
+joins FROM `conversation_participants` rows naming the caller, and selects
+nothing but `id`, `display_name` and a boolean-gated timestamp.
+
+**Scope:** select only.
+
+---
+
+### `conversation.notify_message`
+
+**Where:** [`routes/conversations.ts:449`](../services/api/src/routes/conversations.ts)
+
+**Why:** `notifications` has no member INSERT path — a member who could write
+it could fabricate a notification from anyone about anything.
+
+**Note what is NOT here.** The send itself runs as the MEMBER. `messages`
+carries a member insert grant and `messages_insert_when_permitted` is the
+authority, so RLS decides whether a message may be written. Routing the insert
+through the service role would move that decision from a policy Postgres
+enforces to a line of TypeScript someone can forget.
+
+**Safety:** best effort and outside the insert. A notification that can roll
+back with the message is a message the other side never hears about, and a
+notification failure must never lose the message.
+
+**Scope:** one notification row, to the counterpart.
+
+---
+
+### `conversation.stage_transition`
+
+**Where:** [`routes/conversations.ts:533,593,657`](../services/api/src/routes/conversations.ts)
+
+**Why:** `stage_transitions` is `system` (ERD §11) with no member grant at all,
+and `conversation_stages` is server state. A member who could write either
+could advance a conversation to a stage that unlocks more of the other person
+without their agreement, which is the one thing stages exist to prevent.
+
+**Safety:** accepting writes the transition and the new stage in ONE
+transaction, so a thread can never report a stage no proposal produced. The
+route refuses the proposer answering their own proposal, and the database
+refuses them again through `stage_transitions_not_self_accepted` — the
+mutuality does not depend on the route being correct.
+
+**Scope:** the pending proposal for one conversation, and that conversation's
+stage row.
+
+---
+
+### `conversation.mark_read`
+
+**Where:** [`routes/conversations.ts:497`](../services/api/src/routes/conversations.ts)
+
+**Why:** `message_reads` has no member write grant. A member who could write it
+could mark the COUNTERPART as having read something, which would make a read
+receipt a statement about someone else.
+
+**Safety:** the user id comes from `app.current_user_id()` under the caller's
+own session, and the upsert takes `greatest()` of the stored and incoming
+timestamps so an out-of-order client cannot move a read position BACKWARDS and
+resurrect notifications someone has already dealt with.
+
+**Scope:** one row, keyed `(conversation_id, user_id)`, for the caller.
+
+---
+
+### `conversation.leave`
+
+**Where:** [`routes/conversations.ts:727`](../services/api/src/routes/conversations.ts)
+
+**Why:** `conversation_participants.left_at` is the membership every message
+policy reads. A member who could write it could re-admit themselves to a thread
+they left, or remove the other person from their own conversation.
+
+**Safety:** sets `left_at` on the caller's own row only, resolved from
+`app.current_user_id()` before this opens. The row is updated rather than
+deleted so the history keeps its participants and a report filed later still
+names who was there.
+
+**Scope:** one participant row.
+
+---
+
 ## Not on this list, deliberately
 
 | Operation       | Runs as  | Why                                                                                                         |

@@ -22,7 +22,7 @@ afterAll(async () => {
 });
 
 describe('migrations apply', () => {
-  it('creates every table through Phase 6b, including the family layer', async () => {
+  it('creates every table through Phase 7, including conversations', async () => {
     const rows = await db.admin<{ tablename: string }>(
       `select tablename from pg_tables where schemaname = 'public' order by tablename`,
     );
@@ -31,6 +31,9 @@ describe('migrations apply', () => {
       'blocks',
       'compatibility_factors',
       'compatibility_scores',
+      'conversation_participants',
+      'conversation_stages',
+      'conversations',
       'discovery_generation_runs',
       'dismissed_profiles',
       'family_access_log',
@@ -44,6 +47,8 @@ describe('migrations apply', () => {
       'match_events',
       'matches',
       'media_moderation_results',
+      'message_reads',
+      'messages',
       'notifications',
       'partner_preferences',
       'photo_variants',
@@ -57,6 +62,7 @@ describe('migrations apply', () => {
       'reports',
       'security_events',
       'shortlists',
+      'stage_transitions',
       'system_flags',
       'usage_counters',
       'user_auth_links',
@@ -83,7 +89,7 @@ describe('migrations apply', () => {
        where n.nspname = 'public' and c.relkind = 'r'
        order by c.relname`,
     );
-    expect(rows.length).toBe(39);
+    expect(rows.length).toBe(45);
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} must have RLS enabled`).toBe(true);
       expect(row.relforcerowsecurity, `${row.relname} must FORCE RLS`).toBe(true);
@@ -152,6 +158,11 @@ describe('migrations apply', () => {
     );
     expect(rows).toEqual([
       { tgname: 'matches_gate_new_period', timing: 'before', events: 'insert,update' },
+      // Phase 7. Runs AFTER, and only on the state column, so it observes the
+      // gate the one above has already decided rather than racing it. It
+      // creates the thread; it never changes communication_state, so the
+      // "one trigger gates the period" property is intact.
+      { tgname: 'matches_open_conversation', timing: 'after', events: 'insert,update' },
       { tgname: 'matches_touch', timing: 'before', events: 'update' },
     ]);
   });
@@ -210,6 +221,14 @@ describe('grants — the surface the Data API exposes', () => {
       'blocks authenticated SELECT',
       'compatibility_factors authenticated SELECT',
       'compatibility_scores authenticated SELECT',
+      // Phase 7. SELECT on the thread is membership; INSERT on `messages` is
+      // a COLUMN grant additionally gated by `app.can_write_message()` — the
+      // one table where a member holds both, and the two policies answer
+      // different questions on purpose. No UPDATE or DELETE: edits and
+      // deletions are server state that report evidence depends on.
+      'conversation_participants authenticated SELECT',
+      'conversation_stages authenticated SELECT',
+      'conversations authenticated SELECT',
       'dismissed_profiles authenticated DELETE',
       'dismissed_profiles authenticated INSERT',
       'dismissed_profiles authenticated SELECT',
@@ -227,6 +246,8 @@ describe('grants — the surface the Data API exposes', () => {
       'interests authenticated SELECT',
       'match_candidates authenticated SELECT',
       'matches authenticated SELECT',
+      'message_reads authenticated SELECT',
+      'messages authenticated SELECT',
       'notifications authenticated SELECT',
       'partner_preferences authenticated SELECT',
       'photo_variants authenticated SELECT',
@@ -361,6 +382,11 @@ describe('grants — the surface the Data API exposes', () => {
        order by 1`,
     );
     expect(rows.map((r) => r.relname)).toEqual([
+      // Phase 7: `insert (conversation_id, sender_user_id, body, kind)` only.
+      // `moderation_status`, `edited_at` and `deleted_at` are server state
+      // that report evidence depends on, and a member who could set
+      // `acted_by_user_id` could attribute their own words to a delegate.
+      'messages',
       // Phase 6 Slice 5: `update (read_at)` only, so marking a notification
       // read cannot become rewriting its type or payload.
       'notifications',

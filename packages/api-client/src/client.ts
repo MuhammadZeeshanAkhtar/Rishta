@@ -39,6 +39,21 @@ import {
   respondToInterestResultSchema,
   blockPageSchema,
   createReportSchema,
+  conversationDetailSchema,
+  conversationPageSchema,
+  conversationStageSchema,
+  markReadSchema,
+  messagePageSchema,
+  messageSchema,
+  respondToStageSchema,
+  sendMessageSchema,
+  stageProposalSchema,
+  type ConversationDetail,
+  type ConversationPage,
+  type ConversationStage,
+  type Message,
+  type MessagePage,
+  type StageProposal,
   createInvitationSchema,
   createInvitationResponseSchema,
   decideReviewSchema,
@@ -643,5 +658,109 @@ export class NikahMateClient {
   /** Reviews pending on MY matches, and the stalled-review warning. */
   async listMyFamilyReviews() {
     return this.http.get('/family/my-reviews');
+  }
+
+  // --- Conversations (Phase 7) -----------------------------------------------
+
+  /**
+   * My threads, newest traffic first.
+   *
+   * Each carries `canWrite` and `writeBlockedReason`. Do NOT infer writability
+   * from membership: a thread can be readable and closed at the same time
+   * because a family approval was withdrawn or a block appeared, and a
+   * composer that only fails on send is a worse answer than one that explains
+   * itself.
+   */
+  async listConversations(
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<ConversationPage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(
+      conversationPageSchema,
+      await this.http.get('/conversations', { query }),
+      'conversations',
+    );
+  }
+
+  async getConversation(conversationId: string): Promise<ConversationDetail> {
+    return parse(
+      conversationDetailSchema,
+      await this.http.get(`/conversations/${conversationId}`),
+      'conversation',
+    );
+  }
+
+  /** Newest first — a chat opens at the bottom, and paging goes backwards. */
+  async listMessages(
+    conversationId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<MessagePage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(
+      messagePageSchema,
+      await this.http.get(`/conversations/${conversationId}/messages`, { query }),
+      'messages',
+    );
+  }
+
+  /** 409 when the gate is closed, with the reason in the message. */
+  async sendMessage(conversationId: string, body: string): Promise<Message> {
+    const payload = sendMessageSchema.parse({ body });
+    return parse(
+      messageSchema,
+      await this.http.post(`/conversations/${conversationId}/messages`, payload),
+      'message',
+    );
+  }
+
+  async markRead(conversationId: string, lastReadMessageId: string): Promise<void> {
+    const payload = markReadSchema.parse({ lastReadMessageId });
+    await this.http.post(`/conversations/${conversationId}/read`, payload);
+  }
+
+  async getStage(conversationId: string): Promise<ConversationStage> {
+    return parse(
+      conversationStageSchema,
+      await this.http.get(`/conversations/${conversationId}/stage`),
+      'stage',
+    );
+  }
+
+  /** Propose advancing one stage. The counterpart must accept. */
+  async proposeStage(conversationId: string): Promise<StageProposal> {
+    return parse(
+      stageProposalSchema,
+      await this.http.post(`/conversations/${conversationId}/stage/propose`, {}),
+      'proposal',
+    );
+  }
+
+  async respondToStage(conversationId: string, accept: boolean): Promise<ConversationStage> {
+    const payload = respondToStageSchema.parse({ accept });
+    return parse(
+      conversationStageSchema,
+      await this.http.post(`/conversations/${conversationId}/stage/respond`, payload),
+      'stage',
+    );
+  }
+
+  /** Leave a thread. Not an unmatch — the match itself is ended elsewhere. */
+  async leaveConversation(conversationId: string): Promise<void> {
+    await this.http.post(`/conversations/${conversationId}/leave`, {});
+  }
+
+  /**
+   * Live delivery for one thread.
+   *
+   * Fires on every insert the caller is permitted to see; the app re-reads
+   * through `listMessages` rather than trusting the payload, so one decoder
+   * owns the shape. Returns an unsubscribe the caller MUST invoke on unmount.
+   */
+  subscribeToMessages(conversationId: string, onInsert: () => void): () => void {
+    return this.auth.subscribeToMessages(conversationId, onInsert);
   }
 }

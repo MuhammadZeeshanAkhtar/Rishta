@@ -274,4 +274,42 @@ export class AuthClient {
       emailVerified: Boolean(data.user.email_confirmed_at),
     };
   }
+
+  /**
+   * Live message delivery for one conversation (Phase 7).
+   *
+   * Realtime applies RLS PER SUBSCRIBER, so this receives only rows that
+   * `messages_select_member` already lets the caller read. The subscription
+   * grants nothing a SELECT did not: a non-participant subscribing to another
+   * thread's id receives silence rather than messages.
+   *
+   * The payload is NOT trusted as the message. It carries the row Postgres
+   * wrote, but the app re-reads through the API so the shape, the `isMine`
+   * flag and the sender's name all come from one place — a client that
+   * rendered the raw row would be a second, divergent decoder of the same
+   * data.
+   *
+   * Returns an unsubscribe function. Callers must invoke it on unmount: a
+   * leaked channel keeps a websocket open per screen visit, which on a phone
+   * is a battery bug that looks like nothing until it is many.
+   */
+  subscribeToMessages(conversationId: string, onInsert: () => void): () => void {
+    const channel = this.supabase
+      .channel(`messages:${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        () => onInsert(),
+      )
+      .subscribe();
+
+    return () => {
+      void this.supabase.removeChannel(channel);
+    };
+  }
 }

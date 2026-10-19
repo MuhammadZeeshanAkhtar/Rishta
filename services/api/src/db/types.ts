@@ -294,6 +294,67 @@ export const SERVICE_ROLE_USES = [
   'family.notify_stalled',
 
   /**
+   * Display names for the people in a thread.
+   *
+   * `users` is owner-only and holds `date_of_birth`, so a conversation list
+   * cannot name the other person without a service-role read.
+   * `discovery.read_cards` cannot serve it: that path re-applies
+   * `app.can_view_profile()`, and two people in a live conversation may
+   * legitimately fail it — a block closes the thread to writes and leaves the
+   * history readable, which is the whole design.
+   *
+   * Confined by construction: the query joins FROM the caller's own
+   * `conversation_participants` rows and selects nothing but `id` and
+   * `display_name`.
+   */
+  'conversation.read_participants',
+
+  /**
+   * Telling the other side a message arrived.
+   *
+   * `notifications` has no member INSERT path — a member who could write it
+   * could fabricate a notification from anyone about anything. The send
+   * itself does NOT come through here: `messages` carries a member insert
+   * grant and `messages_insert_when_permitted` is the authority, so the write
+   * runs as the sender and RLS decides. Only the notification needs elevating.
+   */
+  'conversation.notify_message',
+
+  /**
+   * Proposing and answering a stage advance.
+   *
+   * `stage_transitions` is `system` (ERD §11) with no member grant at all,
+   * and `conversation_stages` is server state: a member who could write
+   * either could advance a conversation to a stage that unlocks more of the
+   * other person without their agreement, which is the one thing stages
+   * exist to prevent.
+   *
+   * Accepting writes the transition and the new stage in ONE transaction, so
+   * a thread can never report a stage no proposal produced. The database
+   * independently refuses a self-accepted proposal
+   * (`stage_transitions_not_self_accepted`).
+   */
+  'conversation.stage_transition',
+
+  /**
+   * Recording how far someone has read.
+   *
+   * `message_reads` has no member write grant. A member who could write it
+   * could mark the COUNTERPART as having read something, which would make a
+   * read receipt a statement about someone else.
+   */
+  'conversation.mark_read',
+
+  /**
+   * Leaving a conversation.
+   *
+   * `conversation_participants.left_at` is the membership every message
+   * policy reads. A member who could write it could re-admit themselves to a
+   * thread they left, or remove the other person from their own conversation.
+   */
+  'conversation.leave',
+
+  /**
    * Claiming and releasing a discovery generation run.
    *
    * `discovery_generation_runs` has no member grant and no policy: it is

@@ -8,6 +8,7 @@ import type { TokenVerifier } from './auth/verify';
 import type { Db } from './db/types';
 import type { StorageClient } from './storage/client';
 import { accountRoutes } from './routes/account';
+import { conversationRoutes } from './routes/conversations';
 import { discoveryRoutes } from './routes/discovery';
 import { familyRoutes } from './routes/family';
 import { interestRoutes } from './routes/interests';
@@ -180,6 +181,7 @@ export async function buildApp({
   await app.register(notificationRoutes, { db });
   await app.register(safetyRoutes, { db });
   await app.register(familyRoutes, { db });
+  await app.register(conversationRoutes, { db });
 
   return app;
 }
