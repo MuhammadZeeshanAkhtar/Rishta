@@ -22,7 +22,7 @@ afterAll(async () => {
 });
 
 describe('migrations apply', () => {
-  it('creates every table through Phase 6 Slice 5, plus reports', async () => {
+  it('creates every table through Phase 6b, including the family layer', async () => {
     const rows = await db.admin<{ tablename: string }>(
       `select tablename from pg_tables where schemaname = 'public' order by tablename`,
     );
@@ -33,6 +33,11 @@ describe('migrations apply', () => {
       'compatibility_scores',
       'discovery_generation_runs',
       'dismissed_profiles',
+      'family_access_log',
+      'family_invitations',
+      'family_permissions',
+      'family_relationships',
+      'family_reviews',
       'interest_events',
       'interests',
       'match_candidates',
@@ -52,6 +57,7 @@ describe('migrations apply', () => {
       'reports',
       'security_events',
       'shortlists',
+      'system_flags',
       'usage_counters',
       'user_auth_links',
       'user_consents',
@@ -77,7 +83,7 @@ describe('migrations apply', () => {
        where n.nspname = 'public' and c.relkind = 'r'
        order by c.relname`,
     );
-    expect(rows.length).toBe(33);
+    expect(rows.length).toBe(39);
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} must have RLS enabled`).toBe(true);
       expect(row.relforcerowsecurity, `${row.relname} must FORCE RLS`).toBe(true);
@@ -92,13 +98,20 @@ describe('migrations apply', () => {
        where t.schemaname = 'public'
          and t.tablename in (
            'user_auth_links', 'user_consents', 'profile_sensitive',
-           'media_moderation_results'
+           'media_moderation_results',
+           -- Scheduling state and operator switches. Neither is member data,
+           -- and discovery_generation_runs had been left out of this
+           -- assertion since 0023 - a zero-policy table nothing checks is one
+           -- policy away from being readable by accident.
+           'discovery_generation_runs', 'system_flags'
          )
        group by t.tablename order by t.tablename`,
     );
     expect(rows).toEqual([
+      { tablename: 'discovery_generation_runs', n: 0 },
       { tablename: 'media_moderation_results', n: 0 },
       { tablename: 'profile_sensitive', n: 0 },
+      { tablename: 'system_flags', n: 0 },
       { tablename: 'user_auth_links', n: 0 },
       { tablename: 'user_consents', n: 0 },
     ]);
@@ -200,6 +213,16 @@ describe('grants — the surface the Data API exposes', () => {
       'dismissed_profiles authenticated DELETE',
       'dismissed_profiles authenticated INSERT',
       'dismissed_profiles authenticated SELECT',
+      // Phase 6b. SELECT only, every one of them: an invitation must hash a
+      // token, a grant must be refused if its phase has not arrived, a review
+      // must be the first for its side, and an audit a delegate can write is
+      // not an audit. `system_flags` is absent on purpose — no member grant at
+      // all, because a flag a member can read is a roadmap.
+      'family_access_log authenticated SELECT',
+      'family_invitations authenticated SELECT',
+      'family_permissions authenticated SELECT',
+      'family_relationships authenticated SELECT',
+      'family_reviews authenticated SELECT',
       'interests authenticated INSERT',
       'interests authenticated SELECT',
       'match_candidates authenticated SELECT',
