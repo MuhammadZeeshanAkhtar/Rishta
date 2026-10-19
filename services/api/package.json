@@ -11,7 +11,8 @@
     "migrate:status": "tsx --env-file-if-exists=.env scripts/migrate.ts --status",
     "verify:db": "tsx --env-file-if-exists=.env scripts/verify-db.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed:demo": "tsx --env-file-if-exists=.env scripts/seed-demo.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
