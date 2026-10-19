@@ -6,47 +6,63 @@ Every entry here was verified against the code on the date below — not inferre
 from the roadmap. Where something is absent **by design**, the reasoning is given
 so it is not "fixed" by accident.
 
-**Verified:** 2026-10-19 · 998 tests passing · 23 migrations · 33 tables
+**Verified:** 2026-10-19 · 1,133 tests passing · 25 migrations · 45 tables
 
 ---
 
-## 1. Nothing in the product opens a communication channel
+## 1. Text is the only communication channel
 
-There is no chat, no calls, no media sharing and no contact exchange. A match is
-created and then nothing follows it.
+Chat works. Calls, voice notes, media sharing and contact exchange do not.
 
-This is the single most important thing to understand about the current state,
-and it is deliberate. [ADR 0011](adr/0011-family-safety-wali-communication.md)
-separates "these two people matched" from "these two people may talk", and the
-second half — Family/Wali approval, Phase 6b — has not been built. Shipping chat
-before it would mean building a gate after the thing it gates.
+[ADR 0011](adr/0011-family-safety-wali-communication.md) separates "these two
+people matched" from "these two people may talk", and both halves now exist:
+Family/Wali review (Phase 6b) decides, and conversations (Phase 7) are gated on
+that decision by `app.can_write_message()`.
 
-`matches.communication_state` already stores all six states and is set at the
-birth of every match period by a database trigger. It is wired and has nothing
-to withhold yet.
+What is still absent, and why:
 
-**Consequence for a new team:** Phase 6b is the next piece of work, and Phase 7
-depends on it.
+- **Voice notes.** `messages.kind` accepts `voice`, and nothing issues an
+  upload target or moderates the result. The column is there so the row shape
+  does not change later, not because the feature is half-built.
+- **Calls.** M2 (ADR 0011). `system_flags` ships them switched OFF rather than
+  absent, for both the family-mediated and the direct 1:1 path — a path that is
+  switched off gets reviewed before it is switched on.
+- **Translation and reply suggestions.** Both are AI, which
+  [ADR 0006](adr/) excludes from v1 entirely.
+- **Contact exchange.** `profile_sensitive` is `restricted` with zero policies,
+  which is the point. Nothing in the product hands over a phone number.
+
+**Consequence for a new team:** the core loop is complete end to end — discover,
+interest, match, family review, conversation. Phase 8 (moderation tooling) is
+the next piece of work, and it is the one that makes `reports` useful.
 
 ---
 
-## 2. Family / Wali is specified but not built
+## 2. Family / Wali ships the M1 review layer only
 
-Zero of seven tables, zero of nineteen API operations, zero screens. The Family
-tab is a placeholder.
+Built: invitations, relationships, scoped permission grants, the match-scoped
+review packet, approve / reject / request-more-info / revoke, the access log,
+and the 72-hour stall warning. D12 was settled on 2026-10-19 and the answers
+are encoded in [migration 0024](../supabase/migrations/20261019000024_family_safety.sql)
+rather than described.
 
-The specification is complete and unusually detailed —
-[ADR 0011](adr/0011-family-safety-wali-communication.md), [ERD §12 and §21](ERD.md),
-and the `/family/*` paths in [openapi.yaml](openapi.yaml) — including the
-permission vocabulary, the review packet projection, the access log and the
-state machine.
+Not built, and deliberately scoped out of M1:
 
-Three things will need altering when it is built, each deliberately deferred
-because the table they reference did not exist yet:
+- **Supervised conversation view** (`view_conversation`) and **in-thread family
+  participation** (`join_conversation`). The permission vocabulary accepts both
+  and the API refuses them at grant time with 400 — a grant that is accepted
+  and silently does nothing is worse than a refusal, because the owner believes
+  they granted something.
+- **Family calls** and their two permissions. M2, and `system_flags` holds the
+  switch.
+- **Quorum approval.** The first decision stands (D12 row 4). `family_reviews`
+  already records WHICH relationship decided, so adding a count rule is
+  additive rather than a migration.
 
-- `relationship_id` on `blocks`, `reports` and `match_events`
-- the `match_events` event CHECK, which today allows only `created` and `ended`
-- the `notifications` type CHECK, which has no `family.*` review events
+**The SLA has no scheduler.** pg-boss was deferred (ADR 0007), so the 72-hour
+warning is swept when the owner opens their family screen rather than by a
+runner. An owner who never opens the app is never warned — which matters
+because this is an R16 control. `sla_notified_at` keeps it to one warning.
 
 ---
 
@@ -149,7 +165,7 @@ open the app to learn anything.
 
 ## 9. Testing gaps
 
-998 tests pass, and the database suites run against a real Postgres (PGlite)
+1,133 tests pass, and the database suites run against a real Postgres (PGlite)
 applying the migration files exactly as written. What that does **not** cover:
 
 - **No end-to-end test.** No Detox, Maestro or Playwright. No test has ever run
@@ -190,7 +206,7 @@ Specified in [openapi.yaml](openapi.yaml), not built. None blocks the core loop.
 `/me/verification/*` · `/me/profile-views` · `/me/entitlements` · `/me/usage` ·
 `/plans` · `/safety/center` · `/safety/panic-exit` · `/support/contact`
 
-Roughly 31 of 95 contract paths are implemented. The unimplemented ones are
+Roughly 53 of 95 contract paths are implemented. The unimplemented ones are
 specified to the same level of detail as the built ones, which is the main asset
 here: the contract is the plan.
 

@@ -5,18 +5,19 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 ---
 
-> ## PHASES 1–6 BUILT · 6b ONWARDS NOT STARTED
+> ## PHASES 1–7 BUILT · 8 ONWARDS NOT STARTED
 >
-> **Built and verified:** the monorepo, the full schema (23 migrations, 33 tables) with
+> **Built and verified:** the monorepo, the full schema (25 migrations, 45 tables) with
 > RLS enabled _and forced_ everywhere, authentication, onboarding, profiles, photos,
 > per-field privacy, discovery, the deterministic compatibility engine, interests,
-> matches, notifications, and block & report.
+> matches, notifications, block & report, **the Family/Wali review layer (6b)** and
+> **conversations with Realtime delivery (7)**.
 >
-> **Not started:** Family/Wali (Phase 6b), chat (Phase 7), moderation tooling (Phase 8),
-> and everything after. Those are specified in the ADRs and the OpenAPI contract but no
-> table, endpoint or screen exists for them.
+> **Not started:** moderation tooling and the admin panel (Phase 8), family calls
+> (Phase 9), proposals (10), the AI layer (11) and everything after. Those are specified
+> in the ADRs and the OpenAPI contract but no table, endpoint or screen exists for them.
 >
-> **998 tests pass.** Typecheck, lint and format are clean.
+> **1,133 tests pass.** Typecheck, lint and format are clean.
 > See [§13 Implementation Status](#13-implementation-status) for the row-by-row record and
 > [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what a new team should expect
 > to find missing.
@@ -1480,7 +1481,9 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | Monorepo / pnpm workspace                    | **BUILT** - 6 packages, TS strict, ESLint, Prettier                                        |
 | ESLint architectural guardrails              | **BUILT** - verified firing                                                                |
 | `@nikahmate/domain` shared vocabulary        | **BUILT** - 122 tests                                                                      |
-| Database schema                              | **BUILT** - 23 migrations, 33 tables, applied to a fresh Postgres in CI                    |
+| Database schema                              | **BUILT** - 25 migrations, 45 tables, applied to a fresh Postgres in CI                    |
+| Family / Wali review layer (Phase 6b)        | **BUILT** - D12 settled; invitations, scoped grants, match-scoped review, 72h SLA          |
+| Conversations and messages (Phase 7)         | **BUILT** - gate-aware send, stages, unread counts, Supabase Realtime                      |
 | RLS - every table                            | **BUILT** - enabled AND forced; 330 tests across 13 suites                                 |
 | `@nikahmate/i18n` - en                       | **BUILT** - English only (ADR 0012), catalog parity tested                                 |
 | Auth - sign up, sign in, verify, reset       | **BUILT** - Supabase Auth; session in SecureStore, chunked for Android's 2048-byte ceiling |
@@ -1502,7 +1505,7 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | English at 320dp                             | **VERIFIED** - rendered and measured, zero horizontal overflow                             |
 | CI workflow                                  | **BUILT** - lint, format, typecheck, test, Expo web bundle, secret guard                   |
 
-**998 tests passing** - domain 122, database 330, api-client 31, i18n 14, API 501.
+**1,133 tests passing** - domain 122, database 405, api-client 31, i18n 14, API 561.
 Lint, format and typecheck clean across all 6 packages.
 
 Database tests run against a real Postgres via PGlite, in-process, applying the
@@ -1510,20 +1513,20 @@ migration files exactly as written. No Docker or service container is needed.
 
 ### Not built
 
-| Component                                 | Status                                                                                                                                                                                     |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Family / Wali (Phase 6b)**              | **DESIGNED, NOT BUILT** - [ADR 0011](docs/adr/0011-family-safety-wali-communication.md), ERD 12 + 21, 19 API operations. No table, no migration, no code. The Family tab is a placeholder. |
-| Chat / conversations (Phase 7)            | Not started - no `conversations` or `messages` table                                                                                                                                       |
-| Moderation tooling, admin panel (Phase 8) | Not started - reports are stored but nothing reads them                                                                                                                                    |
-| Family calls (Phase 9)                    | Not started                                                                                                                                                                                |
-| Push notifications                        | Not started - the in-app inbox is the only channel                                                                                                                                         |
-| Search and advanced filters               | Not started - `/discovery/search` unimplemented                                                                                                                                            |
-| Cross-user photo delivery                 | Blocked by design - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)                                                                                                             |
-| Account deletion / deactivation           | Not started - **required by Google Play** before launch                                                                                                                                    |
-| Subscriptions, entitlement UI (Phase 12)  | Backend primitives exist; no plans, no billing                                                                                                                                             |
-| Gemini / AI layer                         | Not started - **not required for v1**, and rejected at boot if a key is present                                                                                                            |
-| Dark theme                                | Architecture ready, palette not authored                                                                                                                                                   |
-| Deployment configuration                  | Not started - no Dockerfile, no `eas.json`                                                                                                                                                 |
+| Component                                 | Status                                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Moderation tooling, admin panel (Phase 8) | Not started - reports are stored but nothing reads them                                      |
+| Voice notes in chat                       | Not started - the message `kind` column accepts `voice`; no upload or moderation path exists |
+| Message translation, reply suggestions    | Not started - both are AI, which [ADR 0006](docs/adr/) excludes from v1                      |
+| Family calls (Phase 9)                    | Not started                                                                                  |
+| Push notifications                        | Not started - the in-app inbox is the only channel                                           |
+| Search and advanced filters               | Not started - `/discovery/search` unimplemented                                              |
+| Cross-user photo delivery                 | Blocked by design - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)               |
+| Account deletion / deactivation           | Not started - **required by Google Play** before launch                                      |
+| Subscriptions, entitlement UI (Phase 12)  | Backend primitives exist; no plans, no billing                                               |
+| Gemini / AI layer                         | Not started - **not required for v1**, and rejected at boot if a key is present              |
+| Dark theme                                | Architecture ready, palette not authored                                                     |
+| Deployment configuration                  | Not started - no Dockerfile, no `eas.json`                                                   |
 
 A full, evidence-backed list is in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
