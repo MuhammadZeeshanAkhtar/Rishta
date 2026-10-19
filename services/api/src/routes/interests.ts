@@ -440,6 +440,75 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
             }
           }
 
+          // THE REVIEW ROWS. A gated match with nothing to decide on would
+          // sit in `pending_family_review` forever with no inbox entry
+          // anywhere — the gate closed and no handle on it.
+          //
+          // One row per side that actually requires review, not per match:
+          // `required_communication_state()` gates if EITHER side asks, but
+          // only the asking side's family gets a say. Writing a row for an
+          // ungated side would hand their delegates a veto they were never
+          // granted.
+          //
+          // `do update` rather than `do nothing` because of REMATCH. There is
+          // one `matches` row per pair forever, so a previously decided review
+          // is still sitting here; leaving it would let a pair unmatch and
+          // rematch straight back into an old approval, which is the same
+          // laundering route `gate_new_match_period()` closes on the match.
+          if (matchRow && matchRow.communication_state === 'pending_family_review') {
+            const gated = await session.query<{ user_id: string }>(
+              `select user_id from public.user_settings
+                where user_id in ($1::uuid, $2::uuid)
+                  and communication_policy = 'family_reviewed'`,
+              [userA, userB],
+            );
+
+            for (const side of gated) {
+              const review = await session.query<{ id: string }>(
+                `insert into public.family_reviews (match_id, owner_user_id)
+                 values ($1::uuid, $2::uuid)
+                 on conflict (match_id, owner_user_id) do update
+                   set decision = 'pending',
+                       decided_at = null,
+                       decided_by_user_id = null,
+                       relationship_id = null,
+                       note = null,
+                       requested_at = now(),
+                       sla_notified_at = null
+                 returning id`,
+                [matchRow.id, side.user_id],
+              );
+
+              // Every delegate who can actually decide hears about it. An
+              // owner with none gets a gate nobody can open, which is what
+              // `familyReviewersCount` on the account read exists to warn
+              // about before it happens.
+              const delegates = await session.query<{ delegate_user_id: string }>(
+                `select r.delegate_user_id
+                   from public.family_relationships r
+                   join public.family_permissions p on p.relationship_id = r.id
+                  where r.owner_user_id = $1::uuid
+                    and r.status = 'active'
+                    and p.permission = 'approve_communication'
+                    and p.granted`,
+                [side.user_id],
+              );
+
+              for (const delegate of delegates) {
+                await session.query(
+                  `insert into public.notifications (user_id, type, payload, dedupe_key)
+                   values ($1::uuid, 'family_review_requested', $2::jsonb, $3)
+                   on conflict do nothing`,
+                  [
+                    delegate.delegate_user_id,
+                    JSON.stringify({ matchId: matchRow.id, ownerUserId: side.user_id }),
+                    `family_review_requested:${review[0]!.id}`,
+                  ],
+                );
+              }
+            }
+          }
+
           if (matchRow) {
             match = {
               id: matchRow.id,
@@ -450,9 +519,13 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
               // The stage a conversation will start at. None exists yet.
               stage: 1,
               communicationState: matchRow.communication_state,
-              // Present only when a side required review, which nothing can
-              // require until Family Safety ships.
-              familyReview: null,
+              // Present only when a side required review. The delegate who
+              // decides is deliberately NOT named here: the counterpart may
+              // learn that a review is pending and never who is reviewing.
+              familyReview:
+                matchRow.communication_state === 'pending_family_review'
+                  ? { status: 'pending' }
+                  : null,
               endedAt: null,
             };
           }

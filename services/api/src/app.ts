@@ -9,6 +9,7 @@ import type { Db } from './db/types';
 import type { StorageClient } from './storage/client';
 import { accountRoutes } from './routes/account';
 import { discoveryRoutes } from './routes/discovery';
+import { familyRoutes } from './routes/family';
 import { interestRoutes } from './routes/interests';
 import { matchRoutes } from './routes/matches';
 import { notificationRoutes } from './routes/notifications';
@@ -178,6 +179,7 @@ export async function buildApp({
   await app.register(matchRoutes, { db });
   await app.register(notificationRoutes, { db });
   await app.register(safetyRoutes, { db });
+  await app.register(familyRoutes, { db });
 
   return app;
 }

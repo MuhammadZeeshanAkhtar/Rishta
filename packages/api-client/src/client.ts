@@ -39,6 +39,23 @@ import {
   respondToInterestResultSchema,
   blockPageSchema,
   createReportSchema,
+  createInvitationSchema,
+  createInvitationResponseSchema,
+  decideReviewSchema,
+  familyAccessLogPageSchema,
+  familyInvitationPageSchema,
+  familyMemberPageSchema,
+  reviewPacketSchema,
+  reviewSummaryPageSchema,
+  updatePermissionsSchema,
+  type CreateInvitationRequest,
+  type DecideReviewRequest,
+  type FamilyAccessLogPage,
+  type FamilyInvitationPage,
+  type FamilyMemberPage,
+  type FamilyPermission,
+  type ReviewPacket,
+  type ReviewSummaryPage,
   reportPageSchema,
   reportSchema,
   type BlockPage,
@@ -490,5 +507,141 @@ export class NikahMateClient {
     if (options.cursor) query.cursor = options.cursor;
     if (options.limit) query.limit = options.limit;
     return parse(reportPageSchema, await this.http.get('/me/reports', { query }), 'reports');
+  }
+
+  // --- Family / Wali (Phase 6b, ADR 0011) ------------------------------------
+
+  /** My family members, and exactly what each one holds. */
+  async listFamilyMembers(
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<FamilyMemberPage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(
+      familyMemberPageSchema,
+      await this.http.get('/family/members', { query }),
+      'family members',
+    );
+  }
+
+  /**
+   * Invite someone, with a tier and the grants it expands to.
+   *
+   * The returned `token` is shown ONCE and is not stored unhashed anywhere.
+   * It will not appear in `listFamilyInvitations()`, so it has to be handed
+   * to the invitee from this response or not at all.
+   */
+  async createFamilyInvitation(invitation: CreateInvitationRequest) {
+    const body = createInvitationSchema.parse(invitation);
+    return parse(
+      createInvitationResponseSchema,
+      await this.http.post('/family/invitations', body),
+      'invitation',
+    );
+  }
+
+  async listFamilyInvitations(): Promise<FamilyInvitationPage> {
+    return parse(
+      familyInvitationPageSchema,
+      await this.http.get('/family/invitations'),
+      'invitations',
+    );
+  }
+
+  /** Accept or decline, by presenting the token from the invitation link. */
+  async respondToFamilyInvitation(
+    invitationId: string,
+    token: string,
+    accept: boolean,
+  ): Promise<void> {
+    await this.http.post(`/family/invitations/${invitationId}/respond`, { token, accept });
+  }
+
+  async cancelFamilyInvitation(invitationId: string): Promise<void> {
+    await this.http.delete(`/family/invitations/${invitationId}`);
+  }
+
+  /**
+   * Replace what a delegate holds.
+   *
+   * THE COMPLETE SET, not a delta — sending a subset revokes the rest. A
+   * permission whose phase has not arrived is refused with 400 rather than
+   * accepted and ignored.
+   */
+  async updateFamilyPermissions(
+    relationshipId: string,
+    permissions: FamilyPermission[],
+  ): Promise<void> {
+    const body = updatePermissionsSchema.parse({ permissions });
+    await this.http.patch(`/family/members/${relationshipId}/permissions`, body);
+  }
+
+  /** Revoke a delegate. Instant, and needs nobody's agreement. */
+  async revokeFamilyMember(relationshipId: string): Promise<void> {
+    await this.http.delete(`/family/members/${relationshipId}`);
+  }
+
+  /** Every action taken in my name, and the permission that authorised it. */
+  async listFamilyAccessLog(
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<FamilyAccessLogPage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(
+      familyAccessLogPageSchema,
+      await this.http.get('/family/access-log', { query }),
+      'access log',
+    );
+  }
+
+  /** The people I hold rights over. */
+  async listManagedProfiles(): Promise<FamilyMemberPage> {
+    return parse(familyMemberPageSchema, await this.http.get('/family/managed'), 'managed');
+  }
+
+  /** Matches awaiting my decision as a delegate. */
+  async listFamilyReviews(
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<ReviewSummaryPage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(
+      reviewSummaryPageSchema,
+      await this.http.get('/family/reviews', { query }),
+      'reviews',
+    );
+  }
+
+  /**
+   * The review packet for ONE match.
+   *
+   * Match-scoped by design: there is no call that returns a list of people a
+   * delegate may look at. 404 for any match they were not asked about.
+   */
+  async getReviewPacket(matchId: string): Promise<ReviewPacket> {
+    return parse(
+      reviewPacketSchema,
+      await this.http.get(`/family/reviews/${matchId}`),
+      'review packet',
+    );
+  }
+
+  /** Approve, reject, or ask for more information. */
+  async decideReview(matchId: string, decision: DecideReviewRequest) {
+    const body = decideReviewSchema.parse(decision);
+    return this.http.post(`/family/reviews/${matchId}/decide`, body);
+  }
+
+  /** Withdraw an approval. Closes writing without destroying the match. */
+  async revokeReview(matchId: string, note?: string) {
+    return this.http.post(`/family/reviews/${matchId}/revoke`, note === undefined ? {} : { note });
+  }
+
+  /** Reviews pending on MY matches, and the stalled-review warning. */
+  async listMyFamilyReviews() {
+    return this.http.get('/family/my-reviews');
   }
 }

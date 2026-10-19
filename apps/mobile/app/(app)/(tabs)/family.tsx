@@ -1,97 +1,282 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Alert, StyleSheet, Switch, Text, View } from 'react-native';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Banner } from '../../../src/components/Banner';
+import { Button } from '../../../src/components/Button';
+import { EmptyState } from '../../../src/components/EmptyState';
 import { Screen } from '../../../src/components/Screen';
 import { SectionCard } from '../../../src/components/SectionCard';
 import { StatusBadge } from '../../../src/components/StatusBadge';
+import { useFamily } from '../../../src/family/useFamily';
+import { useSession } from '../../../src/session/SessionProvider';
+import { getClient } from '../../../src/api/client';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 import { iconSize, radius, spacing, typography } from '../../../src/theme/tokens';
 
 /**
- * Family — not built yet, and saying so properly.
+ * Family — the live surface (Phase 6b, ADR 0011, D12).
  *
- * WHY THIS IS NOT A BLANK "COMING SOON". Family involvement is the thing that
- * distinguishes this product (README D12, ADR 0011), and this tab is where
- * someone goes to look for it. A one-line placeholder tells them the tab is
- * broken; an explanation tells them what the product intends and why the tab
- * is empty, which is the difference between an unfinished app and an
- * untrustworthy one.
+ * This screen answers two different people with one layout, because one
+ * person can be both: the OWNER who decides whether their matches wait for
+ * family approval, and the DELEGATE who makes that decision for someone else.
+ * Splitting them into two tabs would mean a parent on this product toggling
+ * between them to do one errand.
  *
- * NOTHING HERE IS INTERACTIVE, deliberately. There is no invite button that
- * does nothing, no fake member list, no mock access log. Every control on this
- * screen would be a promise the backend cannot keep — Phase 6b has no table,
- * no endpoint and no approval path — and a button that silently fails is worse
- * than no button at all.
+ * THE GATE IS THE OWNER'S. The switch at the top is theirs, reversible by
+ * them, and no delegate can touch it. That is the first of R16's four
+ * controls, so it sits at the top of the screen rather than inside a settings
+ * sub-page where someone under pressure would have to go looking for it.
  *
- * The three cards mirror the real model so the eventual build has somewhere to
- * land: invite, permissions, review. When 6b ships, each becomes the live
- * surface it currently describes.
+ * THE WARNING THAT MATTERS: turning review on with nobody who can approve
+ * stalls every future match, with no way to release it. `familyReviewersCount`
+ * comes back on the account read precisely so this screen can say so AT THE
+ * MOMENT the switch is flipped, not after the first match has sat for days.
  */
 export default function FamilyScreen() {
   const { t } = useLocale();
   const theme = useTheme();
+  const { me, refresh } = useSession();
+  const { members, managed, reviews, myReviews, loading, error, reload } = useFamily();
 
-  const steps = [
-    {
-      key: 'invite',
-      icon: 'person-add-outline' as const,
-      title: t('family.inviteTitle'),
-      body: t('family.inviteBody'),
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const gateOn = me?.communicationPolicy === 'family_reviewed';
+  const reviewers = me?.familyReviewersCount ?? 0;
+
+  const setGate = useCallback(
+    async (next: boolean) => {
+      setSaving(true);
+      setNotice(null);
+      try {
+        await getClient().updateSettings({
+          communicationPolicy: next ? 'family_reviewed' : 'direct',
+        });
+        await refresh();
+      } catch {
+        setNotice(t('family.errorSave'));
+      } finally {
+        setSaving(false);
+      }
     },
-    {
-      key: 'permissions',
-      icon: 'key-outline' as const,
-      title: t('family.permissionsTitle'),
-      body: t('family.permissionsBody'),
+    [refresh, t],
+  );
+
+  const revoke = useCallback(
+    (relationshipId: string, name: string) => {
+      Alert.alert(t('family.revoke'), t('family.revokeConfirm').replace('{{name}}', name), [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('family.revoke'),
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await getClient().revokeFamilyMember(relationshipId);
+                reload();
+                await refresh();
+              } catch {
+                setNotice(t('family.errorSave'));
+              }
+            })();
+          },
+        },
+      ]);
     },
-    {
-      key: 'review',
-      icon: 'shield-checkmark-outline' as const,
-      title: t('family.reviewTitle'),
-      body: t('family.reviewBody'),
-    },
-  ];
+    [reload, refresh, t],
+  );
 
   return (
     <Screen title={t('tabs.family')} subtitle={t('family.subtitle')}>
       <View style={styles.body}>
-        {/* The honest status, stated once and at the top rather than repeated
-            on each card. `warm` rather than `danger`: nothing is wrong, it is
-            simply not here yet. */}
-        <View
-          style={[
-            styles.notice,
-            { backgroundColor: theme.colors.accentSurface, borderColor: theme.colors.accent },
-          ]}
-          accessible
-          accessibilityLabel={`${t('family.notYetTitle')}. ${t('family.notYetBody')}`}
-        >
-          <View style={styles.noticeHead}>
-            <Ionicons name="time-outline" size={iconSize.sm} color={theme.colors.accent} />
-            <Text style={[styles.noticeTitle, { color: theme.colors.accent }]}>
-              {t('family.notYetTitle')}
+        {notice ? <Banner tone="error" message={notice} /> : null}
+        {error ? <Banner tone="error" message={t('family.errorLoad')} /> : null}
+
+        {/* --- the owner's own gate ------------------------------------- */}
+        <SectionCard title={t('family.gateTitle')} icon="shield-checkmark-outline" index={0}>
+          <View style={styles.gateRow}>
+            <Text style={[styles.gateState, { color: theme.colors.text }]}>
+              {gateOn ? t('family.gateOn') : t('family.gateOff')}
             </Text>
-            <StatusBadge label={t('family.phase')} tone="warm" />
+            <Switch
+              value={gateOn}
+              onValueChange={(next) => void setGate(next)}
+              disabled={saving || !me}
+              accessibilityLabel={t('family.gateTitle')}
+              testID="family-gate-switch"
+            />
           </View>
-          <Text style={[styles.noticeBody, { color: theme.colors.textMuted }]}>
-            {t('family.notYetBody')}
+
+          <Text style={[styles.body2, { color: theme.colors.textMuted }]}>
+            {t('family.gateBody')}
           </Text>
-        </View>
 
-        {steps.map((step, index) => (
-          <SectionCard
-            key={step.key}
-            title={step.title}
-            icon={step.icon}
-            index={index + 1}
-            testID={`family-step-${step.key}`}
-          >
-            <Text style={[styles.stepBody, { color: theme.colors.textMuted }]}>{step.body}</Text>
+          {/* The one thing that turns this feature into a trap if unsaid. */}
+          {gateOn && reviewers === 0 ? (
+            <View
+              style={[
+                styles.warn,
+                {
+                  backgroundColor: theme.colors.dangerSurface,
+                  borderColor: theme.colors.danger,
+                },
+              ]}
+            >
+              <Ionicons
+                name="alert-circle-outline"
+                size={iconSize.sm}
+                color={theme.colors.danger}
+              />
+              <Text style={[styles.warnText, { color: theme.colors.danger }]}>
+                {t('family.gateNoReviewers')}
+              </Text>
+            </View>
+          ) : null}
+
+          {reviewers > 0 ? (
+            <StatusBadge
+              label={t('family.gateReviewers').replace('{{count}}', String(reviewers))}
+              tone="brand"
+            />
+          ) : null}
+        </SectionCard>
+
+        {/* --- my matches waiting on family ----------------------------- */}
+        {myReviews.length > 0 ? (
+          <SectionCard title={t('family.myReviewsTitle')} icon="hourglass-outline" index={1}>
+            {myReviews.map((review) => (
+              <View key={review.matchId} style={styles.row} testID={`my-review-${review.matchId}`}>
+                <View style={styles.rowMain}>
+                  <Text style={[styles.rowTitle, { color: theme.colors.text }]}>
+                    {
+                      {
+                        pending: t('family.myReviewPending'),
+                        approved: t('family.myReviewApproved'),
+                        rejected: t('family.myReviewRejected'),
+                        more_info_requested: t('family.myReviewMoreInfo'),
+                        revoked: t('family.myReviewRevoked'),
+                      }[review.decision]
+                    }
+                  </Text>
+                  {review.note ? (
+                    <Text style={[styles.rowSub, { color: theme.colors.textMuted }]}>
+                      {review.note}
+                    </Text>
+                  ) : null}
+                  {/* The R16 control, said plainly and with both ways out. */}
+                  {review.overdue ? (
+                    <Text style={[styles.rowSub, { color: theme.colors.danger }]}>
+                      {t('family.myReviewStalled')}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+            ))}
           </SectionCard>
-        ))}
+        ) : null}
 
-        {/* The promise that matters most, and the reason the gate exists at
-            all. Last, so it is what someone leaves the screen with. */}
+        {/* --- waiting for me, as a delegate ---------------------------- */}
+        {managed.length > 0 ? (
+          <SectionCard
+            title={t('family.reviewsTitle')}
+            icon="people-outline"
+            index={2}
+            trailing={
+              reviews.length > 0 ? (
+                <StatusBadge label={String(reviews.length)} tone="warm" />
+              ) : undefined
+            }
+          >
+            {reviews.length === 0 ? (
+              <Text style={[styles.body2, { color: theme.colors.textMuted }]}>
+                {t('family.reviewsEmpty')}
+              </Text>
+            ) : (
+              reviews.map((review) => (
+                <View key={review.matchId} style={styles.row} testID={`review-${review.matchId}`}>
+                  <View style={styles.rowMain}>
+                    <Text style={[styles.rowTitle, { color: theme.colors.text }]}>
+                      {t('family.reviewFor').replace('{{name}}', review.ownerDisplayName ?? '')}
+                    </Text>
+                    <Text style={[styles.rowSub, { color: theme.colors.textMuted }]}>
+                      {review.counterpartDisplayName ?? ''}
+                      {review.counterpartAge !== null ? `, ${review.counterpartAge}` : ''}
+                    </Text>
+                    {review.overdue ? (
+                      <StatusBadge label={t('family.reviewOverdue')} tone="warm" />
+                    ) : null}
+                  </View>
+                  <Button
+                    label={t('family.reviewOpen')}
+                    variant="secondary"
+                    onPress={() =>
+                      router.push({
+                        pathname: '/family/review/[matchId]',
+                        params: { matchId: review.matchId },
+                      })
+                    }
+                  />
+                </View>
+              ))
+            )}
+          </SectionCard>
+        ) : null}
+
+        {/* --- my delegates -------------------------------------------- */}
+        <SectionCard title={t('family.membersTitle')} icon="person-add-outline" index={3}>
+          {loading ? null : members.length === 0 ? (
+            <EmptyState
+              icon="person-add-outline"
+              title={t('family.membersEmpty')}
+              body={t('family.inviteBody')}
+            />
+          ) : (
+            members.map((member) => (
+              <View key={member.id} style={styles.row} testID={`family-member-${member.id}`}>
+                <View style={styles.rowMain}>
+                  <Text style={[styles.rowTitle, { color: theme.colors.text }]}>
+                    {member.displayName ?? member.relationshipCode}
+                  </Text>
+                  {/* The grants they actually hold, never the tier's preset:
+                      showing a preset would tell someone they had revoked
+                      something they had not. */}
+                  <Text style={[styles.rowSub, { color: theme.colors.textMuted }]}>
+                    {member.permissions
+                      .map((p) => t(`family.perm${p.charAt(0).toUpperCase()}${p.slice(1)}`))
+                      .join(' · ')}
+                  </Text>
+                  {member.status === 'revoked' ? (
+                    <StatusBadge label={t('family.revoked')} tone="neutral" />
+                  ) : null}
+                </View>
+                {member.status === 'active' ? (
+                  <Button
+                    label={t('family.revoke')}
+                    variant="secondary"
+                    onPress={() => revoke(member.id, member.displayName ?? '')}
+                  />
+                ) : null}
+              </View>
+            ))
+          )}
+
+          <Button label={t('family.inviteCta')} onPress={() => router.push('/family/invite')} />
+        </SectionCard>
+
+        {/* --- the anti-coercion control ------------------------------- */}
+        <SectionCard title={t('family.accessLogTitle')} icon="eye-outline" index={4}>
+          <Text style={[styles.body2, { color: theme.colors.textMuted }]}>
+            {t('family.accessLogNote')}
+          </Text>
+          <Button
+            label={t('family.accessLogCta')}
+            variant="secondary"
+            onPress={() => router.push('/family/access-log')}
+          />
+        </SectionCard>
+
         <View style={[styles.footnote, { borderTopColor: theme.colors.border }]}>
           <Ionicons name="lock-closed-outline" size={iconSize.xs} color={theme.colors.textSubtle} />
           <Text style={[styles.footnoteText, { color: theme.colors.textSubtle }]}>
@@ -105,16 +290,29 @@ export default function FamilyScreen() {
 
 const styles = StyleSheet.create({
   body: { gap: spacing.md, marginTop: spacing.lg },
-  notice: {
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: spacing.lg,
+  gateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  gateState: { ...typography.bodyStrong, flex: 1, flexShrink: 1 },
+  body2: { ...typography.body, lineHeight: 23 },
+  warn: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     gap: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.md,
   },
-  noticeHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  noticeTitle: { ...typography.bodyStrong, flex: 1, flexShrink: 1 },
-  noticeBody: { ...typography.caption, lineHeight: 20 },
-  stepBody: { ...typography.body, lineHeight: 23 },
+  warnText: { ...typography.caption, flex: 1, lineHeight: 19 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  // flexShrink so a long name never pushes the action button off a 320dp
+  // screen, which is the width this product targets.
+  rowMain: { flex: 1, flexShrink: 1, gap: spacing.xs },
+  rowTitle: { ...typography.bodyStrong },
+  rowSub: { ...typography.caption, lineHeight: 19 },
   footnote: {
     flexDirection: 'row',
     alignItems: 'flex-start',

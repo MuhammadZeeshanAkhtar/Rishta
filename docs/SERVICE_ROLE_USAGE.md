@@ -317,6 +317,132 @@ statement and exactly one matches.
 
 ---
 
+### `family.invite`
+
+**Where:** [`routes/family.ts:276,405,517`](../services/api/src/routes/family.ts)
+
+**Why:** `family_invitations` is SELECT-only for members, and the write carries
+three rules no policy can express. The token is hashed before it is stored and
+returned raw exactly once; expiry comes from the 14-day TTL rather than the
+client; and accepting an invitation creates the relationship **and** its
+tier-preset grants in the same transaction. A half-accepted invitation —
+relationship written, permissions not — is a delegate who exists and can do
+nothing, which looks to the owner like a granted right that silently fails.
+
+**Safety:** the owner id comes from `app.current_user_id()` under the caller's
+own session. The invitee is identified by presenting the token, never by naming
+themselves in the body, and a wrong token is answered identically to a missing
+invitation so the endpoint cannot be used as an oracle for which ids exist.
+
+**Scope:** one `family_invitations` row, and on acceptance one
+`family_relationships` row with its grants.
+
+---
+
+### `family.manage_relationship`
+
+**Where:** [`routes/family.ts:219,568,624,696,760`](../services/api/src/routes/family.ts)
+
+**Why:** a member who could write `family_permissions` could grant themselves
+`approve_communication` over someone else and then decide that person's review.
+The route is also the only place that can refuse a permission whose phase has
+not arrived (ERD §12: rejected with 400, never accepted and ignored), and
+revocation must clear the relationship and its grants together — a revoked
+delegate whose permission rows survived would come back with old rights.
+
+The read paths under this key resolve display names from `users`, which is
+owner-only, confined by a join FROM the caller's own relationship rows.
+
+**Safety:** only the OWNER of a relationship may change it, checked against
+`app.current_user_id()` before the transaction opens.
+
+**Scope:** `family_relationships` and `family_permissions` for one relationship,
+plus `id` and `display_name` from `users`.
+
+---
+
+### `family.read_review_packet`
+
+**Where:** [`routes/family.ts:836,904`](../services/api/src/routes/family.ts)
+
+**Why:** `users` is owner-only and holds `date_of_birth`; the packet shows an
+AGE. The counterpart's profile is not readable by the delegate under any member
+policy — `app.can_view_profile()` answers no, because a delegate is not a
+participant in their principal's match.
+
+**Safety:** confined by `app.can_review_match()`, re-applied inside every query
+under this key. That predicate takes ONE match id and returns a boolean, so this
+path can confirm a specific pairing and **can never enumerate** — there is no
+form of the question that returns a set of people. A delegate holding
+`approve_communication` gets no directory, and the inbox query drops any row the
+predicate does not confirm rather than naming it.
+
+**Scope:** an enumerated projection — display name, derived age, country,
+marital status, education, occupation, religious practice, sect, about-me,
+verification, compatibility score and safety signals. Contact details, exact
+location, photos outside the principal's grants and the counterpart's other
+matches are absent by construction, not filtered out.
+
+---
+
+### `family.decide_review`
+
+**Where:** [`routes/family.ts:1046,1213`](../services/api/src/routes/family.ts)
+
+**Why:** ONE TRANSACTION covering `family_reviews`,
+`matches.communication_state` and the `match_events` row. None of the three is
+member-writable: a member who could write the match could move it past the
+Family Safety gate directly, and a decision recorded without its transition
+would leave the gate and the review disagreeing about whether anyone may speak.
+
+**Safety:** the decider is established from `app.can_review_match()` under the
+caller's own session before the transaction opens. The database independently
+refuses a decision by the owner (`family_reviews_decider_not_owner`), so D12
+row 2 does not depend on this route being correct. An approval only moves the
+match to `family_approved` when no other side is still pending.
+
+**Scope:** one review row, its match, one `match_events` row, one notification.
+
+---
+
+### `family.record_access`
+
+**Where:** [`routes/family.ts:103`](../services/api/src/routes/family.ts)
+
+**Why:** the anti-coercion control. Members hold SELECT on `family_access_log`
+and nothing else — an audit a delegate can write is not an audit, and a delegate
+who could delete a row could act unobserved, which is the precise harm R16
+describes.
+
+**Safety:** deliberately NOT inside the transaction that performs the action. An
+audit write that can roll back with the thing it audits is an audit that
+disappears exactly when something went wrong; and a failure to log must never be
+the reason an owner's own action fails, so it is best-effort and logged.
+
+**Scope:** insert only. There is no update or delete path for any role.
+
+---
+
+### `family.notify_stalled`
+
+**Where:** [`routes/family.ts:140`](../services/api/src/routes/family.ts)
+
+**Why:** D12-g — 72 hours, NOTIFY ONLY. `notifications` has no member INSERT
+path, and `family_reviews.sla_notified_at` is server state: a member who could
+write it could clear their own marker and warn the owner repeatedly, or set it
+and suppress the warning entirely, disabling the control that exists to surface
+a stalling delegate.
+
+**Safety:** the sweep changes no decision and cannot. There is no `expired`
+value to move a review into, because silence must not become consent and delay
+must not become a veto. `sla_notified_at` makes it idempotent under concurrent
+readers.
+
+**Scope:** sets `sla_notified_at` on the caller's own overdue reviews and
+inserts one notification each. Swept on read because pg-boss was deferred (ADR 0007) and a control that depends on a runner nobody built never fires.
+
+---
+
 ## Not on this list, deliberately
 
 | Operation       | Runs as  | Why                                                                                                         |

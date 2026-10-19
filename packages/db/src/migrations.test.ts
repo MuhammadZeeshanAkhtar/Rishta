@@ -301,11 +301,32 @@ describe('grants — the surface the Data API exposes', () => {
       'photos.storage_path',
       'verification_status.email_verified_at',
       'verification_status.phone_verified_at',
-      // Migration 0021 — the Family Safety gate's input (ADR 0011). Writable
-      // here, someone could choose `family_reviewed` before Phase 6b exists to
-      // open it and stall every match they make. It joins the grant in the
-      // slice that can honour it, not before.
-      'user_settings.communication_policy',
+      // `user_settings.communication_policy` WAS on this list, placed here by
+      // migration 0021 with the note that it "joins the grant in the slice
+      // that can honour it". Migration 0024 is that slice, so it is now
+      // member-writable and no longer belongs among server-owned columns.
+      // The property it was protecting — nobody picks a gate that cannot be
+      // opened — is now covered where it can actually be acted on, by
+      // `familyReviewersCount` on the account read.
+      //
+      // Phase 6b — the family layer is entirely server-owned. A member who
+      // could write any of these could grant themselves a right over someone
+      // else, decide their own review, or edit the audit of what they did.
+      'family_relationships.status',
+      'family_relationships.owner_user_id',
+      'family_relationships.delegate_user_id',
+      'family_permissions.permission',
+      'family_permissions.granted',
+      'family_permissions.relationship_id',
+      'family_invitations.token_hash',
+      'family_invitations.status',
+      'family_invitations.expires_at',
+      'family_reviews.decision',
+      'family_reviews.decided_by_user_id',
+      'family_reviews.sla_notified_at',
+      'family_access_log.action',
+      'family_access_log.permission',
+      'system_flags.enabled',
     ];
 
     // UPDATE only. INSERT on an ownership column is safe because the insert

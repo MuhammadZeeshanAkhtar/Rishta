@@ -204,6 +204,96 @@ export const SERVICE_ROLE_USES = [
   'safety.read_blocked_identities',
 
   /**
+   * Creating, re-offering and answering a family invitation.
+   *
+   * `family_invitations` is SELECT-only for members, and the write carries
+   * three rules no policy can express: the token is hashed before it is
+   * stored and returned raw exactly once, expiry is set from the invitation
+   * TTL rather than the client, and accepting one creates the relationship
+   * and its tier-preset grants in the SAME transaction. A half-accepted
+   * invitation — relationship written, permissions not — is a delegate who
+   * exists and can do nothing, which looks to the owner like a granted right
+   * that silently fails.
+   *
+   * The owner id comes from `app.current_user_id()` under the caller's own
+   * session; the invitee is identified by presenting the token, never by
+   * naming themselves in the body.
+   */
+  'family.invite',
+
+  /**
+   * Changing or revoking what a delegate holds.
+   *
+   * A member who could write `family_permissions` could grant themselves
+   * `approve_communication` over someone else and then decide that person's
+   * review. The route is also the only place that can refuse a permission
+   * whose phase has not arrived (ERD §12: rejected with 400, never accepted
+   * and ignored), and revocation must clear the relationship and its grants
+   * together or a revoked delegate keeps rights the owner believes are gone.
+   *
+   * Ownership is established before the transaction opens: only the OWNER of
+   * the relationship may change it, checked against `app.current_user_id()`.
+   */
+  'family.manage_relationship',
+
+  /**
+   * Building the review packet for one match.
+   *
+   * `users` is owner-only and holds `date_of_birth`; the packet shows an AGE.
+   * The counterpart's profile is not readable by the delegate under any
+   * member policy — `app.can_view_profile()` answers no, because a delegate
+   * is not a participant in their principal's match.
+   *
+   * CONFINED BY `app.can_review_match()`, which is re-applied inside every
+   * query under this key. That predicate takes ONE match id and returns a
+   * boolean, so this path can confirm a specific pairing and can never
+   * enumerate: there is no form of the question that returns a set of people.
+   * A delegate holding `approve_communication` gets no directory.
+   */
+  'family.read_review_packet',
+
+  /**
+   * Recording a review decision, and the match transition it causes.
+   *
+   * ONE TRANSACTION covering `family_reviews`, `matches.communication_state`
+   * and the `match_events` row. None of the three is member-writable: a
+   * member who could write the match could move it past the Family Safety
+   * gate directly, and a decision recorded without its transition would leave
+   * the gate and the review disagreeing about whether anyone may speak.
+   *
+   * The decider is established before the transaction opens, from
+   * `app.can_review_match()` under the caller's own session. The database
+   * independently refuses a decision by the owner
+   * (`family_reviews_decider_not_owner`), so D12 row 2 does not depend on
+   * this route being correct.
+   */
+  'family.decide_review',
+
+  /**
+   * Appending to `family_access_log`.
+   *
+   * The anti-coercion control. Members hold SELECT and nothing else — an
+   * audit a delegate can write is not an audit, and a delegate who could
+   * delete a row could act unobserved, which is the precise harm R16
+   * describes.
+   */
+  'family.record_access',
+
+  /**
+   * Warning an owner that a review has stalled past the SLA.
+   *
+   * D12-g: 72 hours, NOTIFY ONLY. `notifications` has no member INSERT path,
+   * and `family_reviews.sla_notified_at` is server state — a member who could
+   * write it could clear their own marker and warn the owner repeatedly, or
+   * set it and suppress the warning entirely, which would disable the control
+   * that exists to surface a stalling delegate.
+   *
+   * The sweep deliberately changes no decision. There is no `expired` value
+   * to move a review into, because silence must not become consent.
+   */
+  'family.notify_stalled',
+
+  /**
    * Claiming and releasing a discovery generation run.
    *
    * `discovery_generation_runs` has no member grant and no policy: it is

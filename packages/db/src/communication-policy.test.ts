@@ -19,10 +19,11 @@ import { createTestDb, seedReference, seedUser, type SeededUser, type TestDb } f
  *   3. unmatch → rematch resetting a gated pair to `open` — a laundering path
  *      that needs no cooperation from anyone.
  *
- * The policy is not member-writable yet, so these tests set it with `admin()`.
- * That is the point: the column exists so that provenance is right from the
- * first match onward, and the *setting* arrives with the slice that can honour
- * it.
+ * These tests set the policy with `admin()` because they are about the GATE
+ * rather than about who may flip it. Who may flip it changed in Phase 6b:
+ * migration 0024 added the column grant that 0021 deliberately withheld, and
+ * the assertions below cover both the new write path and the three things it
+ * must still refuse.
  */
 
 let db: TestDb;
@@ -126,19 +127,83 @@ describe('user_settings.communication_policy', () => {
     expect(await stored()).toBe('direct');
   });
 
-  it('is not member-writable — the omission from the grant list is the control', async () => {
-    // `user_settings` IS member-updatable, through a column allowlist the Data
-    // API reaches directly. If this column were on that list, someone could
-    // choose `family_reviewed` before any delegate exists to open it and stall
-    // every match they make.
-    const user = await seedUser(db, { displayName: 'NoGrant' });
+  it('became member-writable in the slice that can honour it (Phase 6b)', async () => {
+    // THIS ASSERTION WAS INVERTED ON PURPOSE, and it is worth being explicit
+    // about why rather than quietly deleting the old one.
+    //
+    // Migration 0021 withheld the grant and said so in the column comment:
+    // allowing `family_reviewed` before Phase 6b existed would let someone
+    // choose a gate NO DELEGATE COULD OPEN, stalling every match they made.
+    // It added: "It joins the update grant in the slice that can honour it."
+    //
+    // Migration 0024 is that slice. A delegate can now be invited, granted
+    // `approve_communication`, and can decide — so the setting means
+    // something. The old assertion is not weakened; the condition it was
+    // waiting for has arrived.
+    const user = await seedUser(db, { displayName: 'CanSet' });
+
+    // RETURNING, and asserted on the returned row: `db.as()` wraps every call
+    // in a transaction it ALWAYS rolls back, so nothing a member writes
+    // survives the call. Reading it back with admin() afterwards would assert
+    // on the pre-write value and pass whatever happened here.
+    const rows = await db.as<{ communication_policy: string }>(
+      'authenticated',
+      user.authUserId,
+      `update public.user_settings set communication_policy = 'family_reviewed'
+       returning communication_policy`,
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.communication_policy).toBe('family_reviewed');
+  });
+
+  it('still refuses every OTHER column of user_settings', async () => {
+    // The grant is column-scoped. Widening it to the table would hand a
+    // member `user_id`, which is the one column that decides whose row this
+    // is — the policy restricts WHICH rows, the grant restricts WHICH
+    // COLUMNS, and both are needed.
+    const user = await seedUser(db, { displayName: 'ColumnScoped' });
     await expect(
       db.as(
         'authenticated',
         user.authUserId,
-        `update public.user_settings set communication_policy = 'family_reviewed'`,
+        `update public.user_settings set user_id = gen_random_uuid()`,
       ),
     ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('still refuses a value outside the enum, member-written', async () => {
+    // The grant does not relax the constraint. A member can now choose
+    // between the two policies and cannot invent a third.
+    const user = await seedUser(db, { displayName: 'StillChecked' });
+    await expect(
+      db.as(
+        'authenticated',
+        user.authUserId,
+        `update public.user_settings set communication_policy = 'wali_only'`,
+      ),
+    ).rejects.toThrow(/user_settings_communication_policy_valid/);
+  });
+
+  it('still refuses writing ANOTHER member’s policy', async () => {
+    // The grant says which columns; `user_settings_select_own` and FORCE RLS
+    // say which rows. A member with the column grant still cannot reach
+    // somebody else's gate.
+    const [alice, bilal] = await pair();
+
+    // Zero rows returned is the assertion. The policy filtered Alice's row
+    // out of Bilal's UPDATE entirely, so there was nothing to change — and
+    // RETURNING is the only way to see that, since the surrounding
+    // transaction rolls back either way.
+    const rows = await db.as(
+      'authenticated',
+      bilal.authUserId,
+      `update public.user_settings set communication_policy = 'family_reviewed'
+        where user_id = $1::uuid
+       returning user_id`,
+      [alice.userId],
+    );
+    expect(rows).toEqual([]);
   });
 
   it('is readable by its owner and by nobody else', async () => {

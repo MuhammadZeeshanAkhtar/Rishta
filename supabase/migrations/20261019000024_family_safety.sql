@@ -449,6 +449,30 @@ alter table public.notifications
   );
 
 -- =============================================================================
+-- user_settings.communication_policy — the grant 0021 deferred to this slice
+--
+-- Migration 0021 added the column and deliberately WITHHELD the update grant:
+-- "allowing family_reviewed before Phase 6b exists would let someone choose a
+-- gate no delegate can open, stalling every match they make. It joins the
+-- update grant in the slice that can honour it."
+--
+-- This is that slice. A delegate can now be invited, granted
+-- approve_communication, and can decide — so an owner choosing the gate is
+-- choosing something that can actually be opened.
+--
+-- The remaining failure mode is an owner who turns review on with NO reviewer,
+-- which is a real way to stall every future match. It is answered where it can
+-- be acted on rather than refused here: `familyReviewersCount` on the account
+-- read reports how many delegates hold approve_communication, so the app can
+-- say so AT THE MOMENT the policy is set. Refusing the write instead would
+-- make the order of two independent settings load-bearing — invite first, or
+-- be rejected — and would leave an owner who revoked their last delegate
+-- permanently unable to express a preference they are entitled to hold.
+-- =============================================================================
+
+grant update (communication_policy) on public.user_settings to authenticated;
+
+-- =============================================================================
 -- app.family_grant — does this delegate hold this permission over this owner?
 --
 -- The single authority. Reads `family_permissions` through an ACTIVE

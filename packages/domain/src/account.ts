@@ -74,6 +74,18 @@ export const meSchema = z.object({
   sendReadReceipts: z.boolean(),
   incognito: z.boolean(),
   discoveryPaused: z.boolean(),
+  /** The owner's Family Safety gate (ADR 0011). */
+  communicationPolicy: z.enum(['direct', 'family_reviewed']),
+  /**
+   * Delegates currently holding `approve_communication`.
+   *
+   * Zero while the policy is `family_reviewed` means EVERY NEW MATCH WILL
+   * STALL, with nobody able to release it. The app has to say so at the
+   * moment the policy is set, not after the first match has sat unanswered —
+   * which is why this is a field on the account read rather than something a
+   * screen computes when it happens to remember to.
+   */
+  familyReviewersCount: z.number().int().min(0),
   verification: verificationStatusSchema,
 });
 export type Me = z.infer<typeof meSchema>;
@@ -93,6 +105,18 @@ export const userSettingsUpdateSchema = z
     sendReadReceipts: z.boolean(),
     incognito: z.boolean(),
     discoveryPaused: z.boolean(),
+    /**
+     * The owner's Family Safety gate (ADR 0011, D12 row 1).
+     *
+     * It lives here, among ordinary settings, because that is what it is: the
+     * owner's own choice, reversible by them at any time. Putting it behind a
+     * family-shaped endpoint would imply the family controls it, and the one
+     * thing R16 depends on is that they do not.
+     *
+     * Changing it never retroactively re-gates a live match — enforced in the
+     * schema by `app.gate_new_match_period()`, not by this type.
+     */
+    communicationPolicy: z.enum(['direct', 'family_reviewed']),
   })
   .partial();
 export type UserSettingsUpdate = z.infer<typeof userSettingsUpdateSchema>;

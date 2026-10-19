@@ -29,6 +29,8 @@ interface MeRow {
   send_read_receipts: boolean;
   incognito: boolean;
   discovery_paused: boolean;
+  communication_policy: Me['communicationPolicy'];
+  family_reviewers_count: number;
   email_verified_at: string | null;
   phone_verified_at: string | null;
   selfie_verified_at: string | null;
@@ -39,9 +41,22 @@ interface MeRow {
 const ME_SELECT = `
   select u.id, u.display_name, u.status, u.onboarding_step, u.profile_completed_at,
          s.locale, s.timezone, s.show_online_status, s.send_read_receipts,
-         s.incognito, s.discovery_paused,
+         s.incognito, s.discovery_paused, s.communication_policy,
          v.email_verified_at, v.phone_verified_at, v.selfie_verified_at,
-         v.id_verified_at, v.profile_reviewed_at
+         v.id_verified_at, v.profile_reviewed_at,
+         -- Counted here rather than in a second round trip: the app must warn
+         -- about a gate with nobody behind it AT THE MOMENT the policy is set,
+         -- and a count the client has to remember to ask for is a warning that
+         -- will eventually not be shown.
+         (
+           select count(*)::int
+             from public.family_relationships r
+             join public.family_permissions fp on fp.relationship_id = r.id
+            where r.owner_user_id = u.id
+              and r.status = 'active'
+              and fp.permission = 'approve_communication'
+              and fp.granted
+         ) as family_reviewers_count
   from public.users u
   join public.user_settings s on s.user_id = u.id
   join public.verification_status v on v.user_id = u.id
@@ -73,6 +88,8 @@ function toMe(row: MeRow): Me {
     sendReadReceipts: row.send_read_receipts,
     incognito: row.incognito,
     discoveryPaused: row.discovery_paused,
+    communicationPolicy: row.communication_policy,
+    familyReviewersCount: row.family_reviewers_count,
     verification: {
       emailVerified: row.email_verified_at !== null,
       phoneVerified: row.phone_verified_at !== null,
@@ -227,6 +244,7 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
         sendReadReceipts: 'send_read_receipts',
         incognito: 'incognito',
         discoveryPaused: 'discovery_paused',
+        communicationPolicy: 'communication_policy',
       };
 
       const assignments: string[] = [];
