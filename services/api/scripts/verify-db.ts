@@ -16,7 +16,10 @@
  * Exit code is 0 only when every check passes.
  */
 
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Client, type QueryResultRow } from 'pg';
+import { MIGRATIONS_DIR } from '@nikahmate/db';
 
 interface Check {
   name: string;
@@ -36,6 +39,7 @@ const EXPECTED_TABLES = [
   'blocks',
   'compatibility_factors',
   'compatibility_scores',
+  'discovery_generation_runs',
   'dismissed_profiles',
   'interest_events',
   'interests',
@@ -218,7 +222,53 @@ function diff(label: string, actual: string[], expected: string[]): void {
   fail(label, parts.join(' | '));
 }
 
+/**
+ * Is EXPECTED_TABLES itself still true?
+ *
+ * The list above is deliberately hand-written: it is an INDEPENDENT statement
+ * of what we believe the schema contains, which is what gives "UNEXPECTED:
+ * foo" its meaning. An independent statement that nobody re-checks is just a
+ * stale one, though, and when 0023 added `discovery_generation_runs` this
+ * script reported:
+ *
+ *   FAIL  tables in public — UNEXPECTED: discovery_generation_runs
+ *
+ * which reads as "your database has a table it should not have" — alarming,
+ * and wrong. The database was right; the list was out of date. Those two
+ * diagnoses deserve different words, so the list is now checked against the
+ * migrations before it is used to judge the database.
+ */
+async function expectedListIsCurrent(): Promise<void> {
+  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+  const created = new Set<string>();
+
+  for (const file of files) {
+    const sql = await readFile(join(MIGRATIONS_DIR, file), 'utf8');
+    for (const match of sql.matchAll(
+      /^\s*create\s+table\s+(?:if\s+not\s+exists\s+)?"?public"?\."?([a-z_][a-z0-9_]*)"?/gim,
+    )) {
+      if (match[1] !== undefined) created.add(match[1]);
+    }
+  }
+
+  const missing = [...created].filter((t) => !EXPECTED_TABLES.includes(t)).sort();
+  const removed = EXPECTED_TABLES.filter((t) => !created.has(t)).sort();
+
+  if (missing.length === 0 && removed.length === 0) {
+    pass('EXPECTED_TABLES matches the migrations', `${created.size} table(s)`);
+    return;
+  }
+
+  const parts: string[] = [];
+  if (missing.length) parts.push(`migrations create but list omits: ${missing.join(', ')}`);
+  if (removed.length) parts.push(`list names but no migration creates: ${removed.join(', ')}`);
+  fail('EXPECTED_TABLES matches the migrations', `${parts.join(' | ')} — update verify-db.ts`);
+}
+
 async function structural(client: Client): Promise<void> {
+  // Judge the list before judging the database with it.
+  await expectedListIsCurrent();
+
   // --- tables ---------------------------------------------------------------
   const { rows: tables } = await client.query<{ tablename: string }>(
     `select tablename from pg_tables where schemaname = 'public' order by tablename`,
