@@ -155,6 +155,11 @@ const FORBIDDEN_UPDATE_COLUMNS = [
 
 /** Tables permitted to carry any column-level grant at all. */
 const COLUMN_GRANTABLE_TABLES = [
+  // Phase 7: `insert (conversation_id, sender_user_id, body, kind)` only.
+  // `moderation_status`, `edited_at` and `deleted_at` are server state that
+  // report evidence depends on, and a member who could set
+  // `acted_by_user_id` could attribute their own words to a delegate.
+  'messages',
   // Phase 6 Slice 5: `update (read_at)` only, so marking a notification read
   // cannot become rewriting its type or payload.
   'notifications',
@@ -175,13 +180,30 @@ const EXPECTED_TABLE_GRANTS = [
   'blocks authenticated SELECT',
   'compatibility_factors authenticated SELECT',
   'compatibility_scores authenticated SELECT',
+  // Phase 7. SELECT is membership; the INSERT on `messages` is a COLUMN grant
+  // gated by `app.can_write_message()`, so it is checked in the column list
+  // rather than here.
+  'conversation_participants authenticated SELECT',
+  'conversation_stages authenticated SELECT',
+  'conversations authenticated SELECT',
   'dismissed_profiles authenticated DELETE',
   'dismissed_profiles authenticated INSERT',
   'dismissed_profiles authenticated SELECT',
+  // Phase 6b. SELECT only on every family table: an invitation must hash a
+  // token, a grant must be refused if its phase has not arrived, a review must
+  // be the first for its side, and an audit a delegate can write is not an
+  // audit. `system_flags` is absent on purpose — no member grant at all.
+  'family_access_log authenticated SELECT',
+  'family_invitations authenticated SELECT',
+  'family_permissions authenticated SELECT',
+  'family_relationships authenticated SELECT',
+  'family_reviews authenticated SELECT',
   'interests authenticated INSERT',
   'interests authenticated SELECT',
   'match_candidates authenticated SELECT',
   'matches authenticated SELECT',
+  'message_reads authenticated SELECT',
+  'messages authenticated SELECT',
   'notifications authenticated SELECT',
   'partner_preferences authenticated SELECT',
   'photo_variants authenticated SELECT',
