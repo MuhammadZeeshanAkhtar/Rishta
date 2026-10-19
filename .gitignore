@@ -42,3 +42,7 @@ coverage/
 
 # CI Expo export output
 .expo-ci-export/
+
+# Demo build scratch. The frames, the script and the exported mp4 are kept;
+# the intermediate clips and copied fonts are not.
+demo/.work/
