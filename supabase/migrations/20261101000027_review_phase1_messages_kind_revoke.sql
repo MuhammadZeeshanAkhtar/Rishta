@@ -1,0 +1,28 @@
+-- =============================================================================
+-- 0027 — Code review remediation, Phase 1: the last layer of B7 for messages
+--
+-- Members lose the column grant on `messages.kind`. A member insert through
+-- the Data API can then not name `kind` at all, and takes the default, 'text'.
+--
+-- WHY THIS IS ITS OWN MIGRATION. It was written into 0026 first. But the API
+-- released before Phase 1 names `kind` (as 'text') in its member insert, so
+-- revoking the column at the same time as the rest of 0026 would refuse every
+-- message send until the new API — which no longer names it — was deployed.
+-- Separated, the release has no broken window:
+--
+--   1. apply 0026      old API keeps working; the 0026 policy already refuses
+--                      any `kind` other than 'text' from a member
+--   2. deploy the API  stops naming `kind`
+--   3. apply 0027      this file
+--
+-- APPLY ONLY AFTER THE PHASE 1 API IS LIVE. Applied while the old API is still
+-- serving, every message send fails with "permission denied for table
+-- messages" until the API is deployed.
+--
+-- Defence in depth rather than the primary control: between steps 1 and 3 a
+-- member can name `kind`, but the policy accepts only 'text', which is the
+-- default anyway. This removes the column from the member's reach, so a future
+-- policy change cannot reopen system notices on its own.
+-- =============================================================================
+
+revoke insert (kind) on public.messages from authenticated;
