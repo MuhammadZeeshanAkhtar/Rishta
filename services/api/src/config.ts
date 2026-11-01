@@ -55,8 +55,19 @@ const schema = z.object({
   /** Server-only. Absent in development, which is fine. */
   SENTRY_DSN: z.string().url().optional(),
 
-  /** Requests per minute per client, before rate limiting kicks in. */
+  /**
+   * Requests per minute per MEMBER (per IP when unauthenticated), before rate
+   * limiting kicks in. Review B9: this was always per IP in practice.
+   */
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
+
+  /**
+   * The tighter per-member ceiling on the four routes that create something
+   * another person receives: messages, interests, reports and family
+   * invitations (review B9). A spammer is limited by this, not by the general
+   * budget a member spends scrolling Discover.
+   */
+  RATE_LIMIT_SENDS_PER_MINUTE: z.coerce.number().int().positive().default(30),
 
   /**
    * Browser origins allowed to call this API, comma-separated.

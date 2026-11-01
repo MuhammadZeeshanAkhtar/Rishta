@@ -4,7 +4,7 @@
   "description": "Worldwide Muslim matrimonial platform — monorepo root",
   "packageManager": "pnpm@11.21.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9"
   },
   "scripts": {
     "typecheck": "pnpm -r --no-bail typecheck",

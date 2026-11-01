@@ -426,8 +426,13 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
           kind: string;
           created_at: string;
         }>(
-          `insert into public.messages (conversation_id, sender_user_id, body, kind)
-           values ($1::uuid, app.current_user_id(), $2, 'text')
+          // `kind` is NOT named (review B7). Since migration 0027 members hold
+          // no grant on that column, so a member insert takes the default,
+          // 'text' — and the 0026 policy pins it there too. A member cannot
+          // post a message styled as a platform notice by any route. 0027 is
+          // applied only after this API is live: the previous API named it.
+          `insert into public.messages (conversation_id, sender_user_id, body)
+           values ($1::uuid, app.current_user_id(), $2)
            returning id, sender_user_id, body, kind, created_at`,
           [id, parsed.data.body.trim()],
         );

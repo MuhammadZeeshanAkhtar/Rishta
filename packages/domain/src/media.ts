@@ -26,6 +26,54 @@ export type PhotoModerationStatus = (typeof PHOTO_MODERATION_STATUSES)[number];
 export const PHOTO_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type PhotoContentType = (typeof PHOTO_CONTENT_TYPES)[number];
 
+/**
+ * Non-standard spellings platforms really emit for an accepted type.
+ *
+ * `image/jpg` is not a registered MIME type, but Android content resolvers and
+ * some browsers report it for ordinary JPEG files. Refusing it would reject
+ * perfectly good photos on a technicality. Nothing outside JPEG, PNG and WebP
+ * is aliased: the allowlist above is the whole of what the bucket accepts.
+ */
+const PHOTO_CONTENT_TYPE_ALIASES: Readonly<Record<string, PhotoContentType>> = {
+  'image/jpg': 'image/jpeg',
+};
+
+/**
+ * The content type to DECLARE for an upload, or null when it must not be sent.
+ *
+ * Takes candidates in order of authority — on mobile, the image picker's own
+ * `mimeType` first, then the type of the blob read from it — and resolves the
+ * FIRST one that is present. A later candidate is only consulted when an
+ * earlier one is missing or blank, never when it is merely unsupported: if the
+ * picker says the file is HEIC, a blob claiming JPEG does not make it so.
+ *
+ * Null means "do not upload". The caller refuses before asking the server for
+ * an upload target, because that request is what reserves a photo slot.
+ *
+ * REVIEW R1 (Phase 1 review). The app used to declare `image/jpeg` for every
+ * file. Once the server began checking the decoded format against the
+ * declaration (review B8), a PNG or WebP upload — certain on the web build,
+ * where the picker returns the original file — was rejected after upload and
+ * still occupied a slot. Declaring the truth is the fix; the server check
+ * stays strict.
+ */
+export function resolvePhotoContentType(
+  ...candidates: ReadonlyArray<string | null | undefined>
+): PhotoContentType | null {
+  const declared = candidates.find(
+    (candidate): candidate is string =>
+      typeof candidate === 'string' && candidate.trim().length > 0,
+  );
+  if (declared === undefined) return null;
+
+  // Parameters (`; charset=…`) and case are not part of the type.
+  const normalised = (declared.split(';')[0] ?? '').trim().toLowerCase();
+  if ((PHOTO_CONTENT_TYPES as readonly string[]).includes(normalised)) {
+    return normalised as PhotoContentType;
+  }
+  return PHOTO_CONTENT_TYPE_ALIASES[normalised] ?? null;
+}
+
 /** 10 MB, matching the bucket limit and the `photos_byte_size_sane` constraint. */
 export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 

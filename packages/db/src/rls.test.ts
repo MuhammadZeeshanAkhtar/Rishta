@@ -298,10 +298,14 @@ describe('user_settings (owner)', () => {
   });
 
   it('lets a member change their own settings', async () => {
+    // `discovery_paused` rather than `incognito`: since migration 0026
+    // (review B3) incognito is a paid entitlement and switching it on
+    // without one is refused — see review-phase1-rls.test.ts. This test's
+    // subject is the owner policy, so it uses a setting every member owns.
     const rows = await db.as(
       'authenticated',
       alice.authUserId,
-      `update public.user_settings set incognito = true returning incognito`,
+      `update public.user_settings set discovery_paused = true returning discovery_paused`,
     );
     expect(rows).toHaveLength(1);
   });

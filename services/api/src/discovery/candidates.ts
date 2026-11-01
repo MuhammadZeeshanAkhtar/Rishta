@@ -156,8 +156,13 @@ async function selectEligible(
   // --- always on -----------------------------------------------------------
   conditions.push(`p.user_id <> $1::uuid`);
   conditions.push(`p.deleted_at is null`);
-  // The Slice 1 predicate: blocks both ways, active account, approved profile.
-  conditions.push(`app.can_view_profile($1::uuid, p.user_id)`);
+  // The Slice 1 predicate — blocks both ways, active account, approved
+  // profile — narrowed for discovery by migration 0026 (review B3): a member
+  // who paused discovery is not generated into anyone's feed, and an
+  // incognito member only into the feeds of people they have expressed
+  // interest in. app.discoverable_to() calls can_view_profile() first, so
+  // nothing that predicate refused becomes visible here.
+  conditions.push(`app.discoverable_to($1::uuid, p.user_id)`);
   // "Not interested" is permanent (ERD §9), so a dismissed profile is dropped
   // at generation rather than filtered on every read.
   conditions.push(

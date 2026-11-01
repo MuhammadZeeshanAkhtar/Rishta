@@ -23,7 +23,7 @@
     "fastify-plugin": "^6.0.0",
     "jose": "^6.1.0",
     "pg": "^8.16.3",
-    "sharp": "^0.34.4",
+    "sharp": "^0.35.5",
     "zod": "^4.1.13"
   },
   "devDependencies": {

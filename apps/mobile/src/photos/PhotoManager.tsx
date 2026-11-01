@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import {
   MAX_PHOTOS_PER_USER,
   PHOTO_VISIBILITIES,
+  resolvePhotoContentType,
   type OwnPhoto,
   type PhotoVisibility,
 } from '@nikahmate/domain';
@@ -74,9 +75,24 @@ export function PhotoManager() {
       const response = await fetch(asset.uri);
       const blob = await response.blob();
 
+      // Declare what the file IS (Phase 1 review, R1). This used to be a
+      // hard-coded 'image/jpeg', and since the server checks the decoded
+      // format against the declaration (review B8), every PNG or WebP was
+      // rejected after upload. The picker's own type is authoritative; the
+      // blob's type is used only when the picker could not say.
+      //
+      // Refused HERE, before createPhotoUploadTarget — that call is what
+      // reserves a photo slot, and an upload the server will refuse must not
+      // cost the member one.
+      const contentType = resolvePhotoContentType(asset.mimeType, blob.type);
+      if (!contentType) {
+        setError(t('photos.unsupportedFormat'));
+        return;
+      }
+
       const client = getClient();
       const target = await client.createPhotoUploadTarget({
-        contentType: 'image/jpeg',
+        contentType,
         byteSize: blob.size,
       });
       await client.uploadPhotoBytes(target, blob);

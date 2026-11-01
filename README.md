@@ -36,7 +36,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 |          |                                                                                                          |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| Node     | **≥ 20** (CI runs 22; developed on 24)                                                                   |
+| Node     | **≥ 20.9** (sharp 0.35 needs it; CI runs 22; developed on 24)                                            |
 | pnpm     | **11** — `corepack enable && corepack prepare pnpm@11.21.0 --activate`                                   |
 | Supabase | One project for development. **Create a new one** — see [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) |
 

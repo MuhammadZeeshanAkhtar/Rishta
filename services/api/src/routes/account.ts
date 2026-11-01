@@ -10,6 +10,7 @@ import {
 import { requireAuthContext } from '../auth/plugin';
 import { badRequest, notFound } from '../errors';
 import type { Db, DbSession } from '../db/types';
+import { requireEntitlement } from '../entitlements/service';
 
 /**
  * Account routes: bootstrap, read and update.
@@ -41,7 +42,11 @@ interface MeRow {
 const ME_SELECT = `
   select u.id, u.display_name, u.status, u.onboarding_step, u.profile_completed_at,
          s.locale, s.timezone, s.show_online_status, s.send_read_receipts,
-         s.incognito, s.discovery_paused, s.communication_policy,
+         -- EFFECTIVE incognito (review B3): on AND currently entitled. A
+         -- member whose subscription lapsed is visible to discovery again,
+         -- and reporting the stored flag would tell them otherwise.
+         (s.incognito and app.has_entitlement_flag(u.id, 'incognito')) as incognito,
+         s.discovery_paused, s.communication_policy,
          v.email_verified_at, v.phone_verified_at, v.selfie_verified_at,
          v.id_verified_at, v.profile_reviewed_at,
          -- Counted here rather than in a second round trip: the app must warn
@@ -231,6 +236,25 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
 
     if (Object.keys(patch).length === 0) {
       throw badRequest('No settings supplied');
+    }
+
+    // REVIEW B3. Incognito is a paid entitlement (FREE_PLAN_ENTITLEMENTS has
+    // it false), and before this it could be switched on by anyone. Checked
+    // here so the client gets `entitlement_required` and can offer the
+    // upgrade; migration 0026 enforces the same rule in a trigger, which is
+    // what stops a member setting it through the Data API instead.
+    //
+    // Only switching it ON is gated. Switching it off never is, so a member
+    // whose entitlement lapsed is never trapped in a setting.
+    if (patch.incognito === true) {
+      const userId = await db.asUser(auth.authUserId, async (session) => {
+        const rows = await session.query<{ user_id: string | null }>(
+          `select app.current_user_id() as user_id`,
+        );
+        return rows[0]?.user_id ?? null;
+      });
+      if (!userId) throw notFound('No account for this session');
+      await requireEntitlement(db, auth.authUserId, userId, 'incognito');
     }
 
     return db.asUser(auth.authUserId, async (session) => {

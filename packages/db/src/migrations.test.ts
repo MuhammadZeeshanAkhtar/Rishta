@@ -158,6 +158,11 @@ describe('migrations apply', () => {
     );
     expect(rows).toEqual([
       { tgname: 'matches_gate_new_period', timing: 'before', events: 'insert,update' },
+      // Review B1 (0026). Refuses entry into family_approved while any review
+      // for the match is not approved. It never SETS the state, so the gate
+      // above is still the only trigger that decides a period's starting
+      // state — this one only refuses an illegal transition into approval.
+      { tgname: 'matches_guard_family_approval', timing: 'before', events: 'update' },
       // Phase 7. Runs AFTER, and only on the state column, so it observes the
       // gate the one above has already decided rather than racing it. It
       // creates the thread; it never changes communication_state, so the
@@ -242,7 +247,10 @@ describe('grants — the surface the Data API exposes', () => {
       'family_permissions authenticated SELECT',
       'family_relationships authenticated SELECT',
       'family_reviews authenticated SELECT',
-      'interests authenticated INSERT',
+      // `interests authenticated INSERT` was revoked by 0026 (review B7). The
+      // API has always sent through `interest.send`, which consumes the daily
+      // quota in the same transaction; the member grant only let the Data API
+      // skip the quota.
       'interests authenticated SELECT',
       'match_candidates authenticated SELECT',
       'matches authenticated SELECT',

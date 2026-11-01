@@ -112,19 +112,39 @@ export interface SqlRunner {
   exec(sql: string): Promise<unknown>;
 }
 
+export interface ApplyMigrationsOptions {
+  /**
+   * Stop after the migration whose filename starts with this prefix, as a
+   * database looks part-way through a release. Only for the tests that are
+   * ABOUT release ordering (review Phase 1: 0026, then the API, then 0027).
+   * Unknown prefixes throw rather than silently applying everything.
+   */
+  through?: string;
+}
+
 /**
  * Applies the Supabase shim and every migration, in filename order.
  *
  * Exported so the API test suite reuses exactly this — one definition of "set
  * up a database", rather than a second copy that can drift.
  */
-export async function applyMigrations(db: SqlRunner): Promise<void> {
+export async function applyMigrations(
+  db: SqlRunner,
+  options: ApplyMigrationsOptions = {},
+): Promise<void> {
   await db.exec(SUPABASE_SHIM);
 
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+  let files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
 
   if (files.length === 0) {
     throw new Error(`No migrations found in ${MIGRATIONS_DIR}`);
+  }
+
+  const { through } = options;
+  if (through !== undefined) {
+    const last = files.findIndex((f) => f.startsWith(through));
+    if (last === -1) throw new Error(`No migration starts with ${through}`);
+    files = files.slice(0, last + 1);
   }
 
   for (const file of files) {

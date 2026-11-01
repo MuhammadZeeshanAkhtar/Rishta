@@ -302,10 +302,18 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       if (!viewerUserId) throw notFound('Interest not found');
 
       return db.asService('interest.respond', async (session) => {
+        // FOR UPDATE (review B17). Without the lock, a double-tapped Accept
+        // ran two of these transactions side by side: both read `pending`,
+        // both passed the check below, and both wrote an `accepted` event and
+        // an acceptance notification. The match itself was safe behind its
+        // unique constraint; the audit trail and the other person's inbox
+        // were not. With the lock the second call waits, then reads the
+        // first one's answer and is refused with 409.
         const rows = await session.query<InterestRow>(
           `select id, sender_user_id, recipient_user_id, acted_by_user_id,
                   status, note, created_at, responded_at
-             from public.interests where id = $1::uuid`,
+             from public.interests where id = $1::uuid
+             for update`,
           [interestId],
         );
         const row = rows[0];
@@ -314,10 +322,22 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
         if (!row || row.recipient_user_id !== viewerUserId) {
           throw notFound('Interest not found');
         }
-        if (row.status !== 'pending') {
+
+        // REVIEW B4. "Maybe later" DEFERS a decision; it does not make one.
+        // This used to accept `pending` only, so an interest the recipient
+        // had deferred could never be accepted or declined again — and the
+        // unique index stopped the sender re-sending it. Deferring behaved
+        // as a silent, permanent decline. Both states are now answerable.
+        const answerable = row.status === 'pending' || row.status === 'maybe_later';
+        if (!answerable) {
           // Already resolved or withdrawn. The contract defines 409 here, and
           // answering 200 would write a second event for one decision.
           throw conflict('This interest has already been answered');
+        }
+        if (row.status === 'maybe_later' && parsed.data.decision === 'maybe_later') {
+          // Deferring something already deferred changes nothing, and would
+          // write a second `maybe_later` event for a single decision.
+          throw conflict('This interest is already set aside for later');
         }
 
         // Blocks, suspension and unapproval all at once, and in both
@@ -328,14 +348,21 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
         );
         if (!visible[0]?.ok) throw notFound('Interest not found');
 
+        // Conditional on the status just read (review B17). The row lock
+        // above already makes this unreachable, and that is the point: if a
+        // future change ever drops the lock, the second writer updates no row
+        // and is refused, rather than writing a duplicate event.
         const updated = await session.query<InterestRow>(
           `update public.interests
               set status = $2::text, responded_at = now()
-            where id = $1::uuid
+            where id = $1::uuid and status = $3::text
             returning id, sender_user_id, recipient_user_id, acted_by_user_id,
                       status, note, created_at, responded_at`,
-          [interestId, decision.status],
+          [interestId, decision.status, row.status],
         );
+        if (updated.length === 0) {
+          throw conflict('This interest has already been answered');
+        }
         await session.query(
           `insert into public.interest_events (interest_id, event, actor_user_id)
            values ($1::uuid, $2::text, $3::uuid)`,
@@ -657,8 +684,11 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       if (!viewerUserId) throw notFound('Interest not found');
 
       await db.asService('interest.send', async (session) => {
+        // FOR UPDATE, for the same reason as respond (review B17): a withdraw
+        // racing an accept must not both succeed.
         const rows = await session.query<{ sender_user_id: string; status: string }>(
-          `select sender_user_id, status from public.interests where id = $1::uuid`,
+          `select sender_user_id, status from public.interests where id = $1::uuid
+             for update`,
           [interestId],
         );
         const row = rows[0];
@@ -674,8 +704,10 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
           // second identical row.
           throw conflict('This interest has already been withdrawn');
         }
-        if (row.status !== 'pending') {
-          throw conflict('Only a pending interest can be withdrawn');
+        // REVIEW B4. A deferred interest is still the SENDER's to take back.
+        // Before this, `maybe_later` was a state neither side could leave.
+        if (row.status !== 'pending' && row.status !== 'maybe_later') {
+          throw conflict('Only an unanswered interest can be withdrawn');
         }
 
         await session.query(

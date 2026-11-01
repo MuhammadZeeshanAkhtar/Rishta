@@ -20,6 +20,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client, type QueryResultRow } from 'pg';
 import { MIGRATIONS_DIR } from '@nikahmate/db';
+import { phase1SecurityChecks } from './phase1-security-checks';
 
 interface Check {
   name: string;
@@ -198,7 +199,8 @@ const EXPECTED_TABLE_GRANTS = [
   'family_permissions authenticated SELECT',
   'family_relationships authenticated SELECT',
   'family_reviews authenticated SELECT',
-  'interests authenticated INSERT',
+  // `interests authenticated INSERT` revoked by 0026 (review B7): sending must
+  // consume the daily quota, which only the API's service-role path does.
   'interests authenticated SELECT',
   'match_candidates authenticated SELECT',
   'matches authenticated SELECT',
@@ -656,6 +658,11 @@ async function structural(client: Client): Promise<void> {
     'can_view_photo',
     'profile_visible_to',
     'photo_visible_to',
+    // Review B3 (0026). Discovery-only visibility, and the entitlement read it
+    // depends on. Both are called from RLS-scoped queries, so both must be
+    // SECURITY DEFINER to read other members' settings and entitlements.
+    'discoverable_to',
+    'has_entitlement_flag',
   ];
   const { rows: preds } = await client.query<{
     proname: string;
@@ -709,6 +716,17 @@ async function structural(client: Client): Promise<void> {
   for (const want of ['users_gender_immutable', 'users_minimum_age', 'users_touch']) {
     if (names.includes(want)) pass(`trigger ${want}`);
     else fail(`trigger ${want}`, 'missing');
+  }
+
+  // --- code review Phase 1 (migrations 0026, 0027) --------------------------
+  // In their own module so the test suite can run them against databases
+  // broken on purpose, and prove each one fails when it should.
+  const phase1 = await phase1SecurityChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of phase1) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
   }
 }
 

@@ -109,15 +109,48 @@ export async function buildApp({
     maxAge: 86_400,
   });
 
+  // Auth is registered BEFORE the limiter (review B9). The limiter keys on
+  // `app.authSubject()`, which must exist when its hooks are installed.
+  // Authentication itself stays opt-in per route: `authSubject` never rejects
+  // a request, it only tells the limiter who is asking.
+  await app.register(authPlugin, { verifier });
+
+  // The tighter ceiling for the routes that send something to another person.
+  // An onRoute hook rather than a `config` block on each route, so the list
+  // is in one place — and registered BEFORE the limiter, because the limiter
+  // reads `config.rateLimit` in its own onRoute hook and hooks run in
+  // registration order.
+  const sendRoutes = new Set([
+    'POST /conversations/:id/messages',
+    'POST /interests',
+    'POST /reports',
+    'POST /family/invitations',
+  ]);
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    if (methods.some((method) => sendRoutes.has(`${method} ${route.url}`))) {
+      route.config = {
+        ...route.config,
+        rateLimit: { max: config.RATE_LIMIT_SENDS_PER_MINUTE, timeWindow: '1 minute' },
+      };
+    }
+  });
+
   await app.register(rateLimit, {
     max: config.RATE_LIMIT_PER_MINUTE,
     timeWindow: '1 minute',
-    // Keyed by authenticated subject where available, so one shared NAT does
-    // not throttle an entire office or campus.
-    keyGenerator: (request) => request.auth?.authUserId ?? request.ip,
+    // REVIEW B9. Keyed by the VERIFIED member where there is one, so a shared
+    // NAT — a mobile carrier, an office, a campus — does not put everyone
+    // behind it in one bucket. This used to read `request.auth`, which is not
+    // set until `requireAuth` runs in the route's preHandler, long after this
+    // runs in onRequest: every caller was keyed by IP, and the comment here
+    // claimed the opposite. Prefixed so a user id can never collide with an
+    // address.
+    keyGenerator: async (request) => {
+      const subject = await app.authSubject(request);
+      return subject ? `user:${subject}` : `ip:${request.ip}`;
+    },
   });
-
-  await app.register(authPlugin, { verifier });
 
   // ---------------------------------------------------------------------------
   // Error handling is installed BEFORE any route.

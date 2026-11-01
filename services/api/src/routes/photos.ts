@@ -40,13 +40,15 @@ interface PhotoRow {
   width: number | null;
   height: number | null;
   storage_path: string;
+  /** What the upload target was issued for — checked against the decoded file. */
+  content_type: string;
   created_at: string;
   thumb_path: string | null;
 }
 
 const PHOTO_SELECT = `
   select p.id, p.visibility, p.position, p.is_primary, p.moderation_status,
-         p.rejection_reason_key, p.width, p.height, p.storage_path,
+         p.rejection_reason_key, p.width, p.height, p.storage_path, p.content_type,
          ${isoTimestamp('p.created_at')} as created_at,
          (select v.storage_path from public.photo_variants v
            where v.photo_id = p.id and v.variant = 'thumb') as thumb_path
@@ -223,7 +225,10 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
 
       let dimensions;
       try {
-        dimensions = await readDimensions(original);
+        // The declared type travels with the check (review B8): a file
+        // uploaded as JPEG that decodes as anything else is refused here,
+        // before generateVariants() hands it to a second decoder.
+        dimensions = await readDimensions(original, photo.content_type);
       } catch {
         // Not a decodable image. The row is marked rejected rather than left
         // pending, so it cannot sit in the moderation queue forever.

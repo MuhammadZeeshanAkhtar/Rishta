@@ -108,7 +108,11 @@ const CARD_SELECT = `
     and m.section_key = $2::text
     and m.candidate_user_id <> $1::uuid
     and p.deleted_at is null
-    and app.can_view_profile($1::uuid, m.candidate_user_id)
+    -- discoverable_to, not can_view_profile (review B3). Candidates are
+    -- precomputed, so a member who paused or went incognito AFTER generation
+    -- must drop out at read time as well — otherwise pausing would take up
+    -- to a cooldown to take effect, which is exactly when it matters most.
+    and app.discoverable_to($1::uuid, m.candidate_user_id)
     and not exists (
       select 1 from public.dismissed_profiles d
        where d.user_id = $1::uuid and d.target_user_id = m.candidate_user_id
@@ -309,11 +313,17 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     // Ordered newest first, with the id as a tiebreak so the keyset is total.
     const saved = await db.asUser(auth.authUserId, (session) =>
       session.query<{ target_user_id: string; position: number }>(
+        // Filtered by app.discoverable_to (review B3). The shortlist is a
+        // discovery surface — you save from Discover — so a member who paused
+        // or went incognito leaves it too. Filtered HERE rather than in the
+        // card query, because CARDS_BY_USER_IDS is shared with interests and
+        // matches, where a paused member must stay visible.
         `select target_user_id,
                 (row_number() over (order by created_at desc, target_user_id))::int - 1
                   as position
            from public.shortlists
-          where user_id = $1::uuid`,
+          where user_id = $1::uuid
+            and app.discoverable_to($1::uuid, target_user_id)`,
         [viewerUserId],
       ),
     );

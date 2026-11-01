@@ -1,5 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
-import { applyMigrations } from '@nikahmate/db';
+import { applyMigrations, type ApplyMigrationsOptions } from '@nikahmate/db';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import type { Config } from '../src/config';
@@ -84,6 +84,7 @@ const TEST_CONFIG: Config = {
   SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
   SENTRY_DSN: undefined,
   RATE_LIMIT_PER_MINUTE: 10_000,
+  RATE_LIMIT_SENDS_PER_MINUTE: 10_000,
   CORS_ALLOWED_ORIGINS: undefined,
   jwksUrl: 'https://test.supabase.co/auth/v1/.well-known/jwks.json',
 };
@@ -167,14 +168,29 @@ function createPgliteDb(pg: PGlite, serviceUses: ServiceRoleUse[]): Db {
   };
 }
 
-export async function createHarness(): Promise<TestHarness> {
+/**
+ * `overrides` exists for the tests that are ABOUT configuration — the rate
+ * limiter needs a ceiling small enough to reach. `migrations` exists for the
+ * tests that are about release ORDER, which need a database part-way through a
+ * release. Every other suite calls this with no argument and gets the
+ * permissive defaults above and every migration.
+ */
+export async function createHarness(
+  overrides: Partial<Config> = {},
+  migrations: ApplyMigrationsOptions = {},
+): Promise<TestHarness> {
   const pg = new PGlite();
-  await applyMigrations(pg);
+  await applyMigrations(pg, migrations);
 
   const serviceUses: ServiceRoleUse[] = [];
   const db = createPgliteDb(pg, serviceUses);
   const storage = createMemoryStorage();
-  const app = await buildApp({ config: TEST_CONFIG, db, verifier: testVerifier, storage });
+  const app = await buildApp({
+    config: { ...TEST_CONFIG, ...overrides },
+    db,
+    verifier: testVerifier,
+    storage,
+  });
   await app.ready();
 
   return {
