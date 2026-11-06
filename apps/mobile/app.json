@@ -6,10 +6,9 @@
     "orientation": "portrait",
     "scheme": "nikahmate",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "android": {
       "package": "com.nikahmate.app",
-      "edgeToEdgeEnabled": true,
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#03291F"
