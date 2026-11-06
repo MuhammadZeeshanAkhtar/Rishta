@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
 import { NikahMateClient } from '@nikahmate/api-client';
 import { secureStorage } from '../session/secureStorage';
@@ -127,9 +128,14 @@ export function getClient(): NikahMateClient {
       publishableKey: config.publishableKey,
       apiBaseUrl: config.apiBaseUrl,
       storage: secureStorage,
-      // Matches `scheme` in app.json, and must be registered under
-      // Authentication -> URL Configuration in the Supabase dashboard.
-      redirectTo: 'nikahmate://auth/callback',
+      // REVIEW B18. Where an email link returns to, by platform: the web
+      // build's own origin on web, `nikahmate://` in a standalone build,
+      // `exp://…/--/` in a dev client — expo-linking builds each. It was
+      // hard-wired to the mobile scheme, so the web build only worked through
+      // Supabase's Site URL fallback. Every value must be listed under
+      // Authentication -> URL Configuration -> Redirect URLs in the Supabase
+      // dashboard (an external setting, not in this repository).
+      redirectTo: Linking.createURL('auth/callback'),
       getLocale: () => localeReader(),
     });
   }

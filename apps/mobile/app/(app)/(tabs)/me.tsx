@@ -175,6 +175,20 @@ export default function MeScreen() {
           onPress={() => router.push('/(app)/edit-preferences')}
           testID="me-edit-preferences"
         />
+        <ActionRow
+          icon="images-outline"
+          label={t('photoRequests.openRow')}
+          sublabel={t('photoRequests.openRowHint')}
+          onPress={() => router.push('/(app)/photo-requests')}
+          testID="me-photo-requests"
+        />
+        <ActionRow
+          icon="calendar-outline"
+          label={t('dobCorrection.openRow')}
+          sublabel={t('dobCorrection.openRowHint')}
+          onPress={() => router.push('/(app)/dob-correction')}
+          testID="me-dob-correction"
+        />
       </View>
 
       {/* Separated by space and a rule rather than by colour. Signing out is

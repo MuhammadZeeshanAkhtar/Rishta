@@ -91,6 +91,28 @@ export default function ChatScreen() {
     ]);
   }, [conversationId, t]);
 
+  // REVIEW B24. Blocking from inside the conversation. The profile screen's
+  // safety menu cannot help when the counterpart's profile is no longer
+  // viewable (suspended, unapproved) — which is when a block may be needed
+  // most. The API now allows blocking anyone the member has a match with.
+  const counterpartUserId = detail?.counterpartUserId ?? null;
+  const block = useCallback(() => {
+    if (!counterpartUserId) return;
+    Alert.alert(t('chat.block'), t('chat.blockConfirm'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        text: t('chat.block'),
+        style: 'destructive',
+        onPress: () => {
+          void getClient()
+            .blockUser(counterpartUserId)
+            .then(() => reload())
+            .catch(() => undefined);
+        },
+      },
+    ]);
+  }, [counterpartUserId, reload, t]);
+
   const closedReason = detail?.writeBlockedReason ?? null;
   const closedCopy = closedReason
     ? t(`chat.closed${closedReason.charAt(0).toUpperCase()}${closedReason.slice(1)}`)
@@ -120,6 +142,14 @@ export default function ChatScreen() {
                   </Text>
                 </Pressable>
               ) : null}
+              <Pressable
+                onPress={block}
+                accessibilityRole="button"
+                accessibilityLabel={t('chat.block')}
+                testID="chat-block"
+              >
+                <Ionicons name="ban-outline" size={iconSize.sm} color={theme.colors.textSubtle} />
+              </Pressable>
               <Pressable onPress={leave} accessibilityRole="button" testID="chat-leave">
                 <Ionicons name="exit-outline" size={iconSize.sm} color={theme.colors.textSubtle} />
               </Pressable>

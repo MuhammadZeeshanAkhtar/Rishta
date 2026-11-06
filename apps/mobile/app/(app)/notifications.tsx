@@ -125,6 +125,11 @@ export default function NotificationsScreen() {
       else if (notification.type === 'interest_received') router.push('/(app)/(tabs)/interests');
       else if (notification.type === 'interest_accepted' && data.actorUserId) {
         router.push(`/(app)/profile/${data.actorUserId}`);
+      } else if (
+        notification.type === 'photo_request' ||
+        notification.type === 'photo_request_answered'
+      ) {
+        router.push('/(app)/photo-requests');
       }
     },
     [markRead, router],
@@ -240,7 +245,9 @@ function NotificationItem({
         ? 'checkmark-circle'
         : notification.type === 'security_alert'
           ? 'shield-checkmark'
-          : 'mail-outline';
+          : notification.type === 'photo_request' || notification.type === 'photo_request_answered'
+            ? 'images-outline'
+            : 'mail-outline';
 
   return (
     <Pressable

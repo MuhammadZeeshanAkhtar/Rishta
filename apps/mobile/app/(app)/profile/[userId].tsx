@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import type { CompatibilityExplanation, CompatibilityScore } from '@nikahmate/domain';
+import type {
+  CompatibilityExplanation,
+  CompatibilityScore,
+  ProfilePhotos,
+  PublicProfile,
+} from '@nikahmate/domain';
+import { isNikahMateError } from '@nikahmate/api-client';
 import { Banner } from '../../../src/components/Banner';
 import { Button } from '../../../src/components/Button';
 import { CompatibilityBadge } from '../../../src/components/CompatibilityBadge';
+import { EmptyState } from '../../../src/components/EmptyState';
+import { ExpandableText } from '../../../src/components/ExpandableText';
 import { ChipRow, InfoChip } from '../../../src/components/InfoChip';
 import { SectionCard } from '../../../src/components/SectionCard';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
@@ -15,44 +23,38 @@ import { SafetyMenu } from '../../../src/safety/SafetyMenu';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
 import { ProfileHero } from '../../../src/profile/ProfileHero';
 import { ProfileHighlights, type Highlight } from '../../../src/profile/ProfileHighlights';
+import { publicProfileView, type LabelOf } from '../../../src/profile/publicProfileView';
+import { ProfilePhotoGallery } from '../../../src/photos/ProfilePhotoGallery';
+import { galleryView } from '../../../src/photos/photoAccess';
+import { useReference } from '../../../src/reference/useReference';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 import { getClient } from '../../../src/api/client';
 import { describeError } from '../../../src/lib/errors';
 import { MIN_TOUCH_TARGET, layout, radius, spacing, typography } from '../../../src/theme/tokens';
 
 /**
- * Someone else's profile.
+ * Someone else's profile (review L4, with L3 photos).
  *
  * A DIFFERENT SCREEN FROM `/me`, DELIBERATELY. The owner's profile is a
  * portrait plus the things you can change about it; this one is a portrait
- * plus the case for the two of you, and it ends in a decision. Reusing the
- * owner layout here would put "Edit profile" on a stranger's page, and more
- * subtly it would imply the same fields are on show in both directions. They
- * are not.
+ * plus the case for the two of you, and it ends in a decision.
  *
- * WHAT IT CAN SHOW, AND WHY THAT IS LESS THAN THE OWNER'S OWN PROFILE. There
- * is no public profile-detail endpoint, and that is the privacy model working
- * rather than a gap to route around: the server exposes another member only as
- * a `ProfileCard` built from an enumerated allowlist — name, age, country,
- * city if they chose city precision, photo, verification, compatibility — plus
- * the compatibility pair. Faith, marriage, education and lifestyle are NOT in
- * that allowlist, so there is nothing here to render them from. They are
- * deliberately absent rather than present and empty: four headings over "Not
- * stated" would read as a person who said nothing, when in fact the server
- * declined to say.
+ * WHAT IT SHOWS IS WHAT THE SERVER RETURNED. `GET /profiles/{userId}` applies
+ * the member's per-field visibility for THIS viewer — public, matched-only,
+ * on-request and private — and leaves out what this viewer may not see. The
+ * screen renders present fields only (`publicProfileView`), never "Not
+ * stated", never a default; it says how many fields were withheld, because
+ * four missing headings would read as a person who said nothing.
  *
- * SO COMPATIBILITY CARRIES THE SUBSTANCE, and it is more than a number. The
- * breakdown names the dimensions the engine actually compared, which is the
- * only honest way to describe someone whose details are withheld: not "she is
- * practising" but "you scored closely on faith and practice".
+ * PHOTOS come from `GET /profiles/{userId}/photos`: only objects this viewer
+ * may read, signed with their own token. Blurred is a server-made file.
  *
- * DIFFERENCES ARE SHOWN. The contract is explicit that a one-sided explanation
- * is a sales pitch rather than information, and on a decision this
- * consequential that matters more than looking flattering.
+ * UNAVAILABLE IS ONE STATE. Blocked either way, suspended, unreviewed or
+ * deleted all arrive as 404 and all read the same — the screen never says
+ * which, because saying "blocked" would tell someone they were blocked.
  *
- * THE HERO COMES FROM THE CARD THE LIST ALREADY HELD. Opened cold — a deep
- * link, a restart — there is no card, and the screen degrades to the
- * compatibility it can fetch rather than inventing a name.
+ * COMPATIBILITY still carries the substance it always did, and differences
+ * are shown: a one-sided explanation is a sales pitch.
  */
 export default function ProfileDetailScreen() {
   const { t } = useLocale();
@@ -61,45 +63,110 @@ export default function ProfileDetailScreen() {
   const insets = useSafeAreaInsets();
   const { userId } = useLocalSearchParams<{ userId: string }>();
 
+  const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [photos, setPhotos] = useState<ProfilePhotos | null>(null);
   const [score, setScore] = useState<CompatibilityScore | null>(null);
   const [explanation, setExplanation] = useState<CompatibilityExplanation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
 
-  // Whatever the list that brought us here had. Resolved once: a re-read
-  // mid-render could swap the name under the reader.
+  // What the list that brought us here had: a name to show while loading.
+  // Never used for a field the profile response withholds.
   const card = useMemo(() => recallCard(userId), [userId]);
   const [shortlisted, setShortlisted] = useState(card?.isShortlisted ?? false);
 
-  useEffect(() => {
+  const countries = useReference('country').items;
+  const marital = useReference('marital_status').items;
+  const practices = useReference('religious_practice').items;
+  const timelines = useReference('marriage_timeline').items;
+  const relocations = useReference('relocation_option').items;
+  const languages = useReference('language').items;
+
+  const labelOf: LabelOf = useCallback(
+    (type, code) => {
+      const items = {
+        country: countries,
+        marital_status: marital,
+        religious_practice: practices,
+        marriage_timeline: timelines,
+        relocation_option: relocations,
+        language: languages,
+      }[type];
+      return items.find((item) => item.code === code)?.label ?? code;
+    },
+    [countries, marital, practices, timelines, relocations, languages],
+  );
+
+  const load = useCallback(async () => {
     if (!userId) return;
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        // Both at once: the breakdown needs them together, and two serial
-        // round trips on a slow connection is a visible pause.
-        const [nextScore, nextExplanation] = await Promise.all([
-          getClient().getCompatibility(userId),
-          getClient().getCompatibilityExplanation(userId),
-        ]);
-        if (cancelled) return;
-        setScore(nextScore);
-        setExplanation(nextExplanation);
-        setError(null);
-      } catch (err) {
-        if (!cancelled) setError(describeError(err, t).message);
-      } finally {
-        if (!cancelled) setLoading(false);
+    try {
+      const next = await getClient().getPublicProfile(userId);
+      setProfile(next);
+      setUnavailable(false);
+      setError(null);
+      // Fire and forget: "who viewed me" is a courtesy to the owner, never a
+      // reason to fail this screen.
+      void getClient()
+        .recordProfileView(userId)
+        .catch(() => undefined);
+    } catch (err) {
+      if (isNikahMateError(err) && err.kind === 'not_found') {
+        setUnavailable(true);
+        setProfile(null);
+      } else {
+        setError(describeError(err, t).message);
       }
-    })();
+      setLoading(false);
+      return;
+    }
 
-    return () => {
-      cancelled = true;
-    };
+    // Photos and compatibility in parallel; each degrades on its own.
+    const [nextPhotos, nextScore, nextExplanation] = await Promise.allSettled([
+      getClient().getProfilePhotos(userId),
+      getClient().getCompatibility(userId),
+      getClient().getCompatibilityExplanation(userId),
+    ]);
+    if (nextPhotos.status === 'fulfilled') setPhotos(nextPhotos.value);
+    if (nextScore.status === 'fulfilled') setScore(nextScore.value);
+    if (nextExplanation.status === 'fulfilled') setExplanation(nextExplanation.value);
+    setLoading(false);
   }, [t, userId]);
+
+  // Signed photo URLs last five minutes: re-read whenever the screen returns.
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  useEffect(() => {
+    setLoading(true);
+  }, [userId]);
+
+  const requestPhotos = useCallback(
+    async (message: string | undefined) => {
+      if (!userId) return;
+      setError(null);
+      try {
+        await getClient().requestPhotos(userId, message);
+        setNotice(t('photoAccess.sent'));
+        setPhotos(await getClient().getProfilePhotos(userId));
+      } catch (err) {
+        const described = describeError(err, t);
+        setError(
+          described.fields?.message === 'contact_details_not_allowed'
+            ? t('photoAccess.contactDetails')
+            : described.message,
+        );
+        throw err;
+      }
+    },
+    [t, userId],
+  );
 
   const expressInterest = useCallback(async () => {
     if (!userId) return;
@@ -117,8 +184,6 @@ export default function ProfileDetailScreen() {
 
   const toggleShortlist = useCallback(async () => {
     if (!userId) return;
-    // Optimistic, and reverted on failure: saving a profile is a low-stakes
-    // action and waiting a round trip for the bookmark to fill in feels broken.
     const next = !shortlisted;
     setShortlisted(next);
     try {
@@ -131,23 +196,47 @@ export default function ProfileDetailScreen() {
 
   if (!userId) return null;
 
-  const place = [card?.cityName, card?.countryCode?.toUpperCase()]
-    .filter((part): part is string => Boolean(part))
-    .join(', ');
+  if (unavailable) {
+    return (
+      <View
+        style={[
+          styles.root,
+          styles.centre,
+          { backgroundColor: theme.colors.background, paddingTop: insets.top },
+        ]}
+      >
+        <EmptyState
+          icon="eye-off-outline"
+          title={t('publicProfile.unavailableTitle')}
+          body={t('publicProfile.unavailableBody')}
+          actionLabel={t('common.back')}
+          onAction={() => router.back()}
+        />
+      </View>
+    );
+  }
 
-  const meta =
-    [card?.age !== null && card?.age !== undefined ? String(card.age) : null, place || null]
-      .filter((part): part is string => Boolean(part))
-      .join(' · ') || null;
-
+  const view = profile
+    ? publicProfileView(profile, labelOf, {
+        hasChildren: t('profile.display.hasChildren'),
+        noChildren: t('profile.display.noChildren'),
+      })
+    : null;
+  const displayName = view?.displayName ?? card?.displayName ?? null;
+  const firstName = (displayName ?? '').trim().split(/\s+/)[0] || t('profile.someone');
+  const age = view?.facts.find((f) => f.key === 'age')?.value ?? null;
+  const country = view?.facts.find((f) => f.key === 'country')?.value ?? null;
+  const meta = [age, country].filter((p): p is string => Boolean(p)).join(' · ') || null;
   const overall = score?.overall ?? card?.compatibilityScore ?? null;
+  const portrait = galleryView(photos).shown[0]?.url ?? null;
+  const badges = profile?.verification.badges ?? card?.verification.badges ?? [];
+  const details = (view?.facts ?? []).filter((f) => f.key !== 'age' && f.key !== 'country');
 
-  // Only facts the card actually carries. No placeholders.
   const highlights: Highlight[] = [
     {
       key: 'place',
       icon: 'location-outline',
-      value: place || null,
+      value: country,
       caption: t('profile.display.livesIn'),
     },
     {
@@ -160,8 +249,8 @@ export default function ProfileDetailScreen() {
       key: 'verified',
       icon: 'shield-checkmark-outline',
       value:
-        card && card.verification.badges.length > 0
-          ? t('profile.verifiedCount').replace('{{count}}', String(card.verification.badges.length))
+        badges.length > 0
+          ? t('profile.verifiedCount').replace('{{count}}', String(badges.length))
           : null,
       caption: t('profile.verified'),
     },
@@ -181,31 +270,23 @@ export default function ProfileDetailScreen() {
       >
         <ProfileHero
           userId={userId}
-          displayName={card?.displayName ?? t('profile.someone')}
+          displayName={displayName ?? t('profile.someone')}
           meta={meta}
-          photoUri={card?.primaryPhoto?.url ?? null}
+          photoUri={portrait}
           insetTop={insets.top}
           badge={
-            // Compatibility and the safety menu share the top-right slot. The
-            // menu is always present: being unable to report someone until
-            // they have been scored would be exactly backwards.
             <View style={styles.heroActions}>
               {overall !== null ? <CompatibilityBadge score={overall} size="md" onDark /> : null}
               <SafetyMenu
                 userId={userId}
-                displayName={card?.displayName ?? null}
-                // Leaves the screen: the person is now invisible to this
-                // member, so staying on their profile would show a page that
-                // can no longer be reloaded.
+                displayName={displayName}
                 onBlocked={() => router.back()}
                 testID="profile-detail-safety"
               />
             </View>
           }
           pill={
-            card && card.verification.badges.length > 0
-              ? { label: t('profile.verified'), icon: 'shield-checkmark' }
-              : null
+            badges.length > 0 ? { label: t('profile.verified'), icon: 'shield-checkmark' } : null
           }
           leading={
             <Pressable
@@ -223,26 +304,61 @@ export default function ProfileDetailScreen() {
         <ProfileHighlights items={highlights} />
 
         {error ? <Banner tone="error" message={error} /> : null}
+        {notice ? <Banner tone="success" message={notice} /> : null}
 
-        {/* --- compatibility, which is the substance here ------------------ */}
-        {loading ? (
-          <SectionCard
-            title={t('compatibility.title')}
-            subtitle={t('compatibility.subtitle')}
-            icon="sparkles"
-          >
-            <SkeletonBlock height={18} width="70%" />
-            <SkeletonBlock height={18} width="55%" />
-            <SkeletonBlock height={18} width="62%" />
+        {loading && !profile ? (
+          <SectionCard title={t('publicProfile.aboutTitle')} icon="person-outline">
+            <SkeletonBlock height={18} width="80%" />
+            <SkeletonBlock height={18} width="60%" />
           </SectionCard>
-        ) : explanation && explanation.reasons.length + explanation.differences.length > 0 ? (
+        ) : null}
+
+        {view?.aboutMe ? (
+          <SectionCard
+            title={t('profile.display.aboutName').replace('{{name}}', firstName)}
+            icon="person-outline"
+            testID="profile-detail-about"
+          >
+            <ExpandableText
+              text={view.aboutMe}
+              moreLabel={t('common.more')}
+              lessLabel={t('common.less')}
+            />
+          </SectionCard>
+        ) : null}
+
+        {details.length > 0 ? (
+          <SectionCard
+            title={t('publicProfile.detailsTitle')}
+            icon="list-outline"
+            testID="profile-detail-facts"
+          >
+            <ChipRow>
+              {details.map((fact) => (
+                <InfoChip
+                  key={fact.key}
+                  prefix={t(`publicProfile.fact.${fact.key}`)}
+                  label={fact.value}
+                />
+              ))}
+            </ChipRow>
+          </SectionCard>
+        ) : null}
+
+        <ProfilePhotoGallery
+          photos={photos}
+          name={firstName}
+          onRequest={requestPhotos}
+          testID="profile-detail-photos"
+        />
+
+        {explanation && explanation.reasons.length + explanation.differences.length > 0 ? (
           <>
             {explanation.reasons.length > 0 ? (
               <SectionCard
                 title={t('compatibility.reasons')}
                 subtitle={t('compatibility.reasonsSubtitle')}
                 icon="sparkles"
-                index={0}
                 testID="profile-detail-reasons"
               >
                 <ChipRow>
@@ -257,13 +373,11 @@ export default function ProfileDetailScreen() {
                 </ChipRow>
               </SectionCard>
             ) : null}
-
             {explanation.differences.length > 0 ? (
               <SectionCard
                 title={t('compatibility.differences')}
                 subtitle={t('compatibility.differencesSubtitle')}
                 icon="git-compare-outline"
-                index={1}
                 testID="profile-detail-differences"
               >
                 {explanation.differences.map((difference) => (
@@ -284,22 +398,28 @@ export default function ProfileDetailScreen() {
               </SectionCard>
             ) : null}
           </>
-        ) : (
+        ) : !loading ? (
           <SectionCard title={t('compatibility.title')} icon="sparkles">
             <Text style={[styles.muted, { color: theme.colors.textMuted }]}>
               {t('compatibility.noScore')}
             </Text>
           </SectionCard>
-        )}
+        ) : null}
 
-        {/* The honest note about what is not here. Better than four empty
-            sections implying this person told us nothing. */}
-        <Text style={[styles.footnote, { color: theme.colors.textSubtle }]}>
-          {t('profile.limitedByPrivacy')}
-        </Text>
+        {view && view.hiddenFieldCount > 0 ? (
+          <Text
+            style={[styles.footnote, { color: theme.colors.textSubtle }]}
+            testID="profile-detail-hidden"
+          >
+            {t(
+              view.relationship === 'match'
+                ? 'publicProfile.hiddenFieldsMatch'
+                : 'publicProfile.hiddenFields',
+            ).replace('{{count}}', String(view.hiddenFieldCount))}
+          </Text>
+        ) : null}
       </ScrollView>
 
-      {/* --- action bar ---------------------------------------------------- */}
       <View
         style={[
           styles.bar,
@@ -329,12 +449,23 @@ export default function ProfileDetailScreen() {
             color={shortlisted ? theme.colors.accent : theme.colors.textMuted}
           />
         </Pressable>
-
         <Button
-          label={sent ? t('interests.sent') : t('discovery.express')}
+          label={
+            profile?.viewerRelationship === 'match'
+              ? t('publicProfile.matched')
+              : sent
+                ? t('interests.sent')
+                : profile?.viewerRelationship === 'interest_pending'
+                  ? t('publicProfile.interestPending')
+                  : t('discovery.express')
+          }
           onPress={() => void expressInterest()}
           loading={sending}
-          disabled={sent}
+          disabled={
+            sent ||
+            profile?.viewerRelationship === 'match' ||
+            profile?.viewerRelationship === 'interest_pending'
+          }
           icon={<Ionicons name="heart" size={17} color={theme.colors.textOnBrand} />}
           style={styles.barButton}
           testID="profile-detail-express"
@@ -346,6 +477,7 @@ export default function ProfileDetailScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  centre: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: layout.gutter },
   heroActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   pad: {
     paddingHorizontal: layout.gutter,
