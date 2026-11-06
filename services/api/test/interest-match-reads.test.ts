@@ -610,22 +610,29 @@ describe('reads change nothing', () => {
 // Boundaries
 // ---------------------------------------------------------------------------
 
-describe('later slices remain unbuilt', () => {
-  it('exposes no family-review surface', async () => {
-    // Unmatch arrived in Slice 4, so that half of this assertion is
-    // superseded. Family review is still Phase 6b.
+describe('the family-review surface (built in review Phase 4, L10)', () => {
+  it('answers a participant whose match needs no family review, and refuses a re-request', async () => {
+    // This test used to assert the endpoints did not exist ("later slices
+    // remain unbuilt"). They do now; what must hold for a match neither
+    // family reviews is: the summary says so, and there is nothing to ask
+    // again. Full behaviour is in review-phase4.test.ts.
     const { alice, matchId } = await matched();
-    for (const [method, url] of [
-      ['GET', `/matches/${matchId}/family-review`],
-      ['POST', `/matches/${matchId}/family-review`],
-    ] as const) {
-      const response = await harness.app.inject({
-        method,
-        url,
-        headers: authHeader(alice.authId),
-        payload: {},
-      });
-      expect([404, 405], `${method} ${url}`).toContain(response.statusCode);
-    }
+    const summary = await harness.app.inject({
+      method: 'GET',
+      url: `/matches/${matchId}/family-review`,
+      headers: authHeader(alice.authId),
+    });
+    expect(summary.statusCode, summary.body).toBe(200);
+    expect(summary.json()).toMatchObject({
+      mySideRequiresReview: false,
+      counterpartSideRequiresReview: false,
+    });
+    const again = await harness.app.inject({
+      method: 'POST',
+      url: `/matches/${matchId}/family-review`,
+      headers: authHeader(alice.authId),
+      payload: {},
+    });
+    expect(again.statusCode).toBe(409);
   });
 });

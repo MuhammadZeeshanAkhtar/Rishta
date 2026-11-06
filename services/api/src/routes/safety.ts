@@ -4,6 +4,7 @@ import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
 import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
+import { isUuid } from '../http/params';
 
 /**
  * Safety: blocking and reporting.
@@ -33,8 +34,6 @@ import type { Db, DbSession } from '../db/types';
 export interface SafetyRoutesOptions {
   db: Db;
 }
-
-const UUID = /^[0-9a-f-]{36}$/i;
 
 interface BlockRow {
   blocked_user_id: string;
@@ -179,7 +178,7 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
     const auth = requireAuthContext(request);
     const params = request.params as { userId?: string };
     const targetUserId = params.userId ?? '';
-    if (!UUID.test(targetUserId)) throw badRequest('Invalid user id');
+    if (!isUuid(targetUserId)) throw badRequest('Invalid user id');
 
     const parsed = blockRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) throw badRequest('Invalid block request');
@@ -210,16 +209,26 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
       );
       if (existing[0]?.ok) return;
 
-      // The target must exist and be someone this member could otherwise see.
+      // The target must be someone this member could otherwise see, OR
+      // someone they already know.
+      //
       // `can_view_profile` folds in deletion, suspension and review status —
       // and also returns false if the TARGET has blocked the caller, which is
-      // correct: that pair is already mutually invisible, so the answer is 404
-      // and the caller cannot tell which of the two situations they are in.
-      const visible = await session.query<{ ok: boolean }>(
-        `select app.can_view_profile($1::uuid, $2::uuid) as ok`,
+      // correct: that pair is already mutually invisible.
+      //
+      // REVIEW B24. Visibility alone refused a block exactly when someone may
+      // need it: a counterpart who was suspended or unapproved mid-conversation
+      // could not be blocked from inside that conversation.
+      // `app.has_interacted_with` (0028) admits anyone the caller has had an
+      // interest or a match with, in any state. It is caller-scoped, so a
+      // stranger who is hidden is still 404, and the caller still cannot tell
+      // "hidden" from "does not exist".
+      const allowed = await session.query<{ ok: boolean }>(
+        `select (app.can_view_profile($1::uuid, $2::uuid)
+                 or app.has_interacted_with($2::uuid)) as ok`,
         [viewerUserId, targetUserId],
       );
-      if (!visible[0]?.ok) throw notFound('Profile not found');
+      if (!allowed[0]?.ok) throw notFound('Profile not found');
 
       // `on conflict do nothing` as well as the check above: the check makes
       // the ordinary repeat a clean no-op, and the constraint is what holds
@@ -253,7 +262,7 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
     const auth = requireAuthContext(request);
     const params = request.params as { userId?: string };
     const targetUserId = params.userId ?? '';
-    if (!UUID.test(targetUserId)) throw badRequest('Invalid user id');
+    if (!isUuid(targetUserId)) throw badRequest('Invalid user id');
 
     await db.asUser(auth.authUserId, (session) =>
       session.query(

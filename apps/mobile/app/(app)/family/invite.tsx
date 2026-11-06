@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { Stack, router } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
-import { RELATIONSHIP_CODES } from '@nikahmate/domain';
+import { FAMILY_JOIN_PATH, RELATIONSHIP_CODES, familyInviteQueryParams } from '@nikahmate/domain';
 import { Banner } from '../../../src/components/Banner';
 import { Button } from '../../../src/components/Button';
 import { ChoiceGroup } from '../../../src/components/ChoiceGroup';
@@ -22,6 +23,13 @@ import { iconSize, radius, spacing, typography } from '../../../src/theme/tokens
  * discover it by coming back for a link that is gone — and offers the one
  * remedy that works: cancel and re-send.
  *
+ * THE LINK CARRIES BOTH HALVES (review B2). Accepting needs the invitation id
+ * AND the token; this screen used to show the token alone, and nothing could
+ * accept it. The link opens the invitee's Join screen, and the Join screen
+ * also accepts it pasted. Its prefix is the platform's own (expo-linking): the
+ * web origin on web, `nikahmate://` in a build, `exp://` in a dev client.
+ * Shared through React Native's built-in Share sheet — no new dependency.
+ *
  * TIER IS A PRESET, not a permission. Picking "can see and approve" writes
  * six permission rows; the owner can change any of them afterwards from the
  * member's own screen. Two choices here rather than six checkboxes because
@@ -38,7 +46,7 @@ export default function InviteFamilyScreen() {
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [sending, setSending] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
+  const [link, setLink] = useState<string | null>(null);
 
   const send = useCallback(async () => {
     setError(null);
@@ -60,13 +68,29 @@ export default function InviteFamilyScreen() {
         relationshipCode: relationship as (typeof RELATIONSHIP_CODES)[number],
         tier: tier as 'observer' | 'reviewer',
       });
-      setToken(created.token);
+      setLink(
+        Linking.createURL(FAMILY_JOIN_PATH, {
+          queryParams: familyInviteQueryParams({
+            invitationId: created.id,
+            token: created.token,
+          }),
+        }),
+      );
     } catch {
       setError(t('family.errorSave'));
     } finally {
       setSending(false);
     }
   }, [contact, relationship, tier, t]);
+
+  const share = useCallback(() => {
+    if (!link) return;
+    // Cancelling the share sheet is not an error, and a share failure leaves
+    // the link on screen to copy by hand — nothing to report either way.
+    void Share.share({ message: t('family.inviteShareMessage').replace('{{link}}', link) }).catch(
+      () => undefined,
+    );
+  }, [link, t]);
 
   return (
     <>
@@ -78,7 +102,7 @@ export default function InviteFamilyScreen() {
       >
         {error ? <Banner tone="error" message={error} /> : null}
 
-        {token === null ? (
+        {link === null ? (
           <>
             <SectionCard title={t('family.inviteHeading')} icon="person-add-outline" index={0}>
               <TextField
@@ -142,26 +166,27 @@ export default function InviteFamilyScreen() {
               </Text>
             </View>
 
-            {/* Selectable rather than a copy button: expo-clipboard is not
-                a dependency of this project and adding one to save a long
-                press is not a trade worth making. Long-press selects it. */}
+            {/* Selectable as well as shareable: expo-clipboard is not a
+                dependency of this project, and the share sheet already offers
+                "copy" on both platforms. Long-press selects it. */}
             <View
               style={[
                 styles.tokenBox,
                 { backgroundColor: theme.colors.surfaceSunken, borderColor: theme.colors.border },
               ]}
-              testID="invite-token"
+              testID="invite-link"
             >
               <Text
                 style={[styles.token, { color: theme.colors.text }]}
                 selectable
-                numberOfLines={3}
+                numberOfLines={4}
               >
-                {token}
+                {link}
               </Text>
             </View>
 
-            <Button label={t('common.done')} onPress={() => router.back()} />
+            <Button label={t('family.inviteShare')} onPress={share} testID="invite-share" />
+            <Button label={t('common.done')} variant="secondary" onPress={() => router.back()} />
           </SectionCard>
         )}
       </ScrollView>

@@ -177,6 +177,10 @@ export const PROBLEM_CODES = [
   'entitlement_required',
   'quota_exhausted',
   'rate_limited',
+  // Review B21: Fastify-raised 4xx are no longer all `validation_failed`.
+  'payload_too_large',
+  'unsupported_media_type',
+  'malformed_request',
   'internal_error',
 ] as const;
 export type ProblemCode = (typeof PROBLEM_CODES)[number];

@@ -68,6 +68,20 @@ const req = (
   });
 
 /** Upload target → simulated client upload → finalize. */
+/**
+ * A moderator's approval. Since review B5 nothing is approved on upload: a
+ * finalized photo waits in the moderation queue. Tests that need an approved
+ * photo say so explicitly; the moderation route itself is tested in
+ * review-phase3.test.ts.
+ */
+async function approve(photoId: string): Promise<void> {
+  await harness.raw.query(
+    `update public.photos set moderation_status = 'approved', moderated_at = now()
+      where id = $1::uuid`,
+    [photoId],
+  );
+}
+
 async function uploadPhoto(auth = authId): Promise<{ photoId: string; path: string }> {
   const created = await req('POST', '/me/photos/upload-url', auth, {
     contentType: 'image/jpeg',
@@ -119,6 +133,101 @@ describe('upload flow', () => {
   it('requires authentication', async () => {
     const response = await harness.app.inject({ method: 'GET', url: '/me/photos' });
     expect(response.statusCode).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Declared type versus decoded bytes (review B8; Phase 1 review R1)
+// ---------------------------------------------------------------------------
+
+/** One real image of each kind sharp can produce, for the format checks. */
+async function encoded(format: 'jpeg' | 'png' | 'webp' | 'gif'): Promise<Buffer> {
+  const base = sharp({
+    create: { width: 640, height: 800, channels: 3, background: { r: 30, g: 120, b: 90 } },
+  });
+  switch (format) {
+    case 'jpeg':
+      return base.jpeg().toBuffer();
+    case 'png':
+      return base.png().toBuffer();
+    case 'webp':
+      return base.webp().toBuffer();
+    case 'gif':
+      return base.gif().toBuffer();
+  }
+}
+
+/** Reserve a target for `declared`, upload `bytes`, finalize. */
+async function uploadAs(
+  declared: string,
+  bytes: Buffer,
+): Promise<{ created: number; finalized: number; moderation: string | null }> {
+  const auth = await freshAccount();
+  const created = await req('POST', '/me/photos/upload-url', auth, {
+    contentType: declared,
+    byteSize: bytes.length,
+  });
+  if (created.statusCode !== 201) {
+    return { created: created.statusCode, finalized: 0, moderation: null };
+  }
+  const { photoId, path } = created.json();
+  harness.storage.put(path, bytes);
+  const finalized = await req('POST', `/me/photos/${photoId}/finalize`, auth);
+  const rows = await harness.raw.query<{ moderation_status: string }>(
+    `select moderation_status from public.photos where id = $1::uuid`,
+    [photoId],
+  );
+  return {
+    created: 201,
+    finalized: finalized.statusCode,
+    moderation: rows.rows[0]?.moderation_status ?? null,
+  };
+}
+
+describe('declared content type must match the decoded image', () => {
+  it.each([
+    ['image/jpeg', 'jpeg'],
+    ['image/png', 'png'],
+    ['image/webp', 'webp'],
+  ] as const)('accepts %s when the file really is %s', async (declared, format) => {
+    // R1: before the client fix the app declared image/jpeg for everything,
+    // so the PNG and WebP cases here were exactly what broke.
+    // Accepted, then queued for human review (review B5) — not approved.
+    const result = await uploadAs(declared, await encoded(format));
+    expect(result).toEqual({ created: 201, finalized: 202, moderation: 'pending' });
+  });
+
+  it.each([
+    ['image/jpeg', 'png'],
+    ['image/jpeg', 'webp'],
+    ['image/png', 'jpeg'],
+    ['image/webp', 'png'],
+  ] as const)('refuses a file declared %s that is really %s', async (declared, format) => {
+    // The mismatch the app used to produce. Refused, and marked rejected
+    // rather than left pending, so it cannot sit in a queue forever.
+    const result = await uploadAs(declared, await encoded(format));
+    expect(result).toEqual({ created: 201, finalized: 400, moderation: 'rejected' });
+  });
+
+  it('refuses a decoded format outside the allowlist even when declared as allowed', async () => {
+    // A GIF uploaded against a PNG target. The bucket filters on the
+    // DECLARED type, so only the decode check can catch this.
+    const result = await uploadAs('image/png', await encoded('gif'));
+    expect(result).toEqual({ created: 201, finalized: 400, moderation: 'rejected' });
+  });
+
+  it.each(['image/gif', 'image/heic', 'application/octet-stream'])(
+    'refuses to issue a target for %s, so no slot is reserved',
+    async (declared) => {
+      const result = await uploadAs(declared, await encoded('jpeg'));
+      expect(result.created).toBe(400);
+    },
+  );
+
+  it('refuses to issue a target with no declared type at all', async () => {
+    const auth = await freshAccount();
+    const response = await req('POST', '/me/photos/upload-url', auth, { byteSize: 1000 });
+    expect(response.statusCode).toBe(400);
   });
 });
 
@@ -205,6 +314,14 @@ describe('visibility and urls', () => {
     expect(before.urls.full).toBeNull();
 
     await req('POST', `/me/photos/${photoId}/finalize`, localAuth);
+    const finalized = (await req('GET', '/me/photos', localAuth))
+      .json()
+      .items.find((p: { id: string }) => p.id === photoId);
+    // Finalized is not approved (review B5): still no full URL.
+    expect(finalized.moderationStatus).toBe('pending');
+    expect(finalized.urls.full).toBeNull();
+
+    await approve(photoId);
     const after = (await req('GET', '/me/photos', localAuth))
       .json()
       .items.find((p: { id: string }) => p.id === photoId);
@@ -250,6 +367,9 @@ describe('primary, order and delete', () => {
   it('keeps exactly one primary photo', async () => {
     const first = await uploadPhoto(localAuth);
     const second = await uploadPhoto(localAuth);
+    // Only an approved photo can be primary (review B13).
+    await approve(first.photoId);
+    await approve(second.photoId);
 
     await req('PATCH', `/me/photos/${first.photoId}`, localAuth, { isPrimary: true });
     await req('PATCH', `/me/photos/${second.photoId}`, localAuth, { isPrimary: true });

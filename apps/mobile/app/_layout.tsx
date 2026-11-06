@@ -8,6 +8,7 @@ import { ThemeProvider } from '../src/theme/ThemeProvider';
 import { lightTheme } from '../src/theme/theme';
 import { setLocaleReader } from '../src/api/client';
 import { AuthLinkHandler } from '../src/auth/AuthLinkHandler';
+import { FamilyInviteLinkHandler } from '../src/family/FamilyInviteLinkHandler';
 
 /**
  * Root layout.
@@ -51,6 +52,8 @@ export default function RootLayout() {
               navigator so an email link is completed wherever the app is.
             */}
             <AuthLinkHandler />
+            {/* Keeps a family invitation link through sign-in and onboarding (B2). */}
+            <FamilyInviteLinkHandler />
             <StatusBar style="dark" />
             <Stack
               screenOptions={{

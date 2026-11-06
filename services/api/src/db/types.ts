@@ -366,6 +366,116 @@ export const SERVICE_ROLE_USES = [
    * caller's own session before this opens, never from the request.
    */
   'discovery.claim_generation',
+
+  /**
+   * Deciding whether the caller is staff (review L1).
+   *
+   * `admin_users` and `admin_role_assignments` are RESTRICTED: no member grant,
+   * no policy. A member who could read them would learn who the moderators
+   * are; one who could write them could make themselves one. The lookup is by
+   * the VERIFIED token subject and returns only that caller's own admin row.
+   */
+  'admin.authorize',
+
+  /**
+   * Reading the moderation queues (review L1, B5, B6).
+   *
+   * A moderator reviews OTHER members' pending photos, pending profiles,
+   * reports and date-of-birth correction requests — exactly what owner-only
+   * RLS exists to prevent members doing. Reached only after
+   * `admin.authorize` has confirmed an active moderator with MFA.
+   */
+  'admin.read_queue',
+
+  /**
+   * Recording a moderation decision and its audit (review L1, B5, B6).
+   *
+   * `moderation_status`, `review_status`, report status, account status and a
+   * locked date of birth are server state with no member grant — a member who
+   * could write them could approve their own photo or lift their own ban.
+   * Every decision writes its `admin_action_audit` row in the same
+   * transaction, and the audit table is append-only for every role.
+   */
+  'admin.decide',
+
+  /**
+   * Another member's profile, permission-filtered (review L4).
+   *
+   * Name, age, gender and the target's field-visibility choices sit in
+   * owner-only tables (`users`, `profile_field_visibility`). The read is gated
+   * INSIDE the query by `app.can_view_profile(viewer, target)`, so nothing about
+   * a hidden or blocking member can come back; the date of birth is reduced to
+   * an age in SQL and never leaves the database; and the route then withholds
+   * every field the target's visibility choices do not grant this viewer.
+   */
+  'profile.read_public',
+
+  /**
+   * Deactivating, reactivating and requesting or cancelling deletion of the
+   * CALLER's own account (review L10/L7).
+   *
+   * `users.status` is server state with no member grant — a member who could
+   * write it could lift their own suspension — and `account_deletion_requests`
+   * is restricted. Every statement is keyed by the caller's own id, resolved
+   * from the verified token before this opens, and only the transitions the
+   * route allows are written (active <-> deactivated; any -> pending_deletion
+   * and back to exactly the previous status).
+   */
+  'account.lifecycle',
+
+  /**
+   * Registering and invalidating the caller's own push tokens (review L10/L8).
+   *
+   * `push_tokens` is restricted (ERD §15): a token is a capability to reach a
+   * device, so no client may read the table. Writes are keyed by the caller's
+   * own id and the device they name.
+   */
+  'notifications.push_tokens',
+
+  /**
+   * Recording that the caller viewed a profile (review L10).
+   *
+   * `profile_views` is system-only: every view is kept for abuse
+   * investigation, including incognito ones. Written only after the caller's
+   * own session has confirmed `app.can_view_profile` for the target.
+   */
+  'profile.record_view',
+
+  /**
+   * Listing who viewed the caller (review L10).
+   *
+   * Reads `profile_views` rows ABOUT the caller and other members' incognito
+   * settings, neither of which a member may read. Entitlement-checked first
+   * (`who_viewed_me`); returns viewer ids only, filtered by
+   * `app.can_view_profile` and with effective-incognito viewers removed.
+   */
+  'profile.read_views',
+
+  /**
+   * The owner's view of, and re-request for, their match's family review
+   * (review L10, R16).
+   *
+   * The counterpart's review row is invisible to the owner under RLS, but the
+   * owner may know whether it is pending or decided (never who decided, never
+   * the note). Re-requesting writes the owner's OWN review row, may move a
+   * `family_rejected` match back to `pending_family_review`, and notifies the
+   * owner's own delegates — all server state with no member grant. Refused
+   * whenever the other family rejected.
+   */
+  'family.match_review',
+
+  /**
+   * Review L3 (0031). Recording a photo request and notifying its owner. No
+   * member write grant exists on `photo_requests`: the message must pass the
+   * contact-details filter (L9), which a Data API insert would skip (B7).
+   */
+  'photo.request',
+
+  /**
+   * Review L3 (0031). The owner's answer to a photo request: the status
+   * change, the grant on approval, and the requester's notification.
+   */
+  'photo.respond',
 ] as const;
 
 export type ServiceRoleUse = (typeof SERVICE_ROLE_USES)[number];

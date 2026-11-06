@@ -28,6 +28,12 @@ describe('migrations apply', () => {
     );
     expect(rows.map((r) => r.tablename)).toEqual([
       // Sorted, because the query is. Phases 1-6 Slice 2.
+      // Review Phase 4 (0030): account deletion requests (L7/L10).
+      'account_deletion_requests',
+      // Review Phase 3 (0029): the L1 admin/moderation backend.
+      'admin_action_audit',
+      'admin_role_assignments',
+      'admin_users',
       'blocks',
       'compatibility_factors',
       'compatibility_scores',
@@ -36,6 +42,8 @@ describe('migrations apply', () => {
       'conversations',
       'discovery_generation_runs',
       'dismissed_profiles',
+      // Review B6 (0029): date-of-birth corrections, company decision 4.
+      'dob_correction_requests',
       'family_access_log',
       'family_invitations',
       'family_permissions',
@@ -49,14 +57,24 @@ describe('migrations apply', () => {
       'media_moderation_results',
       'message_reads',
       'messages',
+      'moderation_actions',
+      // Review Phase 4 (0030): notification preferences (L10).
+      'notification_preferences',
       'notifications',
       'partner_preferences',
+      // Review Phase 5 (0031): photo grants and requests (L3).
+      'photo_grants',
+      'photo_requests',
       'photo_variants',
       'photos',
       'preference_rules',
       'profile_field_visibility',
       'profile_sensitive',
+      // Review Phase 4 (0030): profile views (L10).
+      'profile_views',
       'profiles',
+      // Review Phase 4 (0030): push tokens (L10).
+      'push_tokens',
       'reference_items',
       'reference_translations',
       'reports',
@@ -89,7 +107,9 @@ describe('migrations apply', () => {
        where n.nspname = 'public' and c.relkind = 'r'
        order by c.relname`,
     );
-    expect(rows.length).toBe(45);
+    // 45 through Phase 7; +5 in 0029 (review L1/B6); +4 in 0030 (review L10);
+    // +2 in 0031 (review L3).
+    expect(rows.length).toBe(56);
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} must have RLS enabled`).toBe(true);
       expect(row.relforcerowsecurity, `${row.relname} must FORCE RLS`).toBe(true);
@@ -157,7 +177,16 @@ describe('migrations apply', () => {
        order by t.tgname`,
     );
     expect(rows).toEqual([
+      // Review B16 (0028). AFTER, and it writes only stage_transitions — it
+      // never changes communication_state, so the gate below is still the one
+      // trigger that decides a period's state.
+      { tgname: 'matches_cancel_stage_proposals', timing: 'after', events: 'update' },
       { tgname: 'matches_gate_new_period', timing: 'before', events: 'insert,update' },
+      // Review B1 (0026). Refuses entry into family_approved while any review
+      // for the match is not approved. It never SETS the state, so the gate
+      // above is still the only trigger that decides a period's starting
+      // state — this one only refuses an illegal transition into approval.
+      { tgname: 'matches_guard_family_approval', timing: 'before', events: 'update' },
       // Phase 7. Runs AFTER, and only on the state column, so it observes the
       // gate the one above has already decided rather than racing it. It
       // creates the thread; it never changes communication_state, so the
@@ -232,6 +261,8 @@ describe('grants — the surface the Data API exposes', () => {
       'dismissed_profiles authenticated DELETE',
       'dismissed_profiles authenticated INSERT',
       'dismissed_profiles authenticated SELECT',
+      // 0029 (review B6): a member reads their own DOB correction requests.
+      'dob_correction_requests authenticated SELECT',
       // Phase 6b. SELECT only, every one of them: an invitation must hash a
       // token, a grant must be refused if its phase has not arrived, a review
       // must be the first for its side, and an audit a delegate can write is
@@ -242,14 +273,25 @@ describe('grants — the surface the Data API exposes', () => {
       'family_permissions authenticated SELECT',
       'family_relationships authenticated SELECT',
       'family_reviews authenticated SELECT',
-      'interests authenticated INSERT',
+      // `interests authenticated INSERT` was revoked by 0026 (review B7). The
+      // API has always sent through `interest.send`, which consumes the daily
+      // quota in the same transaction; the member grant only let the Data API
+      // skip the quota.
       'interests authenticated SELECT',
       'match_candidates authenticated SELECT',
       'matches authenticated SELECT',
       'message_reads authenticated SELECT',
       'messages authenticated SELECT',
+      // 0030 (review L10): a member manages their own notification preferences.
+      'notification_preferences authenticated DELETE',
+      'notification_preferences authenticated INSERT',
+      'notification_preferences authenticated SELECT',
       'notifications authenticated SELECT',
       'partner_preferences authenticated SELECT',
+      // 0031 (review L3): each party reads its own requests and grants; the
+      // server writes them.
+      'photo_grants authenticated SELECT',
+      'photo_requests authenticated SELECT',
       'photo_variants authenticated SELECT',
       'photos authenticated SELECT',
       'preference_rules authenticated DELETE',
@@ -382,6 +424,9 @@ describe('grants — the surface the Data API exposes', () => {
        order by 1`,
     );
     expect(rows.map((r) => r.relname)).toEqual([
+      // 0029 (review B6): `insert (user_id, requested_dob, reason)` only; the
+      // status and the decision are the server's.
+      'dob_correction_requests',
       // Phase 7: `insert (conversation_id, sender_user_id, body, kind)` only.
       // `moderation_status`, `edited_at` and `deleted_at` are server state
       // that report evidence depends on, and a member who could set

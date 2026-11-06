@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { badRequest, notFound } from '../errors';
+import { REVIEW_SLA_HOURS } from '@nikahmate/domain';
+import { badRequest, conflict, notFound } from '../errors';
+import { isoTimestamp } from '../db/sql';
 import { requireAuthContext } from '../auth/plugin';
 import {
   CARDS_BY_USER_IDS,
@@ -11,6 +13,7 @@ import {
   type CardRow,
 } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
+import { isUuid, uuidParam } from '../http/params';
 
 /**
  * Match reads.
@@ -151,7 +154,7 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
     const auth = requireAuthContext(request);
     const params = request.params as { matchId?: string };
     const matchId = params.matchId ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(matchId)) throw badRequest('Invalid match id');
+    if (!isUuid(matchId)) throw badRequest('Invalid match id');
 
     const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!viewerUserId) throw notFound('Match not found');
@@ -203,7 +206,7 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
       const auth = requireAuthContext(request);
       const params = request.params as { matchId?: string };
       const matchId = params.matchId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(matchId)) throw badRequest('Invalid match id');
+      if (!isUuid(matchId)) throw badRequest('Invalid match id');
 
       const parsed = unmatchSchema.safeParse(request.body ?? {});
       if (!parsed.success) throw badRequest('reason must be 300 characters or fewer');
@@ -242,6 +245,195 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
       });
 
       return reply.code(204).send();
+    },
+  );
+
+  // ===========================================================================
+  // GET/POST /matches/:matchId/family-review — review L10 (and L6)
+  //
+  // The OWNER's view of where their match stands with families, and the
+  // owner's escape hatch from an indefinite veto (R16): ask their own family
+  // to review again. Never a way to approve; never a way to override the
+  // other family.
+  // ===========================================================================
+
+  interface ReviewRow {
+    id: string;
+    owner_user_id: string;
+    decision: string;
+    decided_at: string | null;
+    requested_at: string;
+    note: string | null;
+    decided_by_user_id: string | null;
+    decided_by_name: string | null;
+    decided_by_relationship: string | null;
+    stalled: boolean;
+  }
+
+  /** The match, if the caller is a participant (RLS); else null. */
+  const participantMatch = async (authUserId: string, matchId: string) => {
+    const rows = await db.asUser(authUserId, (session) =>
+      session.query<MatchRow>(
+        `select id, user_a_id, user_b_id, communication_state, created_at, ended_at,
+                0 as position
+           from public.matches where id = $1::uuid`,
+        [matchId],
+      ),
+    );
+    return rows[0] ?? null;
+  };
+
+  const reviewsFor = (matchId: string) =>
+    db.asService('family.match_review', (session) =>
+      session.query<ReviewRow>(
+        `select r.id, r.owner_user_id, r.decision,
+                ${isoTimestamp('r.decided_at')} as decided_at,
+                ${isoTimestamp('r.requested_at')} as requested_at,
+                r.note, r.decided_by_user_id,
+                d.display_name as decided_by_name,
+                rel.relationship_code as decided_by_relationship,
+                (r.decision in ('pending', 'more_info_requested')
+                 and r.requested_at < now() - make_interval(hours => $2::int)) as stalled
+           from public.family_reviews r
+           left join public.users d on d.id = r.decided_by_user_id
+           left join public.family_relationships rel on rel.id = r.relationship_id
+          where r.match_id = $1::uuid`,
+        [matchId, REVIEW_SLA_HOURS],
+      ),
+    );
+
+  fastify.get(
+    '/matches/:matchId/family-review',
+    { preHandler: fastify.requireAuth },
+    async (request) => {
+      const auth = requireAuthContext(request);
+      const matchId = uuidParam(request, 'matchId', 'match id');
+      const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
+      if (!viewerUserId) throw notFound('Match not found');
+      const match = await participantMatch(auth.authUserId, matchId);
+      if (!match) throw notFound('Match not found');
+
+      const reviews = await reviewsFor(matchId);
+      const mine = reviews.find((r) => r.owner_user_id === viewerUserId);
+      const theirs = reviews.find((r) => r.owner_user_id !== viewerUserId);
+
+      // `state` is the caller's own side when it requires review; otherwise
+      // the counterpart side's bare decision; otherwise nothing is pending.
+      const state = mine?.decision ?? theirs?.decision ?? 'approved';
+      return {
+        state,
+        mySideRequiresReview: mine !== undefined,
+        counterpartSideRequiresReview: theirs !== undefined,
+        // Own side only. The counterpart's reviewer is never named and their
+        // note never returned.
+        decidedBy: mine?.decided_by_user_id
+          ? {
+              userId: mine.decided_by_user_id,
+              ...(mine.decided_by_name ? { displayName: mine.decided_by_name } : {}),
+              ...(mine.decided_by_relationship
+                ? { relationshipCode: mine.decided_by_relationship }
+                : {}),
+            }
+          : null,
+        decidedAt: mine?.decided_at ?? null,
+        note: mine?.note ?? null,
+        requestedAt: mine?.requested_at ?? null,
+      };
+    },
+  );
+
+  /**
+   * Ask my family to review again (R16). Allowed when MY side was rejected,
+   * or has stalled past the SLA. Refused when the OTHER family rejected: an
+   * owner may ask their own family again, never overrule someone else's.
+   * Resets my side to pending, moves a `family_rejected` match back to
+   * `pending_family_review` (only when no other side rejected), and
+   * re-notifies every delegate who can decide.
+   */
+  fastify.post(
+    '/matches/:matchId/family-review',
+    { preHandler: fastify.requireAuth },
+    async (request) => {
+      const auth = requireAuthContext(request);
+      const matchId = uuidParam(request, 'matchId', 'match id');
+      const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
+      if (!viewerUserId) throw notFound('Match not found');
+      const match = await participantMatch(auth.authUserId, matchId);
+      if (!match) throw notFound('Match not found');
+      if (match.ended_at !== null) throw conflict('This match has ended');
+
+      await db.asService('family.match_review', async (session) => {
+        // Lock the match and its reviews: two re-requests, or a re-request
+        // racing a decision, must serialise.
+        await session.query(`select id from public.matches where id = $1::uuid for update`, [
+          matchId,
+        ]);
+        const rows = await session.query<{
+          id: string;
+          owner_user_id: string;
+          decision: string;
+          stalled: boolean;
+        }>(
+          `select id, owner_user_id, decision,
+                  (decision in ('pending', 'more_info_requested')
+                   and requested_at < now() - make_interval(hours => $2::int)) as stalled
+             from public.family_reviews where match_id = $1::uuid
+            for update`,
+          [matchId, REVIEW_SLA_HOURS],
+        );
+        const mine = rows.find((r) => r.owner_user_id === viewerUserId);
+        if (!mine) throw conflict('Your family is not reviewing this match');
+        if (rows.some((r) => r.owner_user_id !== viewerUserId && r.decision === 'rejected')) {
+          throw conflict('The other family has declined; that decision is theirs');
+        }
+        if (mine.decision !== 'rejected' && !mine.stalled) {
+          throw conflict('You can ask again after a decline, or once the review is overdue');
+        }
+
+        await session.query(
+          `update public.family_reviews
+              set decision = 'pending', decided_at = null, decided_by_user_id = null,
+                  relationship_id = null, note = null, requested_at = now(),
+                  sla_notified_at = null
+            where id = $1::uuid`,
+          [mine.id],
+        );
+        await session.query(
+          `update public.matches
+              set communication_state = 'pending_family_review', communication_state_at = now()
+            where id = $1::uuid and communication_state = 'family_rejected'`,
+          [matchId],
+        );
+
+        const delegates = await session.query<{ delegate_user_id: string }>(
+          `select r.delegate_user_id
+             from public.family_relationships r
+             join public.family_permissions p on p.relationship_id = r.id
+            where r.owner_user_id = $1::uuid and r.status = 'active'
+              and p.permission = 'approve_communication' and p.granted`,
+          [viewerUserId],
+        );
+        for (const delegate of delegates) {
+          await session.query(
+            `insert into public.notifications (user_id, type, payload, dedupe_key)
+             values ($1::uuid, 'family_review_requested', $2::jsonb, $3)
+             on conflict do nothing`,
+            [
+              delegate.delegate_user_id,
+              JSON.stringify({ matchId, ownerUserId: viewerUserId, again: true }),
+              // A fresh key per request, or the first request's key would
+              // swallow every re-request.
+              `family_review_requested:${mine.id}:${Date.now()}`,
+            ],
+          );
+        }
+      });
+
+      const fresh = await participantMatch(auth.authUserId, matchId);
+      const counterpartUserId =
+        fresh!.user_a_id === viewerUserId ? fresh!.user_b_id : fresh!.user_a_id;
+      const cards = await counterpartCards(viewerUserId, [counterpartUserId]);
+      return toMatch(fresh!, viewerUserId, cards.get(counterpartUserId) ?? null);
     },
   );
 };

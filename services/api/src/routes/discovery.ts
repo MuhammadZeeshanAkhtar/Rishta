@@ -6,7 +6,7 @@ import {
   ENGINE_VERSION,
   type DiscoverySection,
 } from '@nikahmate/domain';
-import { badRequest, notFound } from '../errors';
+import { ApiError, badRequest, internalError, notFound } from '../errors';
 import { requireAuthContext } from '../auth/plugin';
 import { ensureCandidates } from '../discovery/candidates';
 import type { Db, DbSession } from '../db/types';
@@ -18,6 +18,7 @@ import {
   parseLimit,
   type CardRow,
 } from '../discovery/cards';
+import { isUuid } from '../http/params';
 
 /**
  * Discovery and compatibility — read-only.
@@ -108,7 +109,11 @@ const CARD_SELECT = `
     and m.section_key = $2::text
     and m.candidate_user_id <> $1::uuid
     and p.deleted_at is null
-    and app.can_view_profile($1::uuid, m.candidate_user_id)
+    -- discoverable_to, not can_view_profile (review B3). Candidates are
+    -- precomputed, so a member who paused or went incognito AFTER generation
+    -- must drop out at read time as well — otherwise pausing would take up
+    -- to a cooldown to take effect, which is exactly when it matters most.
+    and app.discoverable_to($1::uuid, m.candidate_user_id)
     and not exists (
       select 1 from public.dismissed_profiles d
        where d.user_id = $1::uuid and d.target_user_id = m.candidate_user_id
@@ -281,7 +286,7 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     raw: string | undefined,
   ): Promise<string> => {
     const targetUserId = raw ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(targetUserId)) throw badRequest('Invalid user id');
+    if (!isUuid(targetUserId)) throw badRequest('Invalid user id');
     if (targetUserId === viewerUserId) throw notFound('Profile not found');
 
     const visible = await session.query<{ ok: boolean }>(
@@ -309,11 +314,17 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     // Ordered newest first, with the id as a tiebreak so the keyset is total.
     const saved = await db.asUser(auth.authUserId, (session) =>
       session.query<{ target_user_id: string; position: number }>(
+        // Filtered by app.discoverable_to (review B3). The shortlist is a
+        // discovery surface — you save from Discover — so a member who paused
+        // or went incognito leaves it too. Filtered HERE rather than in the
+        // card query, because CARDS_BY_USER_IDS is shared with interests and
+        // matches, where a paused member must stay visible.
         `select target_user_id,
                 (row_number() over (order by created_at desc, target_user_id))::int - 1
                   as position
            from public.shortlists
-          where user_id = $1::uuid`,
+          where user_id = $1::uuid
+            and app.discoverable_to($1::uuid, target_user_id)`,
         [viewerUserId],
       ),
     );
@@ -383,7 +394,7 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
       const auth = requireAuthContext(request);
       const params = request.params as { userId?: string };
       const targetUserId = params.userId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(targetUserId)) throw badRequest('Invalid user id');
+      if (!isUuid(targetUserId)) throw badRequest('Invalid user id');
 
       // No visibility check on removal, on purpose. Someone who blocked the
       // viewer after being saved must still be removable — otherwise a block
@@ -514,11 +525,56 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     return { score, factors };
   };
 
+  // --- POST /compatibility/recompute ------------------------------------------
+
+  /**
+   * "I changed my preferences — show me now" (review L10). The escape hatch
+   * `ensureCandidates` was written to leave room for: the same atomic claim,
+   * with a 1-minute cooldown instead of 15. Within it the answer is 429 with
+   * Retry-After, so a member cannot turn recompute into a loop; a run already
+   * in flight answers the same way.
+   *
+   * 202 when the run completes. It runs in the request — there is no job
+   * runner (L11) — and is bounded by the same limits as a cold Discover read.
+   */
+  fastify.post(
+    '/compatibility/recompute',
+    { preHandler: fastify.requireAuth },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
+      if (!viewerUserId) throw notFound('No account for this session');
+
+      const result = await ensureCandidates(
+        db,
+        viewerUserId,
+        'recommended',
+        {},
+        { cooldownMinutes: 1 },
+      );
+      if (result.reason === 'cooldown' || result.reason === 'in_flight') {
+        throw new ApiError(
+          429,
+          'rate_limited',
+          'Recomputed very recently. Try again in a minute.',
+          {
+            retryAfterSeconds: 60,
+          },
+        );
+      }
+      if (!result.generated || !result.report) throw internalError();
+      return reply.code(202).send({
+        status: 'completed',
+        candidates: result.report.sections.recommended ?? 0,
+      });
+    },
+  );
+
   fastify.get('/compatibility/:userId', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
     const params = request.params as { userId?: string };
     const targetUserId = params.userId ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(targetUserId)) throw badRequest('Invalid user id');
+    if (!isUuid(targetUserId)) throw badRequest('Invalid user id');
 
     return db.asUser(auth.authUserId, async (session) => {
       const viewerUserId = await resolveViewer(session);
@@ -562,7 +618,7 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
       const auth = requireAuthContext(request);
       const params = request.params as { userId?: string };
       const targetUserId = params.userId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(targetUserId)) throw badRequest('Invalid user id');
+      if (!isUuid(targetUserId)) throw badRequest('Invalid user id');
 
       return db.asUser(auth.authUserId, async (session) => {
         const viewerUserId = await resolveViewer(session);

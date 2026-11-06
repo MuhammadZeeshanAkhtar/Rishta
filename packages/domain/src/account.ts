@@ -189,3 +189,43 @@ export function ageFromDateOfBirth(dateOfBirth: string, now: Date = new Date()):
 export function meetsMinimumAge(dateOfBirth: string, now: Date = new Date()): boolean {
   return ageFromDateOfBirth(dateOfBirth, now) >= MINIMUM_AGE_YEARS;
 }
+
+// ---------------------------------------------------------------------------
+// Date-of-birth corrections (review B6; company decision 4)
+// ---------------------------------------------------------------------------
+
+export const DOB_CORRECTION_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export type DobCorrectionStatus = (typeof DOB_CORRECTION_STATUSES)[number];
+
+export const MIN_DOB_CORRECTION_REASON = 10;
+export const MAX_DOB_CORRECTION_REASON = 1000;
+
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const createDobCorrectionSchema = z.object({
+  requestedDob: isoDateSchema,
+  reason: z.string().trim().min(MIN_DOB_CORRECTION_REASON).max(MAX_DOB_CORRECTION_REASON),
+});
+export type CreateDobCorrection = z.infer<typeof createDobCorrectionSchema>;
+
+export const dobCorrectionCreatedSchema = z.object({
+  requestId: z.string().uuid(),
+  status: z.literal('pending'),
+  requestedDob: isoDateSchema,
+  createdAt: timestampSchema,
+});
+export type DobCorrectionCreated = z.infer<typeof dobCorrectionCreatedSchema>;
+
+export const dobCorrectionSchema = z.object({
+  requestId: z.string().uuid(),
+  status: z.enum(DOB_CORRECTION_STATUSES),
+  requestedDob: isoDateSchema,
+  /** Support's note. On a rejection it is the reason the member sees. */
+  decisionNote: z.string().nullable(),
+  decidedAt: timestampSchema.nullable(),
+  createdAt: timestampSchema,
+});
+export type DobCorrection = z.infer<typeof dobCorrectionSchema>;
+
+export const dobCorrectionListSchema = z.object({ items: z.array(dobCorrectionSchema) });
+export type DobCorrectionList = z.infer<typeof dobCorrectionListSchema>;

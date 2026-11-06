@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
 import {
   DEFAULT_LOCALE,
   LOCALES,
@@ -8,8 +9,10 @@ import {
   type Me,
 } from '@nikahmate/domain';
 import { requireAuthContext } from '../auth/plugin';
-import { badRequest, notFound } from '../errors';
+import { badRequest, conflict, notFound } from '../errors';
+import { isoTimestamp } from '../db/sql';
 import type { Db, DbSession } from '../db/types';
+import { requireEntitlement } from '../entitlements/service';
 
 /**
  * Account routes: bootstrap, read and update.
@@ -41,7 +44,11 @@ interface MeRow {
 const ME_SELECT = `
   select u.id, u.display_name, u.status, u.onboarding_step, u.profile_completed_at,
          s.locale, s.timezone, s.show_online_status, s.send_read_receipts,
-         s.incognito, s.discovery_paused, s.communication_policy,
+         -- EFFECTIVE incognito (review B3): on AND currently entitled. A
+         -- member whose subscription lapsed is visible to discovery again,
+         -- and reporting the stored flag would tell them otherwise.
+         (s.incognito and app.has_entitlement_flag(u.id, 'incognito')) as incognito,
+         s.discovery_paused, s.communication_policy,
          v.email_verified_at, v.phone_verified_at, v.selfie_verified_at,
          v.id_verified_at, v.profile_reviewed_at,
          -- Counted here rather than in a second round trip: the app must warn
@@ -139,6 +146,17 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
       const body = parsed.data;
 
       const result = await db.asService('account.bootstrap', async (session) => {
+        // REVIEW B19. Two first launches at once (a double tap, two tabs)
+        // both found no link, both created a user, and one then failed on the
+        // unique link with a 500. A transaction-scoped advisory lock on the
+        // auth identity serialises them: the second waits, then finds the
+        // first one's link below and returns the same account. No orphan
+        // `users` row is created, which `on conflict do nothing` on the link
+        // alone would have left behind. Released at commit or rollback.
+        await session.query(`select pg_advisory_xact_lock(hashtext('account.bootstrap:' || $1))`, [
+          auth.authUserId,
+        ]);
+
         const existing = await session.query<{ user_id: string }>(
           `select user_id from public.user_auth_links where auth_user_id = $1`,
           [auth.authUserId],
@@ -233,6 +251,25 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
       throw badRequest('No settings supplied');
     }
 
+    // REVIEW B3. Incognito is a paid entitlement (FREE_PLAN_ENTITLEMENTS has
+    // it false), and before this it could be switched on by anyone. Checked
+    // here so the client gets `entitlement_required` and can offer the
+    // upgrade; migration 0026 enforces the same rule in a trigger, which is
+    // what stops a member setting it through the Data API instead.
+    //
+    // Only switching it ON is gated. Switching it off never is, so a member
+    // whose entitlement lapsed is never trapped in a setting.
+    if (patch.incognito === true) {
+      const userId = await db.asUser(auth.authUserId, async (session) => {
+        const rows = await session.query<{ user_id: string | null }>(
+          `select app.current_user_id() as user_id`,
+        );
+        return rows[0]?.user_id ?? null;
+      });
+      if (!userId) throw notFound('No account for this session');
+      await requireEntitlement(db, auth.authUserId, userId, 'incognito');
+    }
+
     return db.asUser(auth.authUserId, async (session) => {
       // Column names come from a fixed map, never from request keys — the
       // schema has already stripped anything unknown, but building SQL
@@ -258,7 +295,12 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
       }
 
       const updated = await session.query(
-        `update public.user_settings set ${assignments.join(', ')} returning user_id`,
+        // REVIEW B22. Scoped to the caller here as well as by RLS. The policy
+        // alone limited this to one row; run under any broader role it would
+        // have updated every member's settings.
+        `update public.user_settings set ${assignments.join(', ')}
+          where user_id = app.current_user_id()
+          returning user_id`,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         params as any[],
       );
@@ -273,4 +315,117 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
       return toMe(row);
     });
   });
+
+  // ===========================================================================
+  // Date-of-birth corrections — review B6, company decision 4
+  //
+  // Once a profile is complete its date of birth is locked (0029), because an
+  // age nobody reviewed is an age nobody can trust. A genuine mistake is
+  // corrected by asking: support verifies it and decides
+  // (POST /admin/dob-corrections/:id), and the decision is audited.
+  // ===========================================================================
+
+  const dobCorrectionSchema = z.object({
+    requestedDob: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      // A real calendar date, checked here: Postgres would refuse 2020-02-30
+      // with an error the caller did not deserve as a 500.
+      .refine((value) => {
+        const d = new Date(`${value}T00:00:00Z`);
+        return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+      }, 'Not a real date'),
+    reason: z.string().trim().min(10).max(1000),
+  });
+
+  fastify.post(
+    '/me/dob-correction-requests',
+    { preHandler: fastify.requireAuth },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const parsed = dobCorrectionSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw badRequest(
+          'Invalid correction request',
+          Object.fromEntries(
+            parsed.error.issues.map((i) => [i.path.join('.') || '(root)', i.message]),
+          ),
+        );
+      }
+      const { requestedDob, reason } = parsed.data;
+
+      const created = await db.asUser(auth.authUserId, async (session) => {
+        const me = await session.query<{ completed: boolean; dob: string | null }>(
+          `select profile_completed_at is not null as completed, date_of_birth::text as dob
+             from public.users where id = app.current_user_id()`,
+        );
+        if (!me[0]) throw notFound('No account for this session');
+        if (!me[0].completed) {
+          throw conflict('Your date of birth can still be changed in your profile');
+        }
+        if (me[0].dob === requestedDob) throw badRequest('That is already your date of birth');
+
+        const open = await session.query<{ id: string }>(
+          `select id from public.dob_correction_requests
+            where user_id = app.current_user_id() and status = 'pending'`,
+        );
+        if (open.length > 0) throw conflict('A correction request is already open');
+
+        // Runs as the member: RLS pins user_id to the caller and status to
+        // pending, and the column grant offers nothing else to set.
+        const rows = await session.query<{
+          id: string;
+          status: string;
+          requested_dob: string;
+          created_at: string;
+        }>(
+          `insert into public.dob_correction_requests (user_id, requested_dob, reason)
+           values (app.current_user_id(), $1::date, $2)
+           returning id, status, requested_dob::text as requested_dob, ${isoTimestamp('created_at')} as created_at`,
+          [requestedDob, reason],
+        );
+        return rows[0]!;
+      });
+
+      return reply.code(201).send({
+        requestId: created.id,
+        status: created.status,
+        requestedDob: created.requested_dob,
+        createdAt: created.created_at,
+      });
+    },
+  );
+
+  fastify.get(
+    '/me/dob-correction-requests',
+    { preHandler: fastify.requireAuth },
+    async (request) => {
+      const auth = requireAuthContext(request);
+      const rows = await db.asUser(auth.authUserId, (session) =>
+        session.query<{
+          id: string;
+          status: string;
+          requested_dob: string;
+          decision_note: string | null;
+          decided_at: string | null;
+          created_at: string;
+        }>(
+          `select d.id, d.status, d.requested_dob::text as requested_dob, d.decision_note,
+                  ${isoTimestamp('d.decided_at')} as decided_at, ${isoTimestamp('d.created_at')} as created_at
+             from public.dob_correction_requests d
+            order by d.created_at desc`,
+        ),
+      );
+      return {
+        items: rows.map((r) => ({
+          requestId: r.id,
+          status: r.status,
+          requestedDob: r.requested_dob,
+          decisionNote: r.decision_note,
+          decidedAt: r.decided_at,
+          createdAt: r.created_at,
+        })),
+      };
+    },
+  );
 };

@@ -262,8 +262,16 @@ function InterestRow({
 
   const card = interest.counterpart;
   const incoming = interest.direction === 'received';
-  const actionable = incoming && interest.status === 'pending';
-  const withdrawable = !incoming && interest.status === 'pending';
+  // REVIEW B4. "Maybe later" defers a decision rather than making one, so a
+  // deferred interest keeps its Accept and Decline — that is the whole point
+  // of deferring. Before this, both of these checked `pending` only and a
+  // deferred interest showed no buttons to either side: a silent, permanent
+  // decline that neither person chose.
+  const unanswered = interest.status === 'pending' || interest.status === 'maybe_later';
+  const actionable = incoming && unanswered;
+  const withdrawable = !incoming && unanswered;
+  // Deferring something already deferred would change nothing.
+  const canDefer = incoming && interest.status === 'pending';
 
   const place = [card?.cityName, card?.countryCode?.toUpperCase()]
     .filter((part): part is string => Boolean(part))
@@ -321,12 +329,14 @@ function InterestRow({
             disabled={busy}
             tone="quiet"
           />
-          <RowButton
-            label={t('interests.maybeLater')}
-            onPress={onMaybe}
-            disabled={busy}
-            tone="quiet"
-          />
+          {canDefer ? (
+            <RowButton
+              label={t('interests.maybeLater')}
+              onPress={onMaybe}
+              disabled={busy}
+              tone="quiet"
+            />
+          ) : null}
           <RowButton
             label={t('interests.accept')}
             onPress={onAccept}

@@ -3,11 +3,14 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import type { Config } from './config';
 import { ApiError, internalError } from './errors';
+import { mapDatabaseError, problemCodeForStatus } from './http/problems';
 import authPlugin from './auth/plugin';
 import type { TokenVerifier } from './auth/verify';
 import type { Db } from './db/types';
 import type { StorageClient } from './storage/client';
 import { accountRoutes } from './routes/account';
+import { adminRoutes } from './routes/admin';
+import { meRoutes } from './routes/me';
 import { conversationRoutes } from './routes/conversations';
 import { discoveryRoutes } from './routes/discovery';
 import { familyRoutes } from './routes/family';
@@ -15,7 +18,9 @@ import { interestRoutes } from './routes/interests';
 import { matchRoutes } from './routes/matches';
 import { notificationRoutes } from './routes/notifications';
 import { photoRoutes } from './routes/photos';
+import { photoAccessRoutes } from './routes/photo-access';
 import { profileRoutes } from './routes/profile';
+import { publicProfileRoutes } from './routes/public-profile';
 import { referenceRoutes } from './routes/reference';
 import { safetyRoutes } from './routes/safety';
 import { captureException } from './observability/sentry';
@@ -109,15 +114,49 @@ export async function buildApp({
     maxAge: 86_400,
   });
 
+  // Auth is registered BEFORE the limiter (review B9). The limiter keys on
+  // `app.authSubject()`, which must exist when its hooks are installed.
+  // Authentication itself stays opt-in per route: `authSubject` never rejects
+  // a request, it only tells the limiter who is asking.
+  await app.register(authPlugin, { verifier });
+
+  // The tighter ceiling for the routes that send something to another person.
+  // An onRoute hook rather than a `config` block on each route, so the list
+  // is in one place — and registered BEFORE the limiter, because the limiter
+  // reads `config.rateLimit` in its own onRoute hook and hooks run in
+  // registration order.
+  const sendRoutes = new Set([
+    'POST /conversations/:id/messages',
+    'POST /interests',
+    'POST /reports',
+    'POST /family/invitations',
+    'POST /profiles/:userId/photo-request',
+  ]);
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    if (methods.some((method) => sendRoutes.has(`${method} ${route.url}`))) {
+      route.config = {
+        ...route.config,
+        rateLimit: { max: config.RATE_LIMIT_SENDS_PER_MINUTE, timeWindow: '1 minute' },
+      };
+    }
+  });
+
   await app.register(rateLimit, {
     max: config.RATE_LIMIT_PER_MINUTE,
     timeWindow: '1 minute',
-    // Keyed by authenticated subject where available, so one shared NAT does
-    // not throttle an entire office or campus.
-    keyGenerator: (request) => request.auth?.authUserId ?? request.ip,
+    // REVIEW B9. Keyed by the VERIFIED member where there is one, so a shared
+    // NAT — a mobile carrier, an office, a campus — does not put everyone
+    // behind it in one bucket. This used to read `request.auth`, which is not
+    // set until `requireAuth` runs in the route's preHandler, long after this
+    // runs in onRequest: every caller was keyed by IP, and the comment here
+    // claimed the opposite. Prefixed so a user id can never collide with an
+    // address.
+    keyGenerator: async (request) => {
+      const subject = await app.authSubject(request);
+      return subject ? `user:${subject}` : `ip:${request.ip}`;
+    },
   });
-
-  await app.register(authPlugin, { verifier });
 
   // ---------------------------------------------------------------------------
   // Error handling is installed BEFORE any route.
@@ -135,6 +174,12 @@ export async function buildApp({
 
   app.setErrorHandler(async (error: FastifyError, request, reply) => {
     if (error instanceof ApiError) {
+      if (error.status >= 500) {
+        // Ours, not theirs: log the detail (review B15 — it may carry an
+        // upstream response) and report it. The body below carries none of it.
+        request.log.error({ err: error, cause: error.cause }, 'Internal error');
+        captureException(error);
+      }
       if (error.retryAfterSeconds !== undefined) {
         void reply.header('Retry-After', String(error.retryAfterSeconds));
       }
@@ -148,11 +193,24 @@ export async function buildApp({
         .send({ code: 'rate_limited', message: 'Too many requests. Please slow down.' });
     }
 
+    // REVIEW B21. Every Fastify 4xx used to come back as `validation_failed`,
+    // so a client could not tell "photo too large" from "bad field". The
+    // status is kept; the code now says which.
     if (typeof error.statusCode === 'number' && error.statusCode < 500) {
       return reply.code(error.statusCode).send({
-        code: 'validation_failed',
+        code: problemCodeForStatus(error.statusCode, error.code),
         message: error.message,
       });
+    }
+
+    // REVIEW B14. A database error the CALLER caused — a malformed id, a
+    // duplicate, a violated invariant, a write the row policy refuses — is a
+    // 4xx, not a 500 and a Sentry alert. Logged at warn, never reported as an
+    // exception, and the Postgres text is never returned.
+    const mapped = mapDatabaseError(error);
+    if (mapped) {
+      request.log.warn({ pgCode: (error as { code?: string }).code }, 'database refused request');
+      return reply.code(mapped.status).send(mapped.toBody());
     }
 
     // Unexpected. Log and report the detail; return none of it. An error
@@ -174,12 +232,21 @@ export async function buildApp({
   await app.register(accountRoutes, { db });
   await app.register(referenceRoutes, { db });
   await app.register(profileRoutes, { db });
+  // Review L4: another member's profile, permission-filtered.
+  await app.register(publicProfileRoutes, { db });
+  // Review L10: account self-service (entitlements, quotas, devices, lifecycle,
+  // notification preferences, push tokens).
+  await app.register(meRoutes, { db });
   await app.register(photoRoutes, { db, storage });
+  // Review L3: another member's photos and photo requests (0031).
+  await app.register(photoAccessRoutes, { db, storage });
   await app.register(discoveryRoutes, { db });
   await app.register(interestRoutes, { db });
   await app.register(matchRoutes, { db });
   await app.register(notificationRoutes, { db });
   await app.register(safetyRoutes, { db });
+  // Review L1: the moderation backend. Staff only; see routes/admin.ts.
+  await app.register(adminRoutes, { db, storage });
   await app.register(familyRoutes, { db });
   await app.register(conversationRoutes, { db });
 

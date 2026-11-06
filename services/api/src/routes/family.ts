@@ -16,6 +16,7 @@ import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
 import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
+import { uuidParam } from '../http/params';
 
 /**
  * Family / Wali — the review layer (Phase 6b, ADR 0011, D12).
@@ -145,6 +146,19 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
               and decision in ('pending', 'more_info_requested')
               and sla_notified_at is null
               and requested_at < now() - make_interval(hours => $2::int)
+              -- Only a review that can still be decided can be stalled. Once
+              -- the OTHER household rejects, or the match ends, this side's
+              -- review is moot — and since review B1 it can no longer be
+              -- decided at all. Warning the owner about it would tell them
+              -- their family is stalling on a match that is already closed,
+              -- and point them at removing a relative who did nothing wrong:
+              -- the opposite of what this R16 control is for.
+              and exists (
+                select 1 from public.matches m
+                 where m.id = family_reviews.match_id
+                   and m.communication_state = 'pending_family_review'
+                   and m.ended_at is null
+              )
           returning id, match_id`,
           [ownerUserId, REVIEW_SLA_HOURS],
         );
@@ -398,7 +412,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
       const parsed = respondToInvitationSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid response');
       const { token, accept } = parsed.data;
@@ -513,7 +527,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
 
       const ownerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!ownerUserId) throw notFound('No account for this session');
@@ -553,7 +567,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
       const parsed = updatePermissionsSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid permissions');
 
@@ -623,7 +637,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
 
       const ownerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!ownerUserId) throw notFound('No account for this session');
@@ -864,7 +878,15 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
              on c.id = case when m.user_a_id = v.owner_user_id
                             then m.user_b_id else m.user_a_id end
           where v.match_id = any($2::uuid[])
-            and app.can_review_match($1::uuid, v.match_id)`,
+            and app.can_review_match($1::uuid, v.match_id)
+            -- A review is only actionable while its match still awaits family
+            -- review (review B1). Without this, a review left pending after
+            -- the other household rejected stayed in the inbox forever and
+            -- answered every decision with 409. Filtered here because this is
+            -- the step that can read the matches table: the page query above runs
+            -- as the delegate, who is not a participant in the match.
+            and m.communication_state = 'pending_family_review'
+            and m.ended_at is null`,
         [viewerUserId, rows.map((r) => r.match_id)],
       );
       return new Map(found.map((r) => [r.match_id, r]));
@@ -911,7 +933,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
    */
   fastify.get('/family/reviews/:matchId', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
-    const { matchId } = request.params as { matchId: string };
+    const matchId = uuidParam(request, 'matchId', 'match id');
 
     const delegateUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!delegateUserId) throw notFound('No account for this session');
@@ -1063,7 +1085,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { matchId } = request.params as { matchId: string };
+      const matchId = uuidParam(request, 'matchId', 'match id');
       const parsed = decideReviewSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid decision');
       const { action, note } = parsed.data;
@@ -1094,7 +1116,13 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
               and r.delegate_user_id = $1::uuid
               and r.status = 'active'
             where v.match_id = $2::uuid
-            for update of v`,
+            -- The MATCH is locked as well as this side's review (review B1).
+            -- Locking only the review let two families deciding at the same
+            -- instant each read the other as still pending: neither saw a
+            -- complete set, and the match stuck in pending_family_review with
+            -- both sides approved. Serialising on the match means the second
+            -- decider waits, then reads the first decision as committed.
+            for update of v, m`,
           [delegateUserId, matchId],
         );
         const review = found[0];
@@ -1104,6 +1132,15 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         // after one has decided is told so, rather than overwriting it.
         if (review.decision === 'approved' || review.decision === 'rejected') {
           return { kind: 'already_decided' as const };
+        }
+
+        // REVIEW B1. A decision is only meaningful while the match is still
+        // waiting on family review. Once the OTHER household has rejected —
+        // or an approval has been revoked — this side's decision can change
+        // nothing, and before this check an approval arriving after a
+        // rejection was what reopened the match.
+        if (review.state !== 'pending_family_review') {
+          return { kind: 'not_pending' as const };
         }
 
         if (action === 'request_more_info') {
@@ -1142,18 +1179,26 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         );
 
         // A rejection closes the gate immediately. An approval only opens it
-        // when every OTHER side that required review has also approved.
+        // when every OTHER side's review is APPROVED.
+        //
+        // REVIEW B1: this used to count other reviews still `pending` or
+        // `more_info_requested`. A side that had already REJECTED matched
+        // neither, so the count came back zero and the match flipped to
+        // family_approved against that household's explicit refusal. The
+        // question is not "is anyone still deciding" but "has everyone said
+        // yes". Migration 0026 asks the same question in a trigger, so a
+        // future caller cannot reintroduce this.
         let nextState = review.state;
         if (decision === 'rejected') {
           nextState = 'family_rejected';
         } else {
-          const outstanding = await session.query<{ n: number }>(
+          const notApproved = await session.query<{ n: number }>(
             `select count(*)::int as n from public.family_reviews
               where match_id = $1::uuid and id <> $2::uuid
-                and decision in ('pending', 'more_info_requested')`,
+                and decision <> 'approved'`,
             [matchId, review.id],
           );
-          if ((outstanding[0]?.n ?? 0) === 0) nextState = 'family_approved';
+          if ((notApproved[0]?.n ?? 0) === 0) nextState = 'family_approved';
         }
 
         if (nextState !== review.state) {
@@ -1203,6 +1248,9 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
       if (outcome.kind === 'not_found') throw notFound('Review not found');
       if (outcome.kind === 'already_decided')
         throw conflict('This review has already been decided');
+      if (outcome.kind === 'not_pending') {
+        throw conflict('This match is no longer awaiting family review');
+      }
 
       await recordAccess({
         relationshipId: outcome.relationshipId,
@@ -1232,7 +1280,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { matchId } = request.params as { matchId: string };
+      const matchId = uuidParam(request, 'matchId', 'match id');
       const parsed = revokeReviewSchema.safeParse(request.body ?? {});
       if (!parsed.success) throw badRequest('Invalid revocation');
 
@@ -1262,7 +1310,13 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
               and r.delegate_user_id = $1::uuid
               and r.status = 'active'
             where v.match_id = $2::uuid
-            for update of v`,
+            -- The MATCH is locked as well as this side's review (review B1).
+            -- Locking only the review let two families deciding at the same
+            -- instant each read the other as still pending: neither saw a
+            -- complete set, and the match stuck in pending_family_review with
+            -- both sides approved. Serialising on the match means the second
+            -- decider waits, then reads the first decision as committed.
+            for update of v, m`,
           [delegateUserId, matchId],
         );
         const review = found[0];
@@ -1355,10 +1409,25 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         decided_at: string | null;
         note: string | null;
       }>(
-        `select match_id, decision, requested_at, decided_at, note
-           from public.family_reviews
-          where owner_user_id = app.current_user_id()
-          order by requested_at desc
+        // An undecided review is listed only while its match still awaits
+        // review. One left pending after the other family rejected — or after
+        // the match ended — would otherwise read "waiting for approval" and
+        // "over 3 days" for a match that is already closed. Decided reviews
+        // are always listed. The owner is a participant, so RLS lets this
+        // read their own match.
+        `select r.match_id, r.decision, r.requested_at, r.decided_at, r.note
+           from public.family_reviews r
+          where r.owner_user_id = app.current_user_id()
+            and (
+              r.decision not in ('pending', 'more_info_requested')
+              or exists (
+                select 1 from public.matches m
+                 where m.id = r.match_id
+                   and m.communication_state = 'pending_family_review'
+                   and m.ended_at is null
+              )
+            )
+          order by r.requested_at desc
           limit 100`,
       );
 

@@ -247,6 +247,16 @@ describe('PATCH /me', () => {
   });
 
   it('updates settings and returns the new state', async () => {
+    // The member is GRANTED incognito first. Since review B3 it is a paid
+    // entitlement and a free member is refused — covered in
+    // review-phase1.test.ts. This test is about the settings round trip, so
+    // it keeps `incognito` in the payload with the entitlement in place.
+    await h.raw.query(
+      `insert into public.user_entitlements (user_id, entitlement_key, value)
+       select l.user_id, 'incognito', 'true'::jsonb
+         from public.user_auth_links l where l.auth_user_id = $1::uuid`,
+      [authId],
+    );
     const res = await h.app.inject({
       method: 'PATCH',
       url: '/me',

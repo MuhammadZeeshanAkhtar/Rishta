@@ -67,8 +67,92 @@ export const profileCardSchema = z.object({
 });
 export type ProfileCard = z.infer<typeof profileCardSchema>;
 
+/**
+ * Another member's profile, permission-filtered — GET /profiles/{userId}
+ * (review L4; `PublicProfile` in docs/openapi.yaml).
+ *
+ * Fields the viewer may not see are ABSENT, not null: every visibility-
+ * governed field is optional here, and a client must read absence as "not
+ * permitted", never as "empty".
+ */
+export const publicProfileSchema = z.object({
+  userId: uuidSchema,
+  displayName: z.string().optional(),
+  age: z.number().int().optional(),
+  gender: z.enum(['male', 'female']).optional(),
+  countryCode: z.string().optional(),
+  maritalStatusCode: z.string().optional(),
+  religiousPracticeCode: z.string().optional(),
+  marriageTimelineCode: z.string().nullable(),
+  relocationWillingnessCode: z.string().nullable(),
+  hasChildren: z.boolean().nullable().optional(),
+  languages: z.array(z.string()),
+  aboutMe: z.string().optional(),
+  distanceBand: z.string().nullable(),
+  verification: z.object({ badges: z.array(cardVerificationBadgeSchema) }),
+  photos: z.array(z.unknown()),
+  viewerRelationship: z.enum(['stranger', 'interest_pending', 'match', 'wali']),
+  hiddenFieldCount: z.number().int().nonnegative(),
+});
+export type PublicProfile = z.infer<typeof publicProfileSchema>;
+
 export const profileCardPageSchema = pageSchema(profileCardSchema);
 export type ProfileCardPage = z.infer<typeof profileCardPageSchema>;
+
+// ---------------------------------------------------------------------------
+// Another member's photos and photo requests (review L3, migration 0031)
+// ---------------------------------------------------------------------------
+
+export const PHOTO_REQUEST_STATUSES = ['pending', 'approved', 'declined', 'withdrawn'] as const;
+export type PhotoRequestStatus = (typeof PHOTO_REQUEST_STATUSES)[number];
+
+/** Same ceiling as the contract's `message` (`requestPhotoAccess`). */
+export const MAX_PHOTO_REQUEST_MESSAGE = 300;
+
+/**
+ * GET /profiles/{userId}/photos. Each item is the variant this viewer may see;
+ * a photo that needs a request has `url: null` and `requiresRequest: true`.
+ * `request` is the viewer's own latest request to this member, so the screen
+ * can say "requested" or "declined" without a second call.
+ */
+export const profilePhotosSchema = z.object({
+  items: z.array(visiblePhotoSchema),
+  request: z
+    .object({
+      id: uuidSchema,
+      status: z.enum(PHOTO_REQUEST_STATUSES),
+      createdAt: timestampSchema,
+      respondedAt: timestampSchema.nullable(),
+    })
+    .nullable(),
+  /** True when the viewer holds a live grant from this member. */
+  granted: z.boolean(),
+});
+export type ProfilePhotos = z.infer<typeof profilePhotosSchema>;
+
+export const createPhotoRequestSchema = z.object({
+  message: z.string().trim().min(1).max(MAX_PHOTO_REQUEST_MESSAGE).optional(),
+});
+export type CreatePhotoRequest = z.infer<typeof createPhotoRequestSchema>;
+
+export const respondPhotoRequestSchema = z.object({
+  decision: z.enum(['approve', 'decline']),
+});
+export type RespondPhotoRequest = z.infer<typeof respondPhotoRequestSchema>;
+
+export const photoRequestSchema = z.object({
+  id: uuidSchema,
+  direction: z.enum(['incoming', 'outgoing']),
+  counterpart: profileCardSchema,
+  status: z.enum(PHOTO_REQUEST_STATUSES),
+  message: z.string().nullable(),
+  createdAt: timestampSchema,
+  respondedAt: timestampSchema.nullable(),
+});
+export type PhotoRequest = z.infer<typeof photoRequestSchema>;
+
+export const photoRequestPageSchema = pageSchema(photoRequestSchema);
+export type PhotoRequestPage = z.infer<typeof photoRequestPageSchema>;
 
 // ---------------------------------------------------------------------------
 // Discovery
@@ -208,6 +292,9 @@ export const NOTIFICATION_TYPES = [
   'photo_request_answered',
   'family_invitation',
   'family_invitation_answered',
+  'family_review_requested',
+  'family_review_decided',
+  'family_review_stalled',
   'stage_advance_proposed',
   'verification_update',
   'security_alert',

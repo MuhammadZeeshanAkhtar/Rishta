@@ -347,8 +347,10 @@ describe('writing is membership AND the gate', () => {
       [conversationId, alice.userId],
     );
     expect(await trySend(alice, 'After leaving')).toBe(false);
-    // And the counterpart is unaffected.
-    expect(await trySend(bilal, 'Still here')).toBe(true);
+    // REVIEW B25 (0028). Leaving closes the conversation for BOTH participants.
+    // This line used to assert the counterpart could still write — which was
+    // the defect: a thread the leaver could no longer open kept filling up.
+    expect(await trySend(bilal, 'Still here')).toBe(false);
 
     await db.admin(
       `update public.conversation_participants set left_at = null

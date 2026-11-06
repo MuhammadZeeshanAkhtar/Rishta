@@ -1,4 +1,42 @@
 import {
+  adminAuditPageSchema,
+  adminDobQueueSchema,
+  adminPhotoQueueSchema,
+  adminProfileQueueSchema,
+  adminReportQueueSchema,
+  adminSessionSchema,
+  createDobCorrectionSchema,
+  createPhotoRequestSchema,
+  dobCorrectionCreatedSchema,
+  dobCorrectionListSchema,
+  moderationDecisionSchema,
+  photoRequestPageSchema,
+  photoRequestSchema,
+  profilePhotosSchema,
+  reportDecisionSchema,
+  respondPhotoRequestSchema,
+  userActionRequestSchema,
+  userActionResultSchema,
+  type AdminAuditPage,
+  type AdminDobQueue,
+  type AdminPhotoQueue,
+  type AdminProfileQueue,
+  type AdminReportQueue,
+  type AdminSession,
+  type CreateDobCorrection,
+  type DobCorrectionCreated,
+  type DobCorrectionList,
+  type ModerationDecision,
+  type PhotoRequest,
+  type PhotoRequestPage,
+  type PhotoRequestStatus,
+  type ProfilePhotos,
+  type ReportDecision,
+  type ReportStatus,
+  type UserActionRequest,
+  type UserActionResult,
+  publicProfileSchema,
+  type PublicProfile,
   bootstrapRequestSchema,
   createUploadRequestSchema,
   fieldVisibilityMapSchema,
@@ -376,6 +414,22 @@ export class NikahMateClient {
 
   // --- Compatibility ---------------------------------------------------------
 
+  /**
+   * Another member's profile, permission-filtered (review L4). Hidden fields
+   * are ABSENT. 404 when the profile cannot be seen at all.
+   */
+  async getPublicProfile(userId: string): Promise<PublicProfile> {
+    return parse(publicProfileSchema, await this.http.get(`/profiles/${userId}`), 'profile');
+  }
+
+  /**
+   * Records that this profile was opened, for the owner's "who viewed me".
+   * The server dedupes repeat views and hides incognito viewers.
+   */
+  async recordProfileView(userId: string): Promise<void> {
+    await this.http.post(`/profiles/${userId}/view`, {});
+  }
+
   async getCompatibility(userId: string): Promise<CompatibilityScore> {
     return parse(
       compatibilityScoreSchema,
@@ -751,6 +805,163 @@ export class NikahMateClient {
   /** Leave a thread. Not an unmatch — the match itself is ended elsewhere. */
   async leaveConversation(conversationId: string): Promise<void> {
     await this.http.post(`/conversations/${conversationId}/leave`, {});
+  }
+
+  // --- Another member's photos (review L3) -------------------------------------
+
+  /**
+   * What this viewer may see of another member's photos: each item is the
+   * variant the server (and the Storage policy) allows, or `url: null` with
+   * `requiresRequest` when the photo must be asked for. 404 when the profile
+   * cannot be seen at all.
+   */
+  async getProfilePhotos(userId: string): Promise<ProfilePhotos> {
+    return parse(profilePhotosSchema, await this.http.get(`/profiles/${userId}/photos`), 'photos');
+  }
+
+  /** 409 when there is nothing to request, a request is open, or one was declined recently. */
+  async requestPhotos(userId: string, message?: string): Promise<PhotoRequest> {
+    const body = createPhotoRequestSchema.parse(message ? { message } : {});
+    return parse(
+      photoRequestSchema,
+      await this.http.post(`/profiles/${userId}/photo-request`, body),
+      'photo request',
+    );
+  }
+
+  async listPhotoRequests(
+    options: {
+      direction?: 'incoming' | 'outgoing';
+      status?: PhotoRequestStatus;
+      cursor?: string;
+      limit?: number;
+    } = {},
+  ): Promise<PhotoRequestPage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.direction) query.direction = options.direction;
+    if (options.status) query.status = options.status;
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(
+      photoRequestPageSchema,
+      await this.http.get('/me/photo-requests', { query }),
+      'photo requests',
+    );
+  }
+
+  /** The owner's answer. Approval reveals blurred and on-request photos, never private ones. */
+  async respondToPhotoRequest(
+    requestId: string,
+    decision: 'approve' | 'decline',
+  ): Promise<PhotoRequest> {
+    const body = respondPhotoRequestSchema.parse({ decision });
+    return parse(
+      photoRequestSchema,
+      await this.http.post(`/me/photo-requests/${requestId}/respond`, body),
+      'photo request',
+    );
+  }
+
+  // --- Date-of-birth corrections (review B6) ------------------------------------
+
+  /** 409 before the profile is complete (the date is still editable) or with one open. */
+  async requestDobCorrection(request: CreateDobCorrection): Promise<DobCorrectionCreated> {
+    const body = createDobCorrectionSchema.parse(request);
+    return parse(
+      dobCorrectionCreatedSchema,
+      await this.http.post('/me/dob-correction-requests', body),
+      'correction request',
+    );
+  }
+
+  async listDobCorrections(): Promise<DobCorrectionList> {
+    return parse(
+      dobCorrectionListSchema,
+      await this.http.get('/me/dob-correction-requests'),
+      'correction requests',
+    );
+  }
+
+  // --- Staff (review L1) ---------------------------------------------------------
+  //
+  // Every call is authorised by the API: staff row, role, and aal2. 404 means
+  // "not staff", 403 "a second factor or a role is missing". Nothing here
+  // decides access.
+
+  async getAdminSession(): Promise<AdminSession> {
+    return parse(adminSessionSchema, await this.http.get('/admin/session'), 'staff session');
+  }
+
+  async listPhotoQueue(limit?: number): Promise<AdminPhotoQueue> {
+    return parse(
+      adminPhotoQueueSchema,
+      await this.http.get('/admin/moderation/photos', { query: { limit } }),
+      'photo queue',
+    );
+  }
+
+  async decidePhoto(photoId: string, decision: ModerationDecision): Promise<void> {
+    const body = moderationDecisionSchema.parse(decision);
+    await this.http.post(`/admin/moderation/photos/${photoId}`, body);
+  }
+
+  async listProfileQueue(limit?: number): Promise<AdminProfileQueue> {
+    return parse(
+      adminProfileQueueSchema,
+      await this.http.get('/admin/moderation/profiles', { query: { limit } }),
+      'profile queue',
+    );
+  }
+
+  async decideProfile(userId: string, decision: ModerationDecision): Promise<void> {
+    const body = moderationDecisionSchema.parse(decision);
+    await this.http.post(`/admin/moderation/profiles/${userId}`, body);
+  }
+
+  async listReportQueue(status: ReportStatus = 'open', limit?: number): Promise<AdminReportQueue> {
+    return parse(
+      adminReportQueueSchema,
+      await this.http.get('/admin/reports', { query: { status, limit } }),
+      'report queue',
+    );
+  }
+
+  async updateReport(reportId: string, decision: ReportDecision): Promise<void> {
+    const body = reportDecisionSchema.parse(decision);
+    await this.http.post(`/admin/reports/${reportId}`, body);
+  }
+
+  async actOnUser(userId: string, request: UserActionRequest): Promise<UserActionResult> {
+    const body = userActionRequestSchema.parse(request);
+    return parse(
+      userActionResultSchema,
+      await this.http.post(`/admin/users/${userId}/actions`, body),
+      'account action',
+    );
+  }
+
+  async listDobQueue(limit?: number): Promise<AdminDobQueue> {
+    return parse(
+      adminDobQueueSchema,
+      await this.http.get('/admin/dob-corrections', { query: { limit } }),
+      'correction queue',
+    );
+  }
+
+  async decideDobCorrection(requestId: string, decision: ModerationDecision): Promise<void> {
+    const body = moderationDecisionSchema.parse(decision);
+    await this.http.post(`/admin/dob-corrections/${requestId}`, body);
+  }
+
+  async listAudit(
+    options: { targetType?: string; targetId?: string; cursor?: string; limit?: number } = {},
+  ): Promise<AdminAuditPage> {
+    const query: Record<string, string | number | undefined> = {};
+    if (options.targetType) query.targetType = options.targetType;
+    if (options.targetId) query.targetId = options.targetId;
+    if (options.cursor) query.cursor = options.cursor;
+    if (options.limit) query.limit = options.limit;
+    return parse(adminAuditPageSchema, await this.http.get('/admin/audit', { query }), 'audit');
   }
 
   /**

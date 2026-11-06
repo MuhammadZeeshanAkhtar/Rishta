@@ -5,19 +5,21 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 ---
 
-> ## PHASES 1–7 BUILT · 8 ONWARDS NOT STARTED
+> ## HANDOVER STATE, 5 NOVEMBER 2026: VERIFIED LOCALLY ONLY
 >
-> **Built and verified:** the monorepo, the full schema (25 migrations, 45 tables) with
-> RLS enabled _and forced_ everywhere, authentication, onboarding, profiles, photos,
-> per-field privacy, discovery, the deterministic compatibility engine, interests,
-> matches, notifications, block & report, **the Family/Wali review layer (6b)** and
-> **conversations with Realtime delivery (7)**.
+> **Built and tested locally:** the monorepo, the full schema (31 migrations, 56 tables) with
+> RLS enabled _and forced_ everywhere, authentication, onboarding, profiles, photos including
+> others' photos and photo requests, per-field privacy, discovery, the deterministic compatibility
+> engine, interests, matches, notifications, block & report, the Family/Wali review layer,
+> conversations with Realtime delivery, and the staff moderation console at `/admin`.
 >
-> **Not started:** moderation tooling and the admin panel (Phase 8), family calls
-> (Phase 9), proposals (10), the AI layer (11) and everything after. Those are specified
-> in the ADRs and the OpenAPI contract but no table, endpoint or screen exists for them.
+> **Not verified:** nothing has been applied to hosted Supabase, deployed, built on EAS or run on
+> a device. **Start with [docs/HANDOVER.md](docs/HANDOVER.md).**
 >
-> **1,133 tests pass.** Typecheck, lint and format are clean.
+> **Not started:** family calls (Phase 9), proposals (10), the AI layer (11) and everything after.
+>
+> **1,730 tests pass.** Typecheck, lint and format are clean. §13 below records the state at
+> Phase 7; the code review documents supersede it where they differ.
 > See [§13 Implementation Status](#13-implementation-status) for the row-by-row record and
 > [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what a new team should expect
 > to find missing.
@@ -36,7 +38,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 |          |                                                                                                          |
 | -------- | -------------------------------------------------------------------------------------------------------- |
-| Node     | **≥ 20** (CI runs 22; developed on 24)                                                                   |
+| Node     | **≥ 20.9** (sharp 0.35 needs it; CI runs 22; developed on 24)                                            |
 | pnpm     | **11** — `corepack enable && corepack prepare pnpm@11.21.0 --activate`                                   |
 | Supabase | One project for development. **Create a new one** — see [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) |
 
@@ -114,6 +116,11 @@ set `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:3000`.
 ```bash
 pnpm test && pnpm typecheck && pnpm lint && pnpm format:check
 ```
+
+### 6 · Handover and Android APK
+
+Start with [docs/HANDOVER.md](docs/HANDOVER.md). The APK build is in
+[docs/ANDROID_APK_BUILD.md](docs/ANDROID_APK_BUILD.md).
 
 ---
 
@@ -1481,7 +1488,7 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | Monorepo / pnpm workspace                    | **BUILT** - 6 packages, TS strict, ESLint, Prettier                                        |
 | ESLint architectural guardrails              | **BUILT** - verified firing                                                                |
 | `@nikahmate/domain` shared vocabulary        | **BUILT** - 122 tests                                                                      |
-| Database schema                              | **BUILT** - 25 migrations, 45 tables, applied to a fresh Postgres in CI                    |
+| Database schema                              | **BUILT** - 31 migrations, 56 tables, applied to a fresh Postgres in CI                    |
 | Family / Wali review layer (Phase 6b)        | **BUILT** - D12 settled; invitations, scoped grants, match-scoped review, 72h SLA          |
 | Conversations and messages (Phase 7)         | **BUILT** - gate-aware send, stages, unread counts, Supabase Realtime                      |
 | RLS - every table                            | **BUILT** - enabled AND forced; 330 tests across 13 suites                                 |
@@ -1505,7 +1512,7 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | English at 320dp                             | **VERIFIED** - rendered and measured, zero horizontal overflow                             |
 | CI workflow                                  | **BUILT** - lint, format, typecheck, test, Expo web bundle, secret guard                   |
 
-**1,133 tests passing** - domain 122, database 405, api-client 31, i18n 14, API 561.
+**1,730 tests passing** - domain 254, db 514, api-client 40, i18n 14, api 850, mobile 58.
 Lint, format and typecheck clean across all 6 packages.
 
 Database tests run against a real Postgres via PGlite, in-process, applying the
@@ -1513,20 +1520,20 @@ migration files exactly as written. No Docker or service container is needed.
 
 ### Not built
 
-| Component                                 | Status                                                                                       |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Moderation tooling, admin panel (Phase 8) | Not started - reports are stored but nothing reads them                                      |
-| Voice notes in chat                       | Not started - the message `kind` column accepts `voice`; no upload or moderation path exists |
-| Message translation, reply suggestions    | Not started - both are AI, which [ADR 0006](docs/adr/) excludes from v1                      |
-| Family calls (Phase 9)                    | Not started                                                                                  |
-| Push notifications                        | Not started - the in-app inbox is the only channel                                           |
-| Search and advanced filters               | Not started - `/discovery/search` unimplemented                                              |
-| Cross-user photo delivery                 | Blocked by design - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)               |
-| Account deletion / deactivation           | Not started - **required by Google Play** before launch                                      |
-| Subscriptions, entitlement UI (Phase 12)  | Backend primitives exist; no plans, no billing                                               |
-| Gemini / AI layer                         | Not started - **not required for v1**, and rejected at boot if a key is present              |
-| Dark theme                                | Architecture ready, palette not authored                                                     |
-| Deployment configuration                  | Not started - no Dockerfile, no `eas.json`                                                   |
+| Component                                | Status                                                                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Moderation tooling, admin panel          | Console and API built (L1); not hosted. Cases and PII log not built                                                                |
+| Voice notes in chat                      | Not started - the message `kind` column accepts `voice`; no upload or moderation path exists                                       |
+| Message translation, reply suggestions   | Not started - both are AI, which [ADR 0006](docs/adr/) excludes from v1                                                            |
+| Family calls (Phase 9)                   | Not started                                                                                                                        |
+| Push notifications                       | Tokens and preferences built; delivery not built (no provider)                                                                     |
+| Search and advanced filters              | Not started - `/discovery/search` unimplemented                                                                                    |
+| Cross-user photo delivery                | Built (L3); unverified on real Storage. Discovery cards show no photo - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) |
+| Account deletion / deactivation          | Request and deactivation API built; deletion execution not built - **required by Google Play** before launch                       |
+| Subscriptions, entitlement UI (Phase 12) | Backend primitives exist; no plans, no billing                                                                                     |
+| Gemini / AI layer                        | Not started - **not required for v1**, and rejected at boot if a key is present                                                    |
+| Dark theme                               | Architecture ready, palette not authored                                                                                           |
+| Deployment configuration                 | Not started - no Dockerfile, no `eas.json`                                                                                         |
 
 A full, evidence-backed list is in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 

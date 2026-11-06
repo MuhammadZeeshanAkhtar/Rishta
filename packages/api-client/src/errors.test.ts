@@ -11,6 +11,25 @@ import { fromAuthError, isNikahMateError, NikahMateError } from './errors';
  */
 
 describe('fromAuthError', () => {
+  it('reports a link opened on another device as its own kind (review B18)', () => {
+    // supabase-js, client side: no verifier stored on this device.
+    expect(
+      fromAuthError({
+        name: 'AuthPKCECodeVerifierMissingError',
+        code: 'pkce_code_verifier_not_found',
+        message: 'PKCE code verifier not found in storage.',
+      }).kind,
+    ).toBe('link_other_device');
+    // The server, when sent an empty verifier.
+    expect(
+      fromAuthError({
+        status: 400,
+        message: 'invalid request: both auth code and code verifier should be non-empty',
+      }).kind,
+    ).toBe('link_other_device');
+    expect(new NikahMateError('link_other_device').messageKey).toBe('errors.linkOtherDevice');
+  });
+
   it('maps Supabase error codes to kinds', () => {
     const cases: Array<[string, string]> = [
       ['invalid_credentials', 'invalid_credentials'],

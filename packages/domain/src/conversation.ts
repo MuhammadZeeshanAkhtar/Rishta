@@ -50,6 +50,11 @@ export const WRITE_BLOCKED_REASONS = [
   'match_ended',
   'archived',
   'left',
+  /**
+   * The OTHER participant left. Leaving closes the conversation for both
+   * sides, permanently (review B25). Added in Phase 2; additive.
+   */
+  'counterpart_left',
   'read_only',
 ] as const;
 export type WriteBlockedReason = (typeof WRITE_BLOCKED_REASONS)[number];

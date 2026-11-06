@@ -19,6 +19,12 @@ export type AuthErrorKind =
   | 'invalid_email'
   | 'rate_limited'
   | 'session_expired'
+  /**
+   * An email link opened on a device or browser other than the one that
+   * asked for it (review B18). PKCE ties the link to the verifier stored by
+   * the requesting client, so it cannot complete here.
+   */
+  | 'link_other_device'
   | 'network'
   | 'server'
   | 'unknown';
@@ -45,6 +51,7 @@ const MESSAGE_KEYS: Record<ErrorKind, string> = {
   invalid_email: 'errors.invalidEmail',
   rate_limited: 'errors.rateLimited',
   session_expired: 'errors.sessionExpired',
+  link_other_device: 'errors.linkOtherDevice',
   network: 'errors.network',
   server: 'errors.server',
   unknown: 'errors.unknown',
@@ -130,8 +137,23 @@ export function fromAuthError(error: unknown): NikahMateError {
     session_expired: 'session_expired',
     refresh_token_not_found: 'session_expired',
     refresh_token_already_used: 'session_expired',
+    // A wrong or expired authenticator code (staff second factor, review L1).
+    mfa_verification_failed: 'invalid_credentials',
+    mfa_challenge_expired: 'invalid_credentials',
   };
   if (code && byCode[code]) return new NikahMateError(byCode[code], { detail: message });
+
+  // REVIEW B18. A PKCE link opened where it was not requested: the client has
+  // no code verifier (supabase-js), or the server was sent an empty one.
+  // Reported as itself, so the person is told to open the link on the device
+  // they signed up on — not handed a generic error.
+  if (
+    e?.name === 'AuthPKCECodeVerifierMissingError' ||
+    code === 'pkce_code_verifier_not_found' ||
+    lower.includes('code verifier')
+  ) {
+    return new NikahMateError('link_other_device', { detail: message });
+  }
 
   if (status === 429) return new NikahMateError('rate_limited', { detail: message });
   if (status === 401 || status === 403) {

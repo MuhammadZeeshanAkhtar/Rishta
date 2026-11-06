@@ -3,13 +3,18 @@ openapi: 3.1.0
 # =============================================================================
 # NikahMate API — v1 contract
 #
-# STATUS: Proposed for review. NOTHING IS IMPLEMENTED.
-# No server exists, no Supabase project exists, no code has been written.
+# STATUS (code review Phase 4, 2026-11-04): IMPLEMENTED by services/api,
+# except the operations marked `x-status: not-implemented`. Each of those
+# carries `x-blocked-by`, naming the decision or service it waits for; the
+# server answers them 404. `services/api/test/openapi-contract.test.ts` holds
+# this document and the running Fastify routes to each other, both ways.
 #
-# Scope: the 111 member-facing operations of v1 (D4 = Option A, revised by D12).
-# Was 97 before Family Safety; +14 for review and calls.
-# Deferred and therefore ABSENT: proposals, AI/Gemini, payments, voice notes,
-# translation, selfie/KYC verification, direct 1:1 calling, admin endpoints.
+# Scope: the 111 member-facing operations of v1 (D4 = Option A, revised by D12),
+# plus the operational endpoints added during the code review: `/health`, the
+# date-of-birth correction workflow (B6), conversation leave, the owner's
+# family-review list, photo reorder, and the staff endpoints under `/admin`
+# (L1). Deferred and therefore ABSENT: proposals, AI/Gemini, payments, voice
+# notes, translation, selfie/KYC verification, direct 1:1 calling.
 #
 # FAMILY SAFETY (ADR 0011). Accepting an interest does not open a conversation.
 # `matches.communicationState` is the gate; a delegate holding
@@ -24,7 +29,10 @@ openapi: 3.1.0
 # reuse this contract unchanged.
 #
 # x-access mirrors README §9.2 access classes:
-#   public | self | member | perm | match | wali
+#   public | self | member | perm | match | wali | staff
+# `staff` (code review L1): an active `admin_users` row with the named role,
+# and a second factor (aal2) unless the row waives it. A caller who is not
+# staff gets 404, so the surface does not announce itself.
 # =============================================================================
 
 info:
@@ -41,7 +49,10 @@ info:
     service. Row-level security in Postgres is a backstop, not the primary
     control. Field-level visibility is applied by this API, not by RLS.
 
-    **Errors.** Every non-2xx response uses the `Problem` schema.
+    **Errors.** Every non-2xx response uses the `Problem` schema. Every
+    operation may also answer `429` (`rate_limited`) from the global rate
+    limiter, `413`/`415` for an oversized or non-JSON body, and `500`
+    (`internal_error`), which are not repeated on each operation.
 
     **Pagination.** Cursor-based throughout. Offset pagination is not used —
     it degrades linearly on the longest conversations, which belong to the
@@ -52,8 +63,10 @@ info:
     name: Proprietary
 
 servers:
-  - url: https://api.nikahmate.example/v1
-    description: Placeholder. No environment exists yet.
+  - url: https://api.nikahmate.example
+    description: |
+      Placeholder host. Routes are served at the root — there is no `/v1`
+      path prefix in the running server.
 
 security:
   - bearerAuth: []
@@ -91,6 +104,10 @@ tags:
     description: Inbox, preferences, push registration
   - name: Entitlements
     description: Plans, entitlements, usage counters
+  - name: Admin
+    description: Staff moderation, reports, account actions, DOB corrections (code review L1)
+  - name: Operations
+    description: Health
 
 paths:
 
@@ -146,8 +163,14 @@ paths:
     get:
       operationId: listDevices
       summary: Devices with an active session
+      description: |
+        Revoked devices are not listed. `isCurrent` is true for the device whose
+        `deviceId` the caller sends in `X-Device-Id`; without the header no
+        device is marked current.
       tags: [Account]
       x-access: self
+      parameters:
+        - { $ref: '#/components/parameters/DeviceIdHeader' }
       responses:
         '200':
           description: OK
@@ -163,12 +186,18 @@ paths:
     delete:
       operationId: revokeDevice
       summary: Revoke a device session
+      description: |
+        Marks the device revoked, invalidates its push token and records a
+        `device_revoked` security event. Ending the device's Supabase Auth
+        session is NOT done here: it needs the Auth admin API (see the code
+        review report, L10).
       tags: [Account]
       x-access: self
       parameters:
-        - { name: deviceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: deviceId, in: path, required: true, schema: { type: string, format: uuid }, description: The `id` from `GET /me/devices` }
       responses:
         '204': { description: Revoked }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -192,47 +221,64 @@ paths:
                   - type: object
                     properties:
                       items: { type: array, items: { $ref: '#/components/schemas/SecurityEvent' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /me/deactivate:
     post:
       operationId: deactivateAccount
       summary: Hide the profile without deleting anything
-      description: Reversible. The user can return at any time; nothing is erased.
+      description: |
+        Reversible. The user can return at any time; nothing is erased. Only an
+        `active` account can deactivate — a suspended, banned or
+        pending-deletion account gets 409, so deactivation is never a way out
+        of a moderation state.
       tags: [Account]
       x-access: self
       responses:
         '204': { description: Deactivated }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /me/reactivate:
     post:
       operationId: reactivateAccount
       summary: Return from deactivation
+      description: Only a `deactivated` account can reactivate; anything else is 409.
       tags: [Account]
       x-access: self
       responses:
         '204': { description: Reactivated }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /me/delete:
     post:
       operationId: requestDeletion
       summary: Request erasure
       description: |
-        Starts a 30-day grace period (ERD E1). An open moderation case places a
-        retention hold and delays execution; the response says so in general terms.
-        Erasure anonymises — a counterpart keeps their side of a conversation.
+        Starts a 30-day grace period (ERD E1) and sets the account to
+        `pending_deletion`, which hides it at once. An open report against the
+        member, or a suspended/banned account, places a retention hold
+        (`status: held`); the response says so in general terms.
+
+        EXECUTION is not built: erasure after the grace period needs a job
+        runner and the Supabase Auth admin API. `pnpm maintenance` reports
+        requests past their grace period; it does not execute them.
       tags: [Account]
       x-access: self
       x-async: true
       responses:
         '202': { description: Scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/DeletionRequest' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: cancelDeletion
       summary: Cancel a pending deletion during the grace period
+      description: Restores the account status the member had when they asked (stored with the request).
       tags: [Account]
       x-access: self
       responses:
@@ -243,6 +289,8 @@ paths:
   /me/export:
     post:
       operationId: requestExport
+      x-status: not-implemented
+      x-blocked-by: 'A job runner and a secure file-delivery channel (L11); neither exists.'
       summary: Request a data export
       tags: [Account]
       x-access: self
@@ -251,6 +299,55 @@ paths:
         '202': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/ExportJob' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /me/dob-correction-requests:
+    post:
+      operationId: requestDobCorrection
+      summary: Ask support to correct a locked date of birth
+      description: |
+        Code review B6. Once the profile is complete the date of birth is
+        locked; a correction is a request that support decides and that is
+        audited. One open request at a time. Before completion the date is
+        still editable in the profile, so a request then is 409.
+      tags: [Account]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DobCorrectionRequestCreate' }
+      responses:
+        '201':
+          description: Filed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, status, requestedDob, createdAt]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  status: { type: string, enum: [pending] }
+                  requestedDob: { type: string, format: date }
+                  createdAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      operationId: listMyDobCorrections
+      summary: My date-of-birth correction requests, newest first
+      tags: [Account]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/DobCorrectionRequest' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   # ===========================================================================
   # REFERENCE — 3
@@ -372,7 +469,9 @@ paths:
           required: true
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicProfile' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /me/profile/submit:
     post:
@@ -439,10 +538,11 @@ paths:
       summary: Record that this profile was viewed
       description: |
         Suppressed from the viewed member's "who viewed you" when the viewer has
-        incognito enabled, but always recorded for abuse investigation.
+        incognito enabled, but always recorded for abuse investigation. Recorded
+        synchronously; repeat views of the same profile within 30 minutes are
+        recorded once. A profile the caller may not see is 404.
       tags: [Profile]
       x-access: member
-      x-async: true
       parameters:
         - { $ref: '#/components/parameters/UserId' }
       responses:
@@ -469,6 +569,33 @@ paths:
                 type: object
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/OwnPhoto' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/photos/order:
+    put:
+      operationId: reorderMyPhotos
+      summary: Set the order of my photos
+      description: |
+        `photoIds` in the wanted order; position is the array index. Applied in
+        one statement. An id that is not the caller's matches nothing (RLS), so
+        it cannot reorder anyone else's gallery. Returns the caller's photos.
+      tags: [Photos]
+      x-access: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhotoReorder' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/OwnPhoto' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /me/photos/upload-url:
@@ -554,11 +681,19 @@ paths:
       operationId: getProfilePhotos
       summary: Another member's photos, as short-lived signed URLs
       description: |
-        Returns only what this viewer may see, at the correct variant. A photo
-        at `blurred` visibility returns the server-generated blurred file — never
-        the original with a client-side blur applied.
+        Returns only what this viewer may see, at the correct variant (review
+        L3, migration 0031). Approved photos only; `private` photos are never
+        listed. Per visibility, without a grant: `public` → the original
+        (`full`); `blurred` → the server-generated blurred file, with
+        `requiresRequest: true`; `on_request` → no URL, `requiresRequest:
+        true`. With a grant (an approved request), `blurred` and `on_request`
+        photos are returned in `full`.
 
-        URLs expire in 5 minutes and are not cacheable.
+        URLs are signed with the VIEWER's own token, and a Storage policy
+        applies the same rule (`app.can_read_photo_object`), so a variant the
+        rule refuses cannot be signed. URLs expire in 5 minutes. **Hosted
+        Supabase Storage behaviour is unverified** (the policy is a no-op
+        outside Supabase).
       tags: [Photos]
       x-access: perm
       parameters:
@@ -568,10 +703,8 @@ paths:
           description: OK
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  items: { type: array, items: { $ref: '#/components/schemas/VisiblePhoto' } }
+              schema: { $ref: '#/components/schemas/ProfilePhotos' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -579,7 +712,13 @@ paths:
     post:
       operationId: requestPhotoAccess
       summary: Ask to see private photos
-      description: One open request per pair at a time — also the anti-nagging control.
+      description: |
+        One open request per pair at a time — also the anti-nagging control.
+        409 when the member has no blurred or on-request photo to request,
+        when the caller already holds a grant, when a request is open, or
+        when the last one was declined within 30 days. The message obeys the
+        contact-details rule (400 `fields.message = contact_details_not_allowed`).
+        The owner receives a `photo_request` notification. Send-rate limited.
       tags: [Photos]
       x-access: member
       parameters:
@@ -590,9 +729,10 @@ paths:
             schema:
               type: object
               properties:
-                message: { type: string, maxLength: 300 }
+                message: { type: string, minLength: 1, maxLength: 300 }
       responses:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PhotoRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -601,6 +741,9 @@ paths:
     get:
       operationId: listPhotoRequests
       summary: Incoming and outgoing photo requests
+      description: |
+        Newest first. A request whose other party the caller can no longer see
+        (blocked, suspended) is left out.
       tags: [Photos]
       x-access: self
       parameters:
@@ -619,12 +762,18 @@ paths:
                   - type: object
                     properties:
                       items: { type: array, items: { $ref: '#/components/schemas/PhotoRequest' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /me/photo-requests/{requestId}/respond:
     post:
       operationId: respondToPhotoRequest
       summary: Approve or decline a photo request
+      description: |
+        The owner only (404 otherwise). Approval grants the requester every
+        blurred and on-request photo in full — never a private one; setting a
+        photo private withdraws it again. 409 once answered. The requester
+        receives a `photo_request_answered` notification.
       tags: [Photos]
       x-access: self
       parameters:
@@ -640,8 +789,10 @@ paths:
                 decision: { type: string, enum: [approve, decline] }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PhotoRequest' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ===========================================================================
   # PREFERENCES — 4
@@ -697,6 +848,7 @@ paths:
       x-access: self
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PreferenceImpact' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   # ===========================================================================
@@ -749,6 +901,8 @@ paths:
   /discovery/search:
     post:
       operationId: searchProfiles
+      x-status: not-implemented
+      x-blocked-by: 'Company decision: which filters are entitlement-gated is unspecified.'
       summary: Advanced filtered search
       description: |
         Filters beyond the free tier are entitlement-gated and return 403 with
@@ -818,7 +972,10 @@ paths:
     get:
       operationId: listProfileViews
       summary: Who viewed me
-      description: Entitlement-gated. Incognito viewers are excluded.
+      description: |
+        Entitlement-gated (`who_viewed_me`; 403 `entitlement_required`
+        without it). Incognito viewers and viewers the caller may not see are
+        excluded. Most recent first.
       tags: [Discovery]
       x-access: self
       parameters:
@@ -826,6 +983,7 @@ paths:
         - { $ref: '#/components/parameters/Limit' }
       responses:
         '200': { $ref: '#/components/responses/ProfileCardPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -889,12 +1047,24 @@ paths:
     post:
       operationId: recomputeCompatibility
       summary: Recompute after a preference change
-      description: Rate-limited. The nightly batch does the bulk of this work.
+      description: |
+        Rate-limited: one recompute per minute (429 `rate_limited` with
+        `retryAfterSeconds`). There is no nightly batch or queue yet (L11), so
+        the recompute runs within the request and the 202 body reports it as
+        completed.
       tags: [Compatibility]
       x-access: self
-      x-async: true
       responses:
-        '202': { description: Queued }
+        '202':
+          description: Recomputed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, candidates]
+                properties:
+                  status: { type: string, enum: [completed] }
+                  candidates: { type: integer, description: Size of the recommended candidate set }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
@@ -1034,7 +1204,7 @@ paths:
     get:
       operationId: getQuotas
       summary: Remaining daily allowances
-      description: 'Free plan: 5 interests per day (ERD E4/A5). Resets at midnight in the user''s timezone.'
+      description: 'Free plan: 5 interests per day (ERD E4/A5). Resets at midnight in the user''s timezone (UTC when none valid is set).'
       tags: [Interests]
       x-access: self
       responses:
@@ -1290,9 +1460,27 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /conversations/{conversationId}/leave:
+    post:
+      operationId: leaveConversation
+      summary: Leave a conversation
+      description: |
+        Marks the caller's participation as left. Idempotent. The counterpart
+        keeps the history. A conversation the caller is not in is 404.
+      tags: [Conversations]
+      x-access: match
+      parameters: [{ $ref: '#/components/parameters/ConversationId' }]
+      responses:
+        '204': { description: Left }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /conversations/{conversationId}/suggestions:
     get:
       operationId: getQuestionSuggestions
+      x-status: not-implemented
+      x-blocked-by: 'Company-approved suggestion content does not exist.'
       summary: Stage-appropriate marriage questions
       description: |
         v1 serves a curated, translated question bank per stage — NOT generated
@@ -1631,6 +1819,32 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /family/my-reviews:
+    get:
+      operationId: listMyFamilyReviews
+      summary: Reviews my family holds on my matches
+      description: |
+        The owner's view (the delegate's inbox is `/family/reviews`). Decided
+        reviews, and pending ones whose match is still awaiting family review.
+        `overdue` is true for an undecided review older than the review SLA.
+        Opening this list also runs the stalled-review sweep for the caller.
+        At most 100 items, newest first; there is no further page.
+      tags: [Family]
+      x-access: self
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/MyFamilyReview' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /matches/{matchId}/family-review:
     get:
       operationId: getMatchFamilyReview
@@ -1651,9 +1865,11 @@ paths:
       operationId: requestFamilyReview
       summary: Ask my family to review again
       description: |
-        Available to the owner after a rejection, and when a review has stalled
-        past its SLA. Resets their side to pending and re-notifies every
-        delegate holding `approve_communication`.
+        Available to the owner after their own family's rejection, and when
+        their side's review has stalled past its SLA. Resets their side to
+        pending and re-notifies every delegate holding `approve_communication`.
+        Refused (409) when the OTHER family rejected, when the match has ended,
+        or when nothing is eligible to re-request.
 
         This is the owner's escape hatch from an indefinite veto (R16). It does
         NOT let the owner approve — only ask again.
@@ -1680,6 +1896,8 @@ paths:
   /family/calls:
     post:
       operationId: requestFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: Request a family call
       description: |
         Requires the match to permit communication. A principal may request; so
@@ -1707,6 +1925,8 @@ paths:
         '429': { $ref: '#/components/responses/TooManyRequests' }
     get:
       operationId: listFamilyCalls
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: Calls I am part of
       tags: [Family calls]
       x-access: member
@@ -1731,6 +1951,8 @@ paths:
   /family/calls/{callId}:
     get:
       operationId: getFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: One call and everyone in it
       description: The participant list is returned to every participant. The room knows who is in it, and so does everybody in it.
       tags: [Family calls]
@@ -1745,6 +1967,8 @@ paths:
   /family/calls/{callId}/respond:
     post:
       operationId: respondToFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: Accept or decline a requested call
       description: |
         The counterpart principal decides. A delegate may decide in their place
@@ -1772,6 +1996,8 @@ paths:
   /family/calls/{callId}/invite:
     post:
       operationId: inviteToFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: Invite an approved family member
       description: |
         Only a delegate of the inviting principal, holding `join_family_call`,
@@ -1800,6 +2026,8 @@ paths:
   /family/calls/{callId}/join:
     post:
       operationId: joinFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: Join, and receive a transport token
       description: |
         Returns 409 until the safety precondition holds: **at least one family
@@ -1826,6 +2054,8 @@ paths:
   /family/calls/{callId}/leave:
     post:
       operationId: leaveFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: Leave the call
       description: Recorded with a timestamp. The last principal leaving ends the call.
       tags: [Family calls]
@@ -1839,6 +2069,8 @@ paths:
   /family/calls/{callId}/end:
     post:
       operationId: endFamilyCall
+      x-status: not-implemented
+      x-blocked-by: 'L2: the call transport (provider) is an open company decision.'
       summary: End the call for everyone
       description: Either principal, or a delegate holding `approve_communication`. Attributed.
       tags: [Family calls]
@@ -1878,6 +2110,8 @@ paths:
   /me/verification/email/resend:
     post:
       operationId: resendEmailVerification
+      x-status: not-implemented
+      x-blocked-by: 'Supabase Auth: resend is a client-side Auth call or needs the Auth admin API; not decided.'
       summary: Resend the email verification link
       tags: [Verification]
       x-access: self
@@ -1889,6 +2123,8 @@ paths:
   /me/verification/phone/start:
     post:
       operationId: startPhoneVerification
+      x-status: not-implemented
+      x-blocked-by: 'An SMS provider (paid service) has not been chosen.'
       summary: Send an OTP
       tags: [Verification]
       x-access: self
@@ -1910,6 +2146,8 @@ paths:
   /me/verification/phone/confirm:
     post:
       operationId: confirmPhoneVerification
+      x-status: not-implemented
+      x-blocked-by: 'An SMS provider (paid service) has not been chosen.'
       summary: Confirm the OTP
       tags: [Verification]
       x-access: self
@@ -2043,6 +2281,8 @@ paths:
   /safety/center:
     get:
       operationId: getSafetyCenter
+      x-status: not-implemented
+      x-blocked-by: 'Company-approved safety-centre content does not exist.'
       summary: Localised safety guidance
       tags: [Safety]
       x-access: public
@@ -2056,6 +2296,8 @@ paths:
   /safety/panic-exit:
     post:
       operationId: panicExit
+      x-status: not-implemented
+      x-blocked-by: 'Ending every session needs the Supabase Auth admin API on the hosted project.'
       summary: Immediately hide the profile and end active sessions
       description: |
         One action, no confirmation dialog. For someone whose situation changed
@@ -2072,6 +2314,8 @@ paths:
   /support/contact:
     post:
       operationId: contactSupport
+      x-status: not-implemented
+      x-blocked-by: 'Company decision: the support channel and where requests are stored.'
       summary: Private channel to support
       description: |
         Never visible to any family member or delegate, regardless of their
@@ -2160,7 +2404,12 @@ paths:
     put:
       operationId: setNotificationPreferences
       summary: Replace notification preferences
-      description: Quiet hours are evaluated in the user's timezone, never the server's.
+      description: |
+        Replaces every type at once; a type left out goes back to its default
+        (on). `inApp: false` is enforced at the database for every writer — no
+        inbox entry is created. `security_alert` cannot be silenced in-app.
+        Quiet hours are both set or both null and are evaluated in the user's
+        timezone; they are stored for push delivery, which is not built (L8).
       tags: [Notifications]
       x-access: self
       requestBody:
@@ -2177,6 +2426,9 @@ paths:
     post:
       operationId: registerPushToken
       summary: Register a device push token
+      description: |
+        Stores (or replaces) the token for this device. Push DELIVERY is not
+        built (L8: no provider chosen); the token is held for when it is.
       tags: [Notifications]
       x-access: self
       requestBody:
@@ -2201,10 +2453,12 @@ paths:
       summary: Unregister a device push token
       tags: [Notifications]
       x-access: self
+      description: Idempotent — 204 whether or not a token was registered.
       parameters:
-        - { name: deviceId, in: path, required: true, schema: { type: string } }
+        - { name: deviceId, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 200 } }
       responses:
         '204': { description: Unregistered }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   # ===========================================================================
@@ -2214,6 +2468,8 @@ paths:
   /plans:
     get:
       operationId: listPlans
+      x-status: not-implemented
+      x-blocked-by: 'Company decision: plans and billing (money is switched off in v1).'
       summary: Available plans
       description: v1 exposes the free plan only. Money is switched off.
       tags: [Entitlements]
@@ -2237,6 +2493,7 @@ paths:
       description: |
         Feature code asks `can(user, key)`. It never asks whether a user is
         premium — that is what keeps v1.2 billing from touching feature code.
+        `planKey` is `free` for everyone in v1.
       tags: [Entitlements]
       x-access: self
       responses:
@@ -2267,6 +2524,344 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Quota' } }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ===========================================================================
+  # OPERATIONS — 1
+  # ===========================================================================
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness and database reachability
+      description: Unauthenticated. `database` is `degraded` when the probe query returns nothing.
+      tags: [Operations]
+      x-access: public
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  database: { type: string, enum: [ok, degraded] }
+        '500': { description: The database could not be reached, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+
+  # ===========================================================================
+  # ADMIN — 11  (code review L1; x-access: staff)
+  #
+  # Every operation: a verified token; an active admin row (else 404); aal2
+  # unless the row waives it (else 403); the role named below (else 403);
+  # and the decision written together with its append-only audit row.
+  # Queues are oldest first, return at most `limit` items, and have no cursor:
+  # a decided item leaves the queue, so the next call is the next page.
+  # ===========================================================================
+
+  /admin/session:
+    get:
+      operationId: adminGetSession
+      summary: The caller's staff identity and roles
+      description: |
+        Any staff role. Lets the admin interface show only the areas the API
+        will allow; grants nothing — every action route checks the role again.
+        404 for a non-staff caller, 403 without a second factor when one is
+        required.
+      tags: [Admin]
+      x-access: staff
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSession' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/audit:
+    get:
+      operationId: adminListAudit
+      summary: The append-only audit trail of staff decisions
+      description: |
+        Any staff role. Newest first, keyset-paged. Filter by `targetType`
+        and `targetId` to read one member's history of decisions.
+      tags: [Admin]
+      x-access: staff
+      parameters:
+        - { name: targetType, in: query, schema: { type: string, pattern: '^[a-z_]{1,40}$' } }
+        - { name: targetId, in: query, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/AdminAuditEntry' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/moderation/photos:
+    get:
+      operationId: adminListPhotoQueue
+      summary: Finalized photos awaiting moderation
+      description: 'Role: moderator or admin. `url` is a short-lived signed URL to the original.'
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminPhotoQueueItem' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/moderation/photos/{photoId}:
+    post:
+      operationId: adminDecidePhoto
+      summary: Approve or reject a photo
+      description: |
+        Role: moderator or admin. A photo whose upload was never finalized is
+        409. Only an approved photo can be primary (B13). A rejection requires
+        `reasonKey` — the reason the member is shown (400 otherwise).
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/PhotoId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModerationDecision' }
+      responses:
+        '200':
+          description: Decided
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [photoId, moderationStatus]
+                properties:
+                  photoId: { type: string, format: uuid }
+                  moderationStatus: { type: string, enum: [approved, rejected] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/moderation/profiles:
+    get:
+      operationId: adminListProfileQueue
+      summary: Submitted profiles awaiting review
+      description: |
+        Role: moderator or admin. Only the free text a moderator judges, and
+        the name — no contact details, date of birth or location.
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminProfileQueueItem' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/moderation/profiles/{userId}:
+    post:
+      operationId: adminDecideProfile
+      summary: Approve or reject a submitted profile
+      description: 'Role: moderator or admin. 404 when the member has no submitted profile. A rejection requires `reasonKey` (400 otherwise).'
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModerationDecision' }
+      responses:
+        '200':
+          description: Decided
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId, reviewStatus]
+                properties:
+                  userId: { type: string, format: uuid }
+                  reviewStatus: { type: string, enum: [approved, rejected] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/reports:
+    get:
+      operationId: adminListReports
+      summary: Reports by status
+      description: 'Role: moderator or admin.'
+      tags: [Admin]
+      x-access: staff
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, triaged, actioned, dismissed], default: open }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminReportItem' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/reports/{reportId}:
+    post:
+      operationId: adminUpdateReport
+      summary: Triage, action or dismiss a report
+      description: |
+        Role: moderator or admin. `actioned` and `dismissed` resolve the
+        report and notify the reporter, in general terms only.
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/ReportId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportDecision' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reportId, status]
+                properties:
+                  reportId: { type: string, format: uuid }
+                  status: { type: string, enum: [triaged, actioned, dismissed] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/users/{userId}/actions:
+    post:
+      operationId: adminActOnUser
+      summary: Warn, suspend, ban or clear a member
+      description: |
+        Role: moderator or admin. `suspend` and `ban` change the account
+        status, which hides the member everywhere at once. `clear` restores
+        `active` only for a suspended or banned account. `warn` records the
+        action without changing status. `expiresAt` is recorded with the
+        action; nothing lifts a suspension automatically yet (L11).
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserActionRequest' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId, action, status]
+                properties:
+                  userId: { type: string, format: uuid }
+                  action: { type: string, enum: [warn, suspend, ban, clear] }
+                  status: { type: string, description: The account status after the action }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/dob-corrections:
+    get:
+      operationId: adminListDobCorrections
+      summary: Pending date-of-birth correction requests
+      description: 'Role: support or admin.'
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminDobCorrectionItem' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/dob-corrections/{requestId}:
+    post:
+      operationId: adminDecideDobCorrection
+      summary: Approve or reject a date-of-birth correction
+      description: |
+        Role: support or admin. Approval writes the requested date; the age
+        gate still applies, so an under-18 result is refused (400). A request
+        already decided is 409. A rejection requires `note`, which the member
+        sees on their request (400 otherwise).
+      tags: [Admin]
+      x-access: staff
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModerationDecision' }
+      responses:
+        '200':
+          description: Decided
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, status]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  status: { type: string, enum: [approved, rejected] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
 # =============================================================================
 # COMPONENTS
@@ -2334,6 +2929,23 @@ components:
       required: true
       schema: { type: string, format: uuid }
 
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DeviceIdHeader:
+      name: X-Device-Id
+      in: header
+      required: false
+      schema: { type: string }
+      description: The `deviceId` this app registered at bootstrap.
+
     RelationshipId:
       name: relationshipId
       in: path
@@ -2390,7 +3002,12 @@ components:
       type: object
       required: [code, message]
       properties:
-        code: { type: string, examples: [validation_failed, entitlement_required, quota_exhausted, blocked] }
+        code:
+          type: string
+          description: Stable machine-readable code. The server emits exactly these.
+          enum: [validation_failed, malformed_request, unauthenticated, forbidden, entitlement_required,
+                 not_found, conflict, payload_too_large, unsupported_media_type, quota_exhausted,
+                 rate_limited, internal_error]
         message: { type: string, description: Human-readable, already localised to the caller's locale }
         messageKey: { type: string, description: i18n key, so the client can re-render on locale change }
         fields:
@@ -2472,7 +3089,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         platform: { type: string }
-        appVersion: { type: string }
+        appVersion: { type: [string, 'null'] }
         lastSeenAt: { type: string, format: date-time }
         isCurrent: { type: boolean }
 
@@ -2696,8 +3313,8 @@ components:
       properties:
         id: { type: string, format: uuid }
         variant: { type: string, enum: [thumb, blurred, full] }
-        url: { type: string, description: Signed, expires in 5 minutes, not cacheable }
-        expiresAt: { type: string, format: date-time }
+        url: { type: [string, 'null'], description: 'Signed, expires in 5 minutes, not cacheable. Null when the photo needs a request.' }
+        expiresAt: { type: [string, 'null'], format: date-time }
         requiresRequest: { type: boolean, description: True when a photo exists but needs an approved request }
 
     UploadTarget:
@@ -2768,6 +3385,9 @@ components:
       properties:
         matchingProfiles: { type: integer }
         withoutHardFilters: { type: integer }
+        capped:
+          type: boolean
+          description: True when a count reached the server's cap (1000), so it means "at least".
         narrowestCriteria:
           type: array
           description: The criteria excluding the most people, so a user can loosen deliberately.
@@ -3294,6 +3914,7 @@ components:
           type: string
           enum: [interest_received, interest_accepted, new_match, new_message, photo_request,
                  photo_request_answered, family_invitation, family_invitation_answered,
+                 family_review_requested, family_review_decided, family_review_stalled,
                  stage_advance_proposed, verification_update, security_alert, report_update]
         title: { type: string, description: Localised }
         body: { type: string }
@@ -3334,3 +3955,154 @@ components:
         source: { type: string, enum: [plan, grant, promo] }
         expiresAt: { type: [string, 'null'], format: date-time }
 
+    # --- Code review additions (B6, L1, Phase 4) -------------------------------
+
+    DobCorrectionRequestCreate:
+      type: object
+      required: [requestedDob, reason]
+      properties:
+        requestedDob: { type: string, format: date, description: A real calendar date, different from the current one }
+        reason: { type: string, minLength: 10, maxLength: 1000 }
+
+    DobCorrectionRequest:
+      type: object
+      properties:
+        requestId: { type: string, format: uuid }
+        status: { type: string, enum: [pending, approved, rejected] }
+        requestedDob: { type: string, format: date }
+        decisionNote: { type: [string, 'null'] }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    PhotoReorder:
+      type: object
+      required: [photoIds]
+      properties:
+        photoIds:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items: { type: string, format: uuid }
+
+    MyFamilyReview:
+      type: object
+      properties:
+        matchId: { type: string, format: uuid }
+        decision: { type: string, enum: [pending, approved, rejected, more_info_requested, revoked] }
+        requestedAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        note: { type: [string, 'null'] }
+        overdue: { type: boolean }
+
+    ModerationDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [approve, reject] }
+        reasonKey:
+          type: string
+          maxLength: 100
+          pattern: '^[a-z][a-zA-Z0-9_.]*$'
+          description: i18n key the member's app renders for a rejection
+        note: { type: string, minLength: 1, maxLength: 1000, description: Internal; written to the audit row }
+
+    ReportDecision:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [triaged, actioned, dismissed] }
+        outcomeKey: { type: string, maxLength: 100, pattern: '^[a-z][a-z0-9_.]*$' }
+        note: { type: string, minLength: 1, maxLength: 1000 }
+
+    UserActionRequest:
+      type: object
+      required: [action, reason]
+      properties:
+        action: { type: string, enum: [warn, suspend, ban, clear] }
+        reason: { type: string, minLength: 1, maxLength: 1000, description: Required — an unexplained ban is unappealable }
+        expiresAt: { type: string, format: date-time }
+
+    AdminPhotoQueueItem:
+      type: object
+      properties:
+        photoId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        width: { type: [integer, 'null'] }
+        height: { type: [integer, 'null'] }
+        createdAt: { type: string, format: date-time }
+        url: { type: [string, 'null'], description: Short-lived signed URL }
+
+    AdminProfileQueueItem:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        displayName: { type: string }
+        aboutMe: { type: [string, 'null'] }
+        lookingFor: { type: [string, 'null'] }
+        institution: { type: [string, 'null'] }
+        familyBackground: { type: [string, 'null'] }
+        submittedAt: { type: string, format: date-time }
+
+    AdminReportItem:
+      type: object
+      properties:
+        reportId: { type: string, format: uuid }
+        reporterUserId: { type: string, format: uuid }
+        reportedUserId: { type: string, format: uuid }
+        category: { type: string }
+        description: { type: [string, 'null'] }
+        contextType: { type: [string, 'null'] }
+        contextId: { type: [string, 'null'], format: uuid }
+        status: { type: string, enum: [open, triaged, actioned, dismissed] }
+        createdAt: { type: string, format: date-time }
+
+    AdminDobCorrectionItem:
+      type: object
+      properties:
+        requestId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        currentDob: { type: [string, 'null'], format: date }
+        requestedDob: { type: string, format: date }
+        reason: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    ProfilePhotos:
+      type: object
+      required: [items, request, granted]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/VisiblePhoto' } }
+        request:
+          description: The caller's latest photo request to this member, if any.
+          oneOf:
+            - type: object
+              properties:
+                id: { type: string, format: uuid }
+                status: { $ref: '#/components/schemas/PhotoRequestStatus' }
+                createdAt: { type: string, format: date-time }
+                respondedAt: { type: [string, 'null'], format: date-time }
+            - type: 'null'
+        granted: { type: boolean, description: The caller holds a live grant from this member }
+
+    AdminSession:
+      type: object
+      required: [adminUserId, roles, mfaRequired]
+      properties:
+        adminUserId: { type: string, format: uuid }
+        roles: { type: array, items: { type: string, enum: [moderator, support, admin] } }
+        mfaRequired: { type: boolean }
+
+    AdminAuditEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string, examples: [photo.reject, user.suspend, dob.approve] }
+        targetType: { type: string }
+        targetId: { type: string, format: uuid }
+        reason: { type: [string, 'null'] }
+        metadata: { type: object }
+        createdAt: { type: string, format: date-time }
+        actor:
+          type: object
+          properties:
+            adminUserId: { type: string, format: uuid }
+            displayName: { type: [string, 'null'] }

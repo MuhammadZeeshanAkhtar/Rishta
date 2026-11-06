@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { findContactDetails } from '@nikahmate/domain';
 import { badRequest, conflict, notFound, quotaExhausted } from '../errors';
 import { requireAuthContext } from '../auth/plugin';
 import { loadEntitlements, valueOf } from '../entitlements/service';
 import { interestAccepted, interestReceived, newMatch, notify } from '../notifications/service';
 import type { Db, DbSession } from '../db/types';
+import { memberLocalDate } from '../db/sql';
 import {
   CARDS_BY_USER_IDS,
   buildCards,
@@ -13,6 +15,7 @@ import {
   parseLimit,
   type CardRow,
 } from '../discovery/cards';
+import { isUuid } from '../http/params';
 
 /**
  * Interests — send, withdraw and read.
@@ -144,6 +147,17 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
 
     const { recipientUserId, note } = parsed.data;
 
+    // REVIEW L9 (company decision 3, strict). A note reaches the recipient
+    // before any match, so it must not carry a phone number, an email, a
+    // link, a handle or a messaging/social platform. Refused before anything
+    // is written or any quota is spent. The field-level reason lets a client
+    // explain it; the note itself is never echoed back.
+    if (note !== undefined && findContactDetails(note).length > 0) {
+      throw badRequest('An interest note cannot include contact details', {
+        note: 'contact_details_not_allowed',
+      });
+    }
+
     const senderUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!senderUserId) throw notFound('Profile not found');
     // Checked before the transaction because it needs no data: a self-interest
@@ -195,9 +209,15 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       //    only one of them can be the sixth.
       if (limit <= 0) throw quotaExhausted('Daily interest limit reached');
 
+      // REVIEW B23. The day is the SENDER's day, not the database's: with
+      // `current_date` (UTC) a member in Pakistan got a fresh allowance at
+      // 5 AM. The contract already promised "midnight in the user's
+      // timezone". A zone Postgres does not recognise (members can write the
+      // column through the Data API) falls back to UTC rather than failing
+      // the send.
       const counted = await session.query<{ count: number }>(
         `insert into public.usage_counters (user_id, counter_key, period_start, count)
-         values ($1::uuid, $2::text, current_date, 1)
+         select $1::uuid, $2::text, ${memberLocalDate('$1::uuid')}, 1
          on conflict (user_id, counter_key, period_start)
            do update set count = public.usage_counters.count + 1
          returning count`,
@@ -292,7 +312,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       const auth = requireAuthContext(request);
       const params = request.params as { interestId?: string };
       const interestId = params.interestId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(interestId)) throw badRequest('Invalid interest id');
+      if (!isUuid(interestId)) throw badRequest('Invalid interest id');
 
       const parsed = respondSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('decision must be accept, decline or maybe_later');
@@ -302,10 +322,18 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       if (!viewerUserId) throw notFound('Interest not found');
 
       return db.asService('interest.respond', async (session) => {
+        // FOR UPDATE (review B17). Without the lock, a double-tapped Accept
+        // ran two of these transactions side by side: both read `pending`,
+        // both passed the check below, and both wrote an `accepted` event and
+        // an acceptance notification. The match itself was safe behind its
+        // unique constraint; the audit trail and the other person's inbox
+        // were not. With the lock the second call waits, then reads the
+        // first one's answer and is refused with 409.
         const rows = await session.query<InterestRow>(
           `select id, sender_user_id, recipient_user_id, acted_by_user_id,
                   status, note, created_at, responded_at
-             from public.interests where id = $1::uuid`,
+             from public.interests where id = $1::uuid
+             for update`,
           [interestId],
         );
         const row = rows[0];
@@ -314,10 +342,22 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
         if (!row || row.recipient_user_id !== viewerUserId) {
           throw notFound('Interest not found');
         }
-        if (row.status !== 'pending') {
+
+        // REVIEW B4. "Maybe later" DEFERS a decision; it does not make one.
+        // This used to accept `pending` only, so an interest the recipient
+        // had deferred could never be accepted or declined again — and the
+        // unique index stopped the sender re-sending it. Deferring behaved
+        // as a silent, permanent decline. Both states are now answerable.
+        const answerable = row.status === 'pending' || row.status === 'maybe_later';
+        if (!answerable) {
           // Already resolved or withdrawn. The contract defines 409 here, and
           // answering 200 would write a second event for one decision.
           throw conflict('This interest has already been answered');
+        }
+        if (row.status === 'maybe_later' && parsed.data.decision === 'maybe_later') {
+          // Deferring something already deferred changes nothing, and would
+          // write a second `maybe_later` event for a single decision.
+          throw conflict('This interest is already set aside for later');
         }
 
         // Blocks, suspension and unapproval all at once, and in both
@@ -328,14 +368,21 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
         );
         if (!visible[0]?.ok) throw notFound('Interest not found');
 
+        // Conditional on the status just read (review B17). The row lock
+        // above already makes this unreachable, and that is the point: if a
+        // future change ever drops the lock, the second writer updates no row
+        // and is refused, rather than writing a duplicate event.
         const updated = await session.query<InterestRow>(
           `update public.interests
               set status = $2::text, responded_at = now()
-            where id = $1::uuid
+            where id = $1::uuid and status = $3::text
             returning id, sender_user_id, recipient_user_id, acted_by_user_id,
                       status, note, created_at, responded_at`,
-          [interestId, decision.status],
+          [interestId, decision.status, row.status],
         );
+        if (updated.length === 0) {
+          throw conflict('This interest has already been answered');
+        }
         await session.query(
           `insert into public.interest_events (interest_id, event, actor_user_id)
            values ($1::uuid, $2::text, $3::uuid)`,
@@ -618,7 +665,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
     const auth = requireAuthContext(request);
     const params = request.params as { interestId?: string };
     const interestId = params.interestId ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(interestId)) throw badRequest('Invalid interest id');
+    if (!isUuid(interestId)) throw badRequest('Invalid interest id');
 
     const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!viewerUserId) throw notFound('Interest not found');
@@ -651,14 +698,17 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       const auth = requireAuthContext(request);
       const params = request.params as { interestId?: string };
       const interestId = params.interestId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(interestId)) throw badRequest('Invalid interest id');
+      if (!isUuid(interestId)) throw badRequest('Invalid interest id');
 
       const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!viewerUserId) throw notFound('Interest not found');
 
       await db.asService('interest.send', async (session) => {
+        // FOR UPDATE, for the same reason as respond (review B17): a withdraw
+        // racing an accept must not both succeed.
         const rows = await session.query<{ sender_user_id: string; status: string }>(
-          `select sender_user_id, status from public.interests where id = $1::uuid`,
+          `select sender_user_id, status from public.interests where id = $1::uuid
+             for update`,
           [interestId],
         );
         const row = rows[0];
@@ -674,8 +724,10 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
           // second identical row.
           throw conflict('This interest has already been withdrawn');
         }
-        if (row.status !== 'pending') {
-          throw conflict('Only a pending interest can be withdrawn');
+        // REVIEW B4. A deferred interest is still the SENDER's to take back.
+        // Before this, `maybe_later` was a state neither side could leave.
+        if (row.status !== 'pending' && row.status !== 'maybe_later') {
+          throw conflict('Only an unanswered interest can be withdrawn');
         }
 
         await session.query(

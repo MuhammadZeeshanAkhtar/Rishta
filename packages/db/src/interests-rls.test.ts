@@ -81,15 +81,21 @@ describe('interests — shared read, server-owned state', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('lets a member insert an interest as themselves', async () => {
-    const rows = await db.as(
-      'authenticated',
-      bilal.authUserId,
-      `insert into public.interests (sender_user_id, recipient_user_id)
-       values (app.current_user_id(), $1::uuid) returning id`,
-      [chloe.userId],
-    );
-    expect(rows).toHaveLength(1);
+  it('refuses a member insert, even as themselves (review B7)', async () => {
+    // INVERTED by migration 0026. This used to assert that a member could
+    // insert their own interest, and that grant was the hole: sending must
+    // consume the daily quota in the same transaction (ERD §16), which only
+    // the API's `interest.send` path does. Through the Data API a member
+    // could send without spending any quota at all.
+    await expect(
+      db.as(
+        'authenticated',
+        bilal.authUserId,
+        `insert into public.interests (sender_user_id, recipient_user_id)
+         values (app.current_user_id(), $1::uuid) returning id`,
+        [chloe.userId],
+      ),
+    ).rejects.toThrow(/permission denied/i);
   });
 
   it('does NOT let a member send as someone else', async () => {
@@ -102,7 +108,10 @@ describe('interests — shared read, server-owned state', () => {
          values ($1::uuid, $2::uuid)`,
         [alice.userId, bilal.userId],
       ),
-    ).rejects.toThrow(/row-level security/i);
+      // Refused one layer EARLIER since 0026: there is no insert grant, so
+      // the forgery never reaches the policy. The policy still exists and
+      // would still refuse it if a grant were ever restored.
+    ).rejects.toThrow(/permission denied|row-level security/i);
   });
 
   it('does NOT let the sender change the status', async () => {

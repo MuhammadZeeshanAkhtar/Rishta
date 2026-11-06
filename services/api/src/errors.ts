@@ -26,9 +26,11 @@ export class ApiError extends Error {
       messageKey?: string;
       fields?: Record<string, string>;
       retryAfterSeconds?: number;
+      /** Server-side detail for the log. Never part of the response body. */
+      cause?: unknown;
     } = {},
   ) {
-    super(message);
+    super(message, extra.cause === undefined ? undefined : { cause: extra.cause });
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
@@ -77,5 +79,12 @@ export const quotaExhausted = (message: string, retryAfterSeconds?: number) =>
     retryAfterSeconds !== undefined ? { retryAfterSeconds } : {},
   );
 
-export const internalError = (message = 'Something went wrong') =>
-  new ApiError(500, 'internal_error', message, { messageKey: 'errors.generic' });
+export const internalError = (message = 'Something went wrong', cause?: unknown) =>
+  new ApiError(
+    500,
+    'internal_error',
+    message,
+    cause === undefined
+      ? { messageKey: 'errors.generic' }
+      : { messageKey: 'errors.generic', cause },
+  );
