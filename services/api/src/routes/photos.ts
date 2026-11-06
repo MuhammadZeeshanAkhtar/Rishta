@@ -368,11 +368,13 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
           [photoId, JSON.stringify({ note: 'queued for human review' })],
         );
 
-        await session.query(`update public.photos set width = $2, height = $3 where id = $1`, [
-          photoId,
-          dimensions.width,
-          dimensions.height,
-        ]);
+        await session.query(
+          // The original was re-encoded above, so it no longer needs cleaning (N3).
+          `update public.photos
+              set width = $2, height = $3, original_needs_strip = false
+            where id = $1`,
+          [photoId, dimensions.width, dimensions.height],
+        );
       });
 
       const updated = await db.asUser(auth.authUserId, async (session) => {

@@ -72,7 +72,7 @@ export function createMemoryStorage(): MemoryStorage {
   };
 }
 
-const TEST_CONFIG: Config = {
+export const TEST_CONFIG: Config = {
   NODE_ENV: 'test',
   PORT: 0,
   HOST: '127.0.0.1',
@@ -123,7 +123,7 @@ export function authHeader(
   };
 }
 
-function createPgliteDb(pg: PGlite, serviceUses: ServiceRoleUse[]): Db {
+export function createPgliteDb(pg: PGlite, serviceUses: ServiceRoleUse[], memberRole: string): Db {
   /**
    * Mirrors createPgDb: a transaction per call with `SET LOCAL`, so a role
    * cannot leak between requests. PGlite is single-connection, so these are
@@ -156,7 +156,7 @@ function createPgliteDb(pg: PGlite, serviceUses: ServiceRoleUse[]): Db {
       return run(
         [
           `select set_config('request.jwt.claims', '${claims.replace(/'/g, "''")}', true)`,
-          'set local role authenticated',
+          `set local role ${memberRole}`,
         ],
         fn,
       );
@@ -193,9 +193,19 @@ export async function createHarness(
 ): Promise<TestHarness> {
   const pg = new PGlite();
   await applyMigrations(pg, migrations);
+  return createHarnessOn(pg, overrides);
+}
 
+/** The real app on a database a test has already built and filled. */
+export async function createHarnessOn(
+  pg: PGlite,
+  overrides: Partial<Config> = {},
+): Promise<TestHarness> {
   const serviceUses: ServiceRoleUse[] = [];
-  const db = createPgliteDb(pg, serviceUses);
+  // The release-order tests stop at a migration from before 0033, where the role
+  // does not exist yet. Production has no such fallback: it needs 0033.
+  const role = await pg.query(`select 1 from pg_roles where rolname = 'api_member'`);
+  const db = createPgliteDb(pg, serviceUses, role.rows.length > 0 ? 'api_member' : 'authenticated');
   const storage = createMemoryStorage();
   const app = await buildApp({
     config: { ...TEST_CONFIG, ...overrides },
@@ -219,6 +229,39 @@ export async function createHarness(
 }
 
 /** Seeds the reference rows the identity tables depend on. */
+/**
+ * A minimal stand-in for Supabase's `storage` schema: its tables and one helper,
+ * and no policies. The Storage migrations (0007, 0029, 0031, 0032) run only where
+ * this schema exists, so with it the real files run and their real policies can
+ * be read back and exercised. Call before `applyMigrations`.
+ */
+export async function seedStorageStandIn(pg: PGlite): Promise<void> {
+  await pg.exec(`
+    create schema storage;
+    create table storage.buckets (
+      id text primary key, name text, public boolean,
+      file_size_limit bigint, allowed_mime_types text[]
+    );
+    create table storage.objects (
+      id uuid primary key default gen_random_uuid(),
+      bucket_id text references storage.buckets (id),
+      name text, owner uuid
+    );
+    alter table storage.objects enable row level security;
+    create function storage.foldername(name text) returns text[]
+      language sql immutable as $$ select string_to_array(name, '/') $$;
+  `);
+}
+
+/** Call after `applyMigrations`, once the member roles exist. */
+export async function grantStorageStandIn(pg: PGlite): Promise<void> {
+  await pg.exec(`
+    grant usage on schema storage to authenticated, anon;
+    grant select, insert, update, delete on storage.objects to authenticated;
+    grant execute on function storage.foldername(text) to authenticated;
+  `);
+}
+
 export async function seedReferenceData(pg: PGlite): Promise<void> {
   await pg.exec(`
     insert into public.reference_items (type, code, sort_order) values

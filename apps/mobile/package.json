@@ -7,24 +7,26 @@
     "start": "expo start",
     "android": "expo start --android",
     "web": "expo start --web",
+    "web:export": "expo export --clear --platform web && node --env-file-if-exists=.env --env-file-if-exists=.env.production --env-file-if-exists=.env.local --env-file-if-exists=.env.production.local scripts/apply-web-csp.mjs",
+    "web:export:local": "expo export --clear --platform web && node --env-file-if-exists=.env --env-file-if-exists=.env.production --env-file-if-exists=.env.local --env-file-if-exists=.env.production.local scripts/apply-web-csp.mjs dist --allow-local",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@expo/metro-runtime": "~57.0.16",
+    "@expo/metro-runtime": "~57.0.18",
     "@expo/vector-icons": "~15.1.1",
     "@nikahmate/api-client": "workspace:*",
     "@nikahmate/domain": "workspace:*",
     "@nikahmate/i18n": "workspace:*",
-    "expo": "~57.0.26",
-    "expo-constants": "~57.0.20",
-    "expo-image-picker": "~57.0.20",
+    "expo": "~57.0.32",
+    "expo-constants": "~57.0.23",
+    "expo-image-picker": "~57.0.21",
     "expo-linear-gradient": "~57.0.2",
-    "expo-linking": "~57.0.11",
+    "expo-linking": "~57.0.13",
     "expo-localization": "~57.0.2",
-    "expo-router": "~57.0.24",
+    "expo-router": "~57.0.30",
     "expo-secure-store": "~57.0.4",
-    "expo-splash-screen": "~57.0.9",
+    "expo-splash-screen": "~57.0.11",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.4",
     "react": "19.2.3",
@@ -35,7 +37,8 @@
     "react-native-web": "~0.21.2"
   },
   "devDependencies": {
+    "@types/node": "^22.18.0",
     "@types/react": "~19.2.18",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.12"
   }
 }

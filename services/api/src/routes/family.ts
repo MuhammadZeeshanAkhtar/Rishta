@@ -7,6 +7,7 @@ import {
   decideReviewSchema,
   isGrantablePermission,
   permissionsForTier,
+  REVIEW_DECISIONS,
   respondToInvitationSchema,
   revokeReviewSchema,
   updatePermissionsSchema,
@@ -14,7 +15,8 @@ import {
 } from '@nikahmate/domain';
 import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
-import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
+import { parseLimit } from '../discovery/cards';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import type { Db, DbSession } from '../db/types';
 import { uuidParam } from '../http/params';
 
@@ -64,15 +66,16 @@ interface MemberRow {
   created_at: string;
   revoked_at: string | null;
   permissions: string[] | null;
-  position: number;
+  cursor_at: string;
 }
 
 interface ReviewRow {
+  id: string;
   match_id: string;
   owner_user_id: string;
   decision: string;
   requested_at: string;
-  position: number;
+  cursor_at: string;
 }
 
 export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fastify, { db }) => {
@@ -195,13 +198,13 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     const auth = requireAuthContext(request);
     const query = request.query as { cursor?: string; limit?: string };
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const { page, viewerUserId } = await db.asUser(auth.authUserId, async (session) => {
       const rows = await session.query<MemberRow>(
         `select id, delegate_user_id, relationship_code, tier, status,
-                created_at, revoked_at, permissions, position
+                created_at, revoked_at, permissions, cursor_at
            from (
              select r.*,
                     (
@@ -209,14 +212,14 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
                         from public.family_permissions p
                        where p.relationship_id = r.id and p.granted
                     ) as permissions,
-                    (row_number() over (order by r.created_at desc, r.id))::int - 1 as position
+                    ${keysetTime('r.created_at')} as cursor_at
                from public.family_relationships r
               where r.owner_user_id = app.current_user_id()
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null],
       );
       return { page: rows, viewerUserId: await resolveViewer(session) };
     });
@@ -255,7 +258,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         createdAt: row.created_at,
         revokedAt: row.revoked_at,
       })),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });
@@ -678,7 +681,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     const auth = requireAuthContext(request);
     const query = request.query as { cursor?: string; limit?: string };
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const { page, viewerUserId } = await db.asUser(auth.authUserId, async (session) => {
@@ -690,21 +693,21 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         permission: string;
         resource_type: string | null;
         created_at: string;
-        position: number;
+        cursor_at: string;
       }>(
         `select id, delegate_user_id, relationship_code, action, permission,
-                resource_type, created_at, position
+                resource_type, created_at, cursor_at
            from (
              select l.*, r.relationship_code,
-                    (row_number() over (order by l.created_at desc, l.id))::int - 1 as position
+                    ${keysetTime('l.created_at')} as cursor_at
                from public.family_access_log l
                left join public.family_relationships r on r.id = l.relationship_id
               where l.owner_user_id = app.current_user_id()
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null],
       );
       return { page: rows, viewerUserId: await resolveViewer(session) };
     });
@@ -737,7 +740,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         resourceType: row.resource_type,
         createdAt: row.created_at,
       })),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });
@@ -761,8 +764,9 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         relationship_code: string;
         tier: string;
         permissions: string[] | null;
+        created_at: string;
       }>(
-        `select r.id, r.owner_user_id, r.relationship_code, r.tier,
+        `select r.id, r.owner_user_id, r.relationship_code, r.tier, r.created_at,
                 (
                   select array_agg(p.permission order by p.permission)
                     from public.family_permissions p
@@ -800,7 +804,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
         tier: row.tier,
         status: 'active',
         permissions: row.permissions ?? [],
-        createdAt: null,
+        createdAt: row.created_at,
         revokedAt: null,
       })),
       nextCursor: null,
@@ -819,10 +823,23 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
    */
   fastify.get('/family/reviews', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
-    const query = request.query as { cursor?: string; limit?: string };
+    const query = request.query as { cursor?: string; limit?: string; state?: string };
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
+    if (
+      query.state !== undefined &&
+      !(REVIEW_DECISIONS as readonly string[]).includes(query.state)
+    ) {
+      throw badRequest('Invalid state');
+    }
+    // No state: what is waiting for a decision. A state: decisions already made, which
+    // is how an approval is found again in order to withdraw it.
+    const decisions = query.state ? [query.state] : ['pending', 'more_info_requested'];
+    const actionable =
+      query.state === undefined ||
+      query.state === 'pending' ||
+      query.state === 'more_info_requested';
 
     const { page, viewerUserId } = await db.asUser(auth.authUserId, async (session) => {
       // RLS on `family_reviews` already restricts this to reviews the caller
@@ -830,18 +847,18 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
       // `approve_communication`. The `owner_user_id <> current` filter removes
       // the owner's own reviews, which belong on a different screen.
       const rows = await session.query<ReviewRow>(
-        `select match_id, owner_user_id, decision, requested_at, position
+        `select id, match_id, owner_user_id, decision, requested_at, cursor_at
            from (
              select v.*,
-                    (row_number() over (order by v.requested_at, v.id))::int - 1 as position
+                    ${keysetTime('v.requested_at')} as cursor_at
                from public.family_reviews v
-              where v.decision in ('pending', 'more_info_requested')
+              where v.decision = any($3::text[])
                 and v.owner_user_id <> app.current_user_id()
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (requested_at, id) > ($1::timestamptz, $2::uuid)
+          order by requested_at, id
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null, decisions],
       );
       return { page: rows, viewerUserId: await resolveViewer(session) };
     });
@@ -885,9 +902,9 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
             -- answered every decision with 409. Filtered here because this is
             -- the step that can read the matches table: the page query above runs
             -- as the delegate, who is not a participant in the match.
-            and m.communication_state = 'pending_family_review'
+            and ($3::boolean is false or m.communication_state = 'pending_family_review')
             and m.ended_at is null`,
-        [viewerUserId, rows.map((r) => r.match_id)],
+        [viewerUserId, rows.map((r) => r.match_id), actionable],
       );
       return new Map(found.map((r) => [r.match_id, r]));
     });
@@ -912,7 +929,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
               REVIEW_SLA_HOURS,
           };
         }),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });

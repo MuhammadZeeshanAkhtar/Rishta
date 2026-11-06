@@ -6,6 +6,7 @@ import {
   type ExpectedTrigger,
   type Queryable,
   type SecurityCheck,
+  memberRoles,
 } from './phase1-security-checks';
 
 /**
@@ -21,8 +22,6 @@ import {
  *   L10  a member's preferences are theirs alone (RLS forced)
  *   L11  retention and expiry functions are service-role only
  */
-
-const MEMBER_ROLES = ['anon', 'authenticated'] as const;
 
 export const PHASE4_RESTRICTED_TABLES = [
   'push_tokens',
@@ -69,7 +68,7 @@ async function otherChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
                or has_table_privilege(r, 'public.' || t, 'DELETE')) as can
          from unnest($1::text[]) as r, unnest($2::text[]) as t
         where to_regclass('public.' || t) is not null`,
-      [MEMBER_ROLES, PHASE4_RESTRICTED_TABLES],
+      [await memberRoles(db), PHASE4_RESTRICTED_TABLES],
     );
     const open = rows.filter((r) => r.can).map((r) => `${r.role}:${r.tbl}`);
     const problems = [
@@ -97,6 +96,9 @@ async function otherChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
                 where p.schemaname = 'public' and p.tablename = 'notification_preferences') as policies,
               (select count(*)::int from pg_policies p
                 where p.schemaname = 'public' and p.tablename = 'notification_preferences'
+                  -- 0032 adds a restrictive policy. It can only narrow what the
+                  -- owner policies allow, so it is not a way in.
+                  and p.permissive = 'PERMISSIVE'
                   and coalesce(p.qual, '') || coalesce(p.with_check, '') not like '%current_user_id()%') as foreign
          from pg_class c
         where c.oid = to_regclass('public.notification_preferences')`,
@@ -132,7 +134,7 @@ async function otherChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
       }
       const { rows } = await db.query<{ role: string; can: boolean }>(
         `select r as role, has_function_privilege(r, $2, 'EXECUTE') as can from unnest($1::text[]) as r`,
-        [MEMBER_ROLES, fn],
+        [await memberRoles(db), fn],
       );
       const open = rows.filter((r) => r.can).map((r) => r.role);
       if (open.length) problems.push(`${fn} executable by ${open.join(', ')}`);

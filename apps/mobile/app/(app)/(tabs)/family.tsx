@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, StyleSheet, Switch, Text, View } from 'react-native';
+import { StyleSheet, Switch, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Banner } from '../../../src/components/Banner';
@@ -9,8 +9,11 @@ import { Screen } from '../../../src/components/Screen';
 import { SectionCard } from '../../../src/components/SectionCard';
 import { StatusBadge } from '../../../src/components/StatusBadge';
 import { useFamily } from '../../../src/family/useFamily';
+import { useRefreshOnReturn } from '../../../src/lib/useRefreshOnReturn';
 import { useSession } from '../../../src/session/SessionProvider';
 import { getClient } from '../../../src/api/client';
+import { confirmAction } from '../../../src/lib/confirm';
+import { FamilyPermissionsEditor } from '../../../src/family/FamilyPermissionsEditor';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 import { iconSize, radius, spacing, typography } from '../../../src/theme/tokens';
@@ -38,7 +41,9 @@ export default function FamilyScreen() {
   const { t } = useLocale();
   const theme = useTheme();
   const { me, refresh } = useSession();
-  const { members, managed, reviews, myReviews, loading, error, reload } = useFamily();
+  const { members, managed, reviews, myReviews, invitations, approved, loading, error, reload } =
+    useFamily();
+  useRefreshOnReturn(reload);
 
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -66,26 +71,61 @@ export default function FamilyScreen() {
 
   const revoke = useCallback(
     (relationshipId: string, name: string) => {
-      Alert.alert(t('family.revoke'), t('family.revokeConfirm').replace('{{name}}', name), [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('family.revoke'),
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              try {
-                await getClient().revokeFamilyMember(relationshipId);
-                reload();
-                await refresh();
-              } catch {
-                setNotice(t('family.errorSave'));
-              }
-            })();
-          },
+      confirmAction({
+        title: t('family.revoke'),
+        message: t('family.revokeConfirm').replace('{{name}}', name),
+        confirmLabel: t('family.revoke'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => {
+          void (async () => {
+            try {
+              await getClient().revokeFamilyMember(relationshipId);
+              reload();
+              await refresh();
+            } catch {
+              setNotice(t('family.errorSave'));
+            }
+          })();
         },
-      ]);
+      });
     },
     [reload, refresh, t],
+  );
+
+  const cancelInvitation = useCallback(
+    (invitationId: string) => {
+      confirmAction({
+        title: t('family.invitationCancelTitle'),
+        message: t('family.invitationCancelBody'),
+        confirmLabel: t('family.invitationCancel'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => {
+          void getClient()
+            .cancelFamilyInvitation(invitationId)
+            .then(() => reload())
+            .catch(() => setNotice(t('family.errorSave')));
+        },
+      });
+    },
+    [reload, t],
+  );
+
+  const withdrawApproval = useCallback(
+    (matchId: string) => {
+      confirmAction({
+        title: t('family.withdrawTitle'),
+        message: t('family.withdrawBody'),
+        confirmLabel: t('family.withdrawApproval'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => {
+          void getClient()
+            .revokeReview(matchId)
+            .then(() => reload())
+            .catch(() => setNotice(t('family.errorSave')));
+        },
+      });
+    },
+    [reload, t],
   );
 
   return (
@@ -224,6 +264,29 @@ export default function FamilyScreen() {
           </SectionCard>
         ) : null}
 
+        {/* --- approvals I can still take back ------------------------- */}
+        {approved.length > 0 ? (
+          <SectionCard title={t('family.approvedTitle')} icon="checkmark-done-outline" index={2}>
+            {approved.map((review) => (
+              <View key={review.matchId} style={styles.row} testID={`approved-${review.matchId}`}>
+                <View style={styles.rowMain}>
+                  <Text style={[styles.rowTitle, { color: theme.colors.text }]}>
+                    {t('family.approvedFor')
+                      .replace('{{name}}', review.ownerDisplayName ?? '')
+                      .replace('{{other}}', review.counterpartDisplayName ?? '')}
+                  </Text>
+                </View>
+                <Button
+                  label={t('family.withdrawApproval')}
+                  variant="secondary"
+                  onPress={() => withdrawApproval(review.matchId)}
+                  testID={`withdraw-${review.matchId}`}
+                />
+              </View>
+            ))}
+          </SectionCard>
+        ) : null}
+
         {/* --- my delegates -------------------------------------------- */}
         <SectionCard title={t('family.membersTitle')} icon="person-add-outline" index={3}>
           {loading ? null : members.length === 0 ? (
@@ -252,15 +315,48 @@ export default function FamilyScreen() {
                   ) : null}
                 </View>
                 {member.status === 'active' ? (
-                  <Button
-                    label={t('family.revoke')}
-                    variant="secondary"
-                    onPress={() => revoke(member.id, member.displayName ?? '')}
-                  />
+                  <View style={styles.memberActions}>
+                    <FamilyPermissionsEditor member={member} onSaved={reload} />
+                    <Button
+                      label={t('family.revoke')}
+                      variant="secondary"
+                      onPress={() => revoke(member.id, member.displayName ?? '')}
+                    />
+                  </View>
                 ) : null}
               </View>
             ))
           )}
+
+          {invitations.length > 0 ? (
+            <View style={styles.invitations} testID="family-invitations">
+              <Text style={[styles.rowTitle, { color: theme.colors.text }]}>
+                {t('family.invitationsTitle')}
+              </Text>
+              {invitations.map((invitation) => (
+                <View
+                  key={invitation.id}
+                  style={styles.row}
+                  testID={`family-invitation-${invitation.id}`}
+                >
+                  <View style={styles.rowMain}>
+                    <Text style={[styles.rowSub, { color: theme.colors.textMuted }]}>
+                      {t('family.invitationPending').replace(
+                        '{{contact}}',
+                        invitation.inviteeContact,
+                      )}
+                    </Text>
+                  </View>
+                  <Button
+                    label={t('family.invitationCancel')}
+                    variant="ghost"
+                    onPress={() => cancelInvitation(invitation.id)}
+                    testID={`cancel-invitation-${invitation.id}`}
+                  />
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           <Button label={t('family.inviteCta')} onPress={() => router.push('/family/invite')} />
         </SectionCard>
@@ -289,6 +385,8 @@ export default function FamilyScreen() {
 }
 
 const styles = StyleSheet.create({
+  memberActions: { gap: spacing.sm },
+  invitations: { gap: spacing.sm, marginTop: spacing.md },
   body: { gap: spacing.md, marginTop: spacing.lg },
   gateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   gateState: { ...typography.bodyStrong, flex: 1, flexShrink: 1 },

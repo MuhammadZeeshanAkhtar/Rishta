@@ -61,6 +61,12 @@ function toFieldMap(fields: unknown): Record<string, string> | undefined {
 }
 
 export class HttpClient {
+  /**
+   * Called when the API says this account has become restricted (review N7), so
+   * a member already inside the app is moved to the explanation rather than left
+   * looking at errors on whatever screen they were using.
+   */
+  onAccountRestricted: (() => void) | undefined;
   private readonly baseUrl: string;
   private readonly getAccessToken: () => Promise<string | null>;
   private readonly getLocale: (() => string) | undefined;
@@ -135,7 +141,18 @@ export class HttpClient {
     if (response.ok) return parsed as T;
 
     const problem = (parsed ?? {}) as ProblemBody;
-    const kind = STATUS_TO_KIND[response.status] ?? (response.status >= 500 ? 'server' : 'unknown');
+    // Two 403s the app must tell apart from a plain refusal (review N1, N5).
+    const special: ApiErrorKind | undefined =
+      response.status !== 403
+        ? undefined
+        : problem.code === 'account_restricted'
+          ? 'account_restricted'
+          : problem.code === 'staff_protected'
+            ? 'staff_protected'
+            : undefined;
+    const kind =
+      special ?? STATUS_TO_KIND[response.status] ?? (response.status >= 500 ? 'server' : 'unknown');
+    if (kind === 'account_restricted') this.onAccountRestricted?.();
     const retryAfter = Number(response.headers.get('Retry-After'));
 
     throw new NikahMateError(kind, {

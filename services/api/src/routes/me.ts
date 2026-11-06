@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { ENTITLEMENT_KEYS, FREE_PLAN_ENTITLEMENTS } from '@nikahmate/domain';
+import { DELETION_GRACE_DAYS, ENTITLEMENT_KEYS, FREE_PLAN_ENTITLEMENTS } from '@nikahmate/domain';
 import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
 import type { Db, DbSession } from '../db/types';
@@ -30,8 +30,6 @@ import { uuidParam } from '../http/params';
 export interface MeRoutesOptions {
   db: Db;
 }
-
-const DELETION_GRACE_DAYS = 30;
 
 /** Everything `notifications_type_valid` allows — the set a preference may name. */
 export const NOTIFICATION_PREFERENCE_TYPES = [
@@ -336,47 +334,56 @@ export const meRoutes: FastifyPluginAsync<MeRoutesOptions> = async (fastify, opt
    * DEACTIVATED one can reactivate: a suspended or banned member must not be
    * able to pass through `deactivated` to lift their own restriction.
    */
-  fastify.post('/me/deactivate', { preHandler: fastify.requireAuth }, async (request, reply) => {
-    const auth = requireAuthContext(request);
-    const userId = await viewerOf(auth.authUserId);
-    const status = await db.asService('account.lifecycle', async (session) => {
-      const rows = await session.query<{ status: string }>(
-        `select status from public.users where id = $1::uuid for update`,
-        [userId],
-      );
-      const current = rows[0]?.status;
-      if (current === 'active') {
-        await session.query(`update public.users set status = 'deactivated' where id = $1::uuid`, [
-          userId,
-        ]);
-        return 'deactivated';
-      }
-      return current ?? null;
-    });
-    if (status !== 'deactivated') throw conflict('Only an active account can be deactivated');
-    return reply.code(204).send();
-  });
+  fastify.post(
+    '/me/deactivate',
+    { preHandler: fastify.requireIdentity },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const userId = await viewerOf(auth.authUserId);
+      const status = await db.asService('account.lifecycle', async (session) => {
+        const rows = await session.query<{ status: string }>(
+          `select status from public.users where id = $1::uuid for update`,
+          [userId],
+        );
+        const current = rows[0]?.status;
+        if (current === 'active') {
+          await session.query(
+            `update public.users set status = 'deactivated' where id = $1::uuid`,
+            [userId],
+          );
+          return 'deactivated';
+        }
+        return current ?? null;
+      });
+      if (status !== 'deactivated') throw conflict('Only an active account can be deactivated');
+      return reply.code(204).send();
+    },
+  );
 
-  fastify.post('/me/reactivate', { preHandler: fastify.requireAuth }, async (request, reply) => {
-    const auth = requireAuthContext(request);
-    const userId = await viewerOf(auth.authUserId);
-    const status = await db.asService('account.lifecycle', async (session) => {
-      const rows = await session.query<{ status: string }>(
-        `select status from public.users where id = $1::uuid for update`,
-        [userId],
-      );
-      const current = rows[0]?.status;
-      if (current === 'deactivated') {
-        await session.query(`update public.users set status = 'active' where id = $1::uuid`, [
-          userId,
-        ]);
-        return 'active';
-      }
-      return current ?? null;
-    });
-    if (status !== 'active') throw conflict('Only a deactivated account can be reactivated');
-    return reply.code(204).send();
-  });
+  fastify.post(
+    '/me/reactivate',
+    { preHandler: fastify.requireIdentity },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const userId = await viewerOf(auth.authUserId);
+      const status = await db.asService('account.lifecycle', async (session) => {
+        const rows = await session.query<{ status: string }>(
+          `select status from public.users where id = $1::uuid for update`,
+          [userId],
+        );
+        const current = rows[0]?.status;
+        if (current === 'deactivated') {
+          await session.query(`update public.users set status = 'active' where id = $1::uuid`, [
+            userId,
+          ]);
+          return 'active';
+        }
+        return current ?? null;
+      });
+      if (status !== 'active') throw conflict('Only a deactivated account can be reactivated');
+      return reply.code(204).send();
+    },
+  );
 
   /**
    * Request erasure (ERD E1). A 30-day grace period, during which the account
@@ -384,7 +391,7 @@ export const meRoutes: FastifyPluginAsync<MeRoutesOptions> = async (fastify, opt
    * safety matter places a hold (R4): open reports about the member, or an
    * active suspension or ban. The response says so in general terms only.
    */
-  fastify.post('/me/delete', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  fastify.post('/me/delete', { preHandler: fastify.requireIdentity }, async (request, reply) => {
     const auth = requireAuthContext(request);
     const userId = await viewerOf(auth.authUserId);
 
@@ -448,7 +455,7 @@ export const meRoutes: FastifyPluginAsync<MeRoutesOptions> = async (fastify, opt
     });
   });
 
-  fastify.delete('/me/delete', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  fastify.delete('/me/delete', { preHandler: fastify.requireIdentity }, async (request, reply) => {
     const auth = requireAuthContext(request);
     const userId = await viewerOf(auth.authUserId);
     const cancelled = await db.asService('account.lifecycle', async (session) => {
@@ -564,7 +571,7 @@ export const meRoutes: FastifyPluginAsync<MeRoutesOptions> = async (fastify, opt
 
   fastify.delete(
     '/me/push-tokens/:deviceId',
-    { preHandler: fastify.requireAuth },
+    { preHandler: fastify.requireIdentity },
     async (request, reply) => {
       const auth = requireAuthContext(request);
       const deviceId = String((request.params as { deviceId?: string }).deviceId ?? '');

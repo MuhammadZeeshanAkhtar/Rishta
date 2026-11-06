@@ -263,7 +263,7 @@ describe('B3 — incognito is a paid entitlement, enforced in the database', () 
     const free = await seedUser(db, { displayName: 'Free Member', gender: 'female' });
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         free.authUserId,
         `update public.user_settings set incognito = true returning incognito`,
       ),
@@ -274,7 +274,7 @@ describe('B3 — incognito is a paid entitlement, enforced in the database', () 
     const paid = await seedUser(db, { displayName: 'Paid Member', gender: 'female' });
     await grantIncognito(paid);
     const rows = await db.as<{ incognito: boolean }>(
-      'authenticated',
+      'api_member',
       paid.authUserId,
       `update public.user_settings set incognito = true returning incognito`,
     );
@@ -286,7 +286,7 @@ describe('B3 — incognito is a paid entitlement, enforced in the database', () 
     await grantIncognito(lapsed, '2020-01-01T00:00:00Z');
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         lapsed.authUserId,
         `update public.user_settings set incognito = true returning incognito`,
       ),
@@ -302,7 +302,7 @@ describe('B3 — incognito is a paid entitlement, enforced in the database', () 
     );
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         odd.authUserId,
         `update public.user_settings set incognito = true returning incognito`,
       ),
@@ -321,7 +321,7 @@ describe('B3 — incognito is a paid entitlement, enforced in the database', () 
     await db.admin(`alter table public.user_settings enable trigger user_settings_guard_incognito`);
 
     const rows = await db.as<{ incognito: boolean }>(
-      'authenticated',
+      'api_member',
       trapped.authUserId,
       `update public.user_settings set incognito = false returning incognito`,
     );
@@ -440,7 +440,7 @@ describe('B7 — the Data API cannot post system messages or blank ones', () => 
   });
 
   const send = (who: SeededUser, sql: string, params: unknown[]) =>
-    db.as('authenticated', who.authUserId, sql, params);
+    db.as('api_member', who.authUserId, sql, params);
 
   it('still lets a participant send ordinary text', async () => {
     const rows = await send(

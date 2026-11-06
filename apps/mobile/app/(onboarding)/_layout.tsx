@@ -3,6 +3,7 @@ import { Redirect, Stack } from 'expo-router';
 import { OnboardingDraftProvider } from '../../src/onboarding/OnboardingDraft';
 import { useLocale } from '../../src/i18n/LocaleProvider';
 import { useSession } from '../../src/session/SessionProvider';
+import { redirectFor } from '../../src/session/sessionState';
 import { useTheme } from '../../src/theme/ThemeProvider';
 import { describeError } from '../../src/lib/errors';
 
@@ -32,11 +33,8 @@ export default function OnboardingLayout() {
   );
 
   if (state === 'loading') return null;
-  if (state === 'signed_out' || state === 'misconfigured') {
-    return <Redirect href="/(auth)/welcome" />;
-  }
-  if (state === 'unverified') return <Redirect href="/(auth)/verify-email" />;
-  if (state === 'ready') return <Redirect href="/discover" />;
+  const redirect = redirectFor('onboarding', state);
+  if (redirect) return <Redirect href={redirect as never} />;
 
   return (
     // The provider wraps the group, not each screen, so moving back and forward

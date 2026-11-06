@@ -7,7 +7,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 > ## HANDOVER STATE, 5 NOVEMBER 2026: VERIFIED LOCALLY ONLY
 >
-> **Built and tested locally:** the monorepo, the full schema (31 migrations, 56 tables) with
+> **Built and tested locally:** the monorepo, the full schema (34 migrations, 57 tables) with
 > RLS enabled _and forced_ everywhere, authentication, onboarding, profiles, photos including
 > others' photos and photo requests, per-field privacy, discovery, the deterministic compatibility
 > engine, interests, matches, notifications, block & report, the Family/Wali review layer,
@@ -18,7 +18,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 >
 > **Not started:** family calls (Phase 9), proposals (10), the AI layer (11) and everything after.
 >
-> **1,730 tests pass.** Typecheck, lint and format are clean. §13 below records the state at
+> **2,473 tests pass.** Typecheck, lint and format are clean. §13 below records the state at
 > Phase 7; the code review documents supersede it where they differ.
 > See [§13 Implementation Status](#13-implementation-status) for the row-by-row record and
 > [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what a new team should expect
@@ -1488,7 +1488,7 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | Monorepo / pnpm workspace                    | **BUILT** - 6 packages, TS strict, ESLint, Prettier                                        |
 | ESLint architectural guardrails              | **BUILT** - verified firing                                                                |
 | `@nikahmate/domain` shared vocabulary        | **BUILT** - 122 tests                                                                      |
-| Database schema                              | **BUILT** - 31 migrations, 56 tables, applied to a fresh Postgres in CI                    |
+| Database schema                              | **BUILT** - 34 migrations, 57 tables, applied to a fresh Postgres in CI                    |
 | Family / Wali review layer (Phase 6b)        | **BUILT** - D12 settled; invitations, scoped grants, match-scoped review, 72h SLA          |
 | Conversations and messages (Phase 7)         | **BUILT** - gate-aware send, stages, unread counts, Supabase Realtime                      |
 | RLS - every table                            | **BUILT** - enabled AND forced; 330 tests across 13 suites                                 |
@@ -1512,7 +1512,7 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | English at 320dp                             | **VERIFIED** - rendered and measured, zero horizontal overflow                             |
 | CI workflow                                  | **BUILT** - lint, format, typecheck, test, Expo web bundle, secret guard                   |
 
-**1,730 tests passing** - domain 254, db 514, api-client 40, i18n 14, api 850, mobile 58.
+**2,473 tests passing** - domain 254, db 622, api-client 45, i18n 14, api 1283, mobile 255.
 Lint, format and typecheck clean across all 6 packages.
 
 Database tests run against a real Postgres via PGlite, in-process, applying the

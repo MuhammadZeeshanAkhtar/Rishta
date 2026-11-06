@@ -1,7 +1,7 @@
-import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyError, type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import type { Config } from './config';
+import { parseTrustProxy, type Config } from './config';
 import { ApiError, internalError } from './errors';
 import { mapDatabaseError, problemCodeForStatus } from './http/problems';
 import authPlugin from './auth/plugin';
@@ -65,8 +65,9 @@ export async function buildApp({
     },
     // Trust the proxy so rate limiting keys on the real client address rather
     // than on the load balancer, which would make one bucket for everybody.
-    trustProxy: true,
-    disableRequestLogging: config.NODE_ENV === 'test',
+    // Limit it in production: see TRUST_PROXY in config.ts.
+    trustProxy: parseTrustProxy(config.TRUST_PROXY),
+    logController: new LogController({ disableRequestLogging: config.NODE_ENV === 'test' }),
   });
 
   /**
@@ -118,7 +119,7 @@ export async function buildApp({
   // `app.authSubject()`, which must exist when its hooks are installed.
   // Authentication itself stays opt-in per route: `authSubject` never rejects
   // a request, it only tells the limiter who is asking.
-  await app.register(authPlugin, { verifier });
+  await app.register(authPlugin, { verifier, db });
 
   // The tighter ceiling for the routes that send something to another person.
   // An onRoute hook rather than a `config` block on each route, so the list

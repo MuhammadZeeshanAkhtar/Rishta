@@ -33,6 +33,10 @@ export type ApiErrorKind =
   | 'validation_failed'
   | 'unauthenticated'
   | 'forbidden'
+  /** Review N1: the account is suspended, banned, deactivated or pending deletion. */
+  | 'account_restricted'
+  /** Review N5: the staff role hierarchy refused this action. */
+  | 'staff_protected'
   | 'not_found'
   | 'conflict'
   | 'rate_limited'
@@ -58,6 +62,8 @@ const MESSAGE_KEYS: Record<ErrorKind, string> = {
   validation_failed: 'errors.validationFailed',
   unauthenticated: 'errors.sessionExpired',
   forbidden: 'errors.forbidden',
+  account_restricted: 'errors.accountRestricted',
+  staff_protected: 'errors.staffProtected',
   not_found: 'errors.notFound',
   conflict: 'errors.conflict',
 };

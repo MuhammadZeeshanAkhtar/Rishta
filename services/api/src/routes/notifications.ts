@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import { badRequest, notFound } from '../errors';
 import { requireAuthContext } from '../auth/plugin';
-import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
+import { parseLimit } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
 import { isUuid } from '../http/params';
 
@@ -29,7 +30,7 @@ interface NotificationRow {
   payload: Record<string, unknown>;
   read_at: string | null;
   created_at: string;
-  position: number;
+  cursor_at: string;
 }
 
 /**
@@ -81,7 +82,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
     const unreadOnly = query.unreadOnly === 'true';
 
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     return db.asUser(auth.authUserId, async (session) => {
@@ -94,17 +95,17 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
       // two notifications written in the same transaction never swap between
       // pages. One row over the limit, so `hasMore` is observed not guessed.
       const rows = await session.query<NotificationRow>(
-        `select id, type, payload, read_at, created_at, position
+        `select id, type, payload, read_at, created_at, cursor_at
            from (
              select n.*,
-                    (row_number() over (order by n.created_at desc, n.id))::int - 1 as position
+                    ${keysetTime('n.created_at')} as cursor_at
                from public.notifications n
               where ${unreadOnly ? 'n.read_at is null' : 'true'}
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null],
       );
 
       // The badge count, and always the UNREAD total rather than the size of
@@ -120,7 +121,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
       return {
         items: page.map(toNotification),
         unreadCount: Number.parseInt(counted[0]?.n ?? '0', 10),
-        nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+        nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
         hasMore,
       };
     });

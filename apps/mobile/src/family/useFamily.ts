@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   FamilyAccessLogEntry,
+  FamilyInvitation,
   FamilyMember,
   FamilyPermission,
   ReviewSummary,
@@ -26,6 +27,10 @@ export interface FamilyState {
   reviews: ReviewSummary[];
   /** Reviews pending on MY matches, with the stalled warning. */
   myReviews: MyReview[];
+  /** Invitations I sent that nobody has answered yet. */
+  invitations: FamilyInvitation[];
+  /** Matches I approved for someone, so that I can withdraw it. */
+  approved: ReviewSummary[];
   loading: boolean;
   error: boolean;
   reload: () => void;
@@ -45,20 +50,24 @@ export function useFamily(): FamilyState {
   const [managed, setManaged] = useState<FamilyMember[]>([]);
   const [reviews, setReviews] = useState<ReviewSummary[]>([]);
   const [myReviews, setMyReviews] = useState<MyReview[]>([]);
+  const [invitations, setInvitations] = useState<FamilyInvitation[]>([]);
+  const [approved, setApproved] = useState<ReviewSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  // Only the first load shows as loading. A refresh must not blank what is being read.
+  const loaded = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (!loaded.current) setLoading(true);
     setError(false);
 
     const client = getClient();
 
-    // Four independent reads, settled together. `allSettled` rather than
+    // Independent reads, settled together. `allSettled` rather than
     // `all`: a delegate with no principals and a member with no delegates are
     // both ordinary, and one empty or failing list must not blank the whole
     // screen.
@@ -67,10 +76,12 @@ export function useFamily(): FamilyState {
       client.listManagedProfiles(),
       client.listFamilyReviews(),
       client.listMyFamilyReviews(),
+      client.listFamilyInvitations(),
+      client.listFamilyReviews({ state: 'approved' }),
     ]).then((results) => {
       if (cancelled) return;
 
-      const [m, g, r, mine] = results;
+      const [m, g, r, mine, sent, yes] = results;
       if (m.status === 'fulfilled') setMembers(m.value.items);
       if (g.status === 'fulfilled') setManaged(g.value.items);
       if (r.status === 'fulfilled') setReviews(r.value.items);
@@ -79,9 +90,15 @@ export function useFamily(): FamilyState {
         setMyReviews(body.items ?? []);
       }
 
+      if (sent.status === 'fulfilled') {
+        setInvitations(sent.value.items.filter((i) => i.status === 'pending'));
+      }
+      if (yes.status === 'fulfilled') setApproved(yes.value.items);
+
       // Only an error if EVERY read failed — that is a connectivity problem
       // rather than an empty family.
       setError(results.every((x) => x.status === 'rejected'));
+      loaded.current = true;
       setLoading(false);
     });
 
@@ -90,7 +107,7 @@ export function useFamily(): FamilyState {
     };
   }, [nonce]);
 
-  return { members, managed, reviews, myReviews, loading, error, reload };
+  return { members, managed, reviews, myReviews, invitations, approved, loading, error, reload };
 }
 
 /**

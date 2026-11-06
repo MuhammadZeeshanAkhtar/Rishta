@@ -42,7 +42,7 @@ async function setState(state: string): Promise<void> {
 async function trySend(who: SeededUser, body: string): Promise<boolean> {
   try {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       who.authUserId,
       `insert into public.messages (conversation_id, sender_user_id, body)
        values ($1::uuid, app.current_user_id(), $2)
@@ -196,11 +196,7 @@ describe('the trigger builds the thread, so no route has to remember', () => {
 describe('reading is membership', () => {
   it('lets both participants read the thread', async () => {
     for (const who of [alice, bilal]) {
-      const rows = await db.as(
-        'authenticated',
-        who.authUserId,
-        `select id from public.conversations`,
-      );
+      const rows = await db.as('api_member', who.authUserId, `select id from public.conversations`);
       expect(rows).toHaveLength(1);
     }
   });
@@ -213,7 +209,7 @@ describe('reading is membership', () => {
       'public.messages',
       'public.message_reads',
     ]) {
-      const rows = await db.as('authenticated', stranger.authUserId, `select * from ${table}`);
+      const rows = await db.as('api_member', stranger.authUserId, `select * from ${table}`);
       expect(rows, `${table} leaked to a stranger`).toEqual([]);
     }
   });
@@ -229,7 +225,7 @@ describe('reading is membership', () => {
     // decides what each side may see about it. No grant, so this is refused
     // before a policy is even consulted.
     await expect(
-      db.as('authenticated', alice.authUserId, `select id from public.stage_transitions`),
+      db.as('api_member', alice.authUserId, `select id from public.stage_transitions`),
     ).rejects.toThrow(/permission denied/i);
   });
 });
@@ -248,7 +244,7 @@ describe('writing is membership AND the gate', () => {
     // Data API insert cannot put words in the counterpart's mouth.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.messages (conversation_id, sender_user_id, body)
          values ($1::uuid, $2::uuid, 'Bilal did not write this')
@@ -268,7 +264,7 @@ describe('writing is membership AND the gate', () => {
     expect(await trySend(bilal, 'Hello?')).toBe(false);
 
     const readable = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select id from public.messages where conversation_id = $1::uuid`,
       [conversationId],
@@ -370,11 +366,7 @@ describe('writing is membership AND the gate', () => {
     expect(await trySend(alice, 'Watching only')).toBe(false);
 
     // Still readable — that is the whole point of the distinction.
-    const readable = await db.as(
-      'authenticated',
-      alice.authUserId,
-      `select id from public.messages`,
-    );
+    const readable = await db.as('api_member', alice.authUserId, `select id from public.messages`);
     expect(readable.length).toBeGreaterThan(0);
 
     await db.admin(
@@ -399,7 +391,7 @@ describe('messages carry no member write path beyond the insert', () => {
   it('refuses a member UPDATE — editing is server state', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.messages set body = 'rewritten' where conversation_id = $1::uuid`,
         [conversationId],
@@ -409,7 +401,7 @@ describe('messages carry no member write path beyond the insert', () => {
 
   it('refuses a member DELETE — report evidence depends on these rows', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.messages`),
+      db.as('api_member', alice.authUserId, `delete from public.messages`),
     ).rejects.toThrow(/permission denied/i);
   });
 
@@ -419,7 +411,7 @@ describe('messages carry no member write path beyond the insert', () => {
     // `acted_by_user_id` would attribute their words to a delegate.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.messages
            (conversation_id, sender_user_id, body, moderation_status)

@@ -21,6 +21,52 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
     headers: { 'Content-Type': 'application/json', ...headers },
   });
 
+describe('HttpClient: the two 403s the app treats differently (review N1, N5, N7)', () => {
+  const problem = (code: string) => vi.fn(async () => json(403, { code, message: 'No' }));
+  const refusal = (http: HttpClient) => http.get('/x').catch((e: unknown) => e as NikahMateError);
+
+  it('reports account_restricted as itself, with its own words', async () => {
+    const error = await refusal(client(problem('account_restricted') as unknown as typeof fetch));
+    expect((error as NikahMateError).kind).toBe('account_restricted');
+    expect((error as NikahMateError).messageKey).toBe('errors.accountRestricted');
+  });
+
+  it('tells the session listener, so the app can move to the explanation', async () => {
+    const http = client(problem('account_restricted') as unknown as typeof fetch);
+    const listener = vi.fn();
+    http.onAccountRestricted = listener;
+    await refusal(http);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports staff_protected as itself, and does not treat it as a restriction', async () => {
+    const http = client(problem('staff_protected') as unknown as typeof fetch);
+    const listener = vi.fn();
+    http.onAccountRestricted = listener;
+    const error = await refusal(http);
+    expect((error as NikahMateError).kind).toBe('staff_protected');
+    expect((error as NikahMateError).messageKey).toBe('errors.staffProtected');
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('leaves a plain 403 as forbidden, so the staff second-factor gate still works', async () => {
+    const http = client(problem('forbidden') as unknown as typeof fetch);
+    const listener = vi.fn();
+    http.onAccountRestricted = listener;
+    expect(((await refusal(http)) as NikahMateError).kind).toBe('forbidden');
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('only a 403 can claim to be a restriction', async () => {
+    const fetchImpl = vi.fn(async () => json(500, { code: 'account_restricted', message: 'No' }));
+    const http = client(fetchImpl as unknown as typeof fetch);
+    const listener = vi.fn();
+    http.onAccountRestricted = listener;
+    expect(((await refusal(http)) as NikahMateError).kind).toBe('server');
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
 describe('HttpClient', () => {
   it('sends a bearer token and parses the body', async () => {
     const fetchImpl = vi.fn(async () => json(200, { userId: 'u1' }));

@@ -131,8 +131,8 @@ _Updated 2026-11-05 (code review L9, company decision 3)._
 
 `POST /interests` refuses a note containing a phone number, email, link, handle or messaging
 platform. The filter cannot catch everything: Urdu number words and letter-for-digit substitution
-get through, and closing the Data API route depends on applying 0026 and the Supabase Dashboard
-change (B7).
+get through. Direct writes are closed by 0026 and direct reads of other members by 0032, once
+applied; the Supabase Dashboard change (B7) is still required, see `DATABASE_MIGRATION_REPORT.md`.
 
 ---
 
@@ -140,9 +140,9 @@ change (B7).
 
 _Updated 2026-11-05._
 
-- **Account deletion is only partly built.** Deactivation and deletion REQUESTS work
-  (`/me/deactivate`, `/me/delete`), but nothing executes a deletion after the grace period, there is
-  no in-app screen for them, and `/me/export` is absent. Google also requires a web deletion route.
+- **Account deletion is only partly built.** Members can ask for deletion and cancel it in the app,
+  but nothing executes a deletion after the grace period, and `/me/export` is absent. Google also
+  requires a web deletion page. See `docs/PRODUCTION_SECURITY.md`.
 - No data-safety form, no privacy policy, no age-rating submission.
 - `apps/mobile/eas.json` builds an APK for direct distribution only. A Play Store upload needs an
   AAB profile.
@@ -201,6 +201,13 @@ _Updated 2026-11-05._
 
 18 of the 111 contract operations are not built. Each is marked `x-status: not-implemented` with
 its blocker in [openapi.yaml](openapi.yaml), and a test keeps that list matched to the running routes.
+No screen calls them. The ones a company should know about: `POST /me/export` (a member cannot
+export their data), `POST /support/contact` and `GET /safety/center`, resending the verification
+email, phone verification, family calls and plans.
+
+**Discover does not reload when someone returns to it,** because a reload goes back to the first
+page and would lose their place. So after expressing interest from a profile screen, the card is
+still in Discover until the next refresh, and pressing it again says it was already sent.
 
 ---
 

@@ -147,7 +147,7 @@ describe('user_settings.communication_policy', () => {
     // survives the call. Reading it back with admin() afterwards would assert
     // on the pre-write value and pass whatever happened here.
     const rows = await db.as<{ communication_policy: string }>(
-      'authenticated',
+      'api_member',
       user.authUserId,
       `update public.user_settings set communication_policy = 'family_reviewed'
        returning communication_policy`,
@@ -165,7 +165,7 @@ describe('user_settings.communication_policy', () => {
     const user = await seedUser(db, { displayName: 'ColumnScoped' });
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         user.authUserId,
         `update public.user_settings set user_id = gen_random_uuid()`,
       ),
@@ -178,7 +178,7 @@ describe('user_settings.communication_policy', () => {
     const user = await seedUser(db, { displayName: 'StillChecked' });
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         user.authUserId,
         `update public.user_settings set communication_policy = 'wali_only'`,
       ),
@@ -196,7 +196,7 @@ describe('user_settings.communication_policy', () => {
     // RETURNING is the only way to see that, since the surrounding
     // transaction rolls back either way.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `update public.user_settings set communication_policy = 'family_reviewed'
         where user_id = $1::uuid
@@ -211,7 +211,7 @@ describe('user_settings.communication_policy', () => {
     // what the other household expects (ADR 0011).
     const [alice, bilal] = await pair();
     const own = await db.as<{ communication_policy: string }>(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select communication_policy from public.user_settings`,
     );
@@ -219,7 +219,7 @@ describe('user_settings.communication_policy', () => {
     expect(own[0]!.communication_policy).toBe('direct');
 
     const other = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select communication_policy from public.user_settings where user_id = $1`,
       [alice.userId],
@@ -269,7 +269,7 @@ describe('app.required_communication_state', () => {
     // strict?" about anybody, which is the one thing the counterpart is never
     // told.
     const [alice, bilal] = await pair();
-    for (const actor of ['authenticated', 'anon'] as const) {
+    for (const actor of ['api_member', 'anon'] as const) {
       await expect(
         db.as(
           actor,

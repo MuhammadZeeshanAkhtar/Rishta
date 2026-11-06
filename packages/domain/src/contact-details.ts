@@ -26,9 +26,12 @@
  * as M.Com and B.Com, dates, currency amounts, ages and heights, age ranges,
  * "imo" meaning "in my opinion", and sentences that merely contain "at".
  *
- * Not caught, and recorded rather than pretended: numbers spelled in Urdu
- * words, letters substituted for digits ("o3oo…"), and descriptions with no
- * identifier at all ("find me where we met"). Those need human moderation (L1).
+ * Also caught, after the post-merge audit got past each: numbers spelled in Urdu script
+ * or Roman Urdu, letters substituted for digits ("o3oo…"), a number given in pieces
+ * around a Pakistani mobile prefix ("starts 0300 and ends 4567"), and "snap: name".
+ *
+ * Not caught, and recorded rather than pretended: descriptions with no identifier at
+ * all ("find me where we met"). Those need human moderation (L1).
  */
 
 export const CONTACT_DETAIL_KINDS = ['email', 'phone', 'url', 'handle', 'platform'] as const;
@@ -45,6 +48,42 @@ const DIGIT_WORDS: Readonly<Record<string, string>> = {
   seven: '7',
   eight: '8',
   nine: '9',
+};
+
+/**
+ * Urdu and Roman Urdu number words. Common words on their own ("do" also means "do",
+ * "nau" a boat), which is safe because a phone number takes seven in a row.
+ */
+const URDU_DIGIT_WORDS: Readonly<Record<string, string>> = {
+  صفر: '0',
+  ایک: '1',
+  دو: '2',
+  تین: '3',
+  چار: '4',
+  پانچ: '5',
+  چھ: '6',
+  چھے: '6',
+  سات: '7',
+  آٹھ: '8',
+  نو: '9',
+  sifar: '0',
+  aik: '1',
+  ek: '1',
+  do: '2',
+  teen: '3',
+  char: '4',
+  chaar: '4',
+  panch: '5',
+  paanch: '5',
+  che: '6',
+  chay: '6',
+  chhe: '6',
+  saat: '7',
+  sat: '7',
+  ath: '8',
+  aath: '8',
+  nau: '9',
+  no: '9',
 };
 
 /** Lower-case, canonical digits, no invisible characters. */
@@ -97,6 +136,8 @@ const PLATFORM = new RegExp(
     String.raw`\binsta\b`,
     String.raw`\bsnap\s*chat\b`,
     String.raw`\bsnap\s*(?:id|me)\b`,
+    // "snap: name" and "snap - name": a platform named, followed by a handle.
+    String.raw`\bsnap\s*[:\-=]\s*\S`,
     String.raw`\bfacebook\b`,
     String.raw`\bfb\b`,
     String.raw`\btik\s*tok\b`,
@@ -127,12 +168,31 @@ const AMOUNT =
 /** Seven or more digits, with any separators a person might put between. */
 const PHONE = /\+?\d(?:[\s().-]*\d){6,}/;
 
-function hasPhoneNumber(text: string): boolean {
-  const spelled = text.replace(
-    /\b(zero|one|two|three|four|five|six|seven|eight|nine)\b/g,
-    (word) => DIGIT_WORDS[word] ?? word,
+/** "o3oo1234567": letters standing in for digits, in a token already mostly digits. */
+function undoLetterDigits(text: string): string {
+  return text.replace(/\b[0-9oil]{7,}\b/g, (token) =>
+    (token.match(/\d/g)?.length ?? 0) >= 3 ? token.replace(/o/g, '0').replace(/[il]/g, '1') : token,
   );
-  return PHONE.test(spelled.replace(DATE, ' ').replace(AMOUNT, ' '));
+}
+
+/** A Pakistani mobile prefix with more digits elsewhere: a number given in pieces. */
+const MOBILE_PREFIX = /(?:^|[^\d])(?:\+?92[\s-]?3\d{2}|03\d{2})(?:[^\d]|$)/;
+const MORE_DIGITS = /\d{3,}/;
+
+function hasPhoneNumber(text: string): boolean {
+  const spelled = text
+    .replace(
+      /\b(zero|one|two|three|four|five|six|seven|eight|nine)\b/g,
+      (word) => DIGIT_WORDS[word] ?? word,
+    )
+    // Split on whitespace rather than `\b`, which does not see Urdu script as a word.
+    .split(/(\s+)/)
+    .map((token) => URDU_DIGIT_WORDS[token] ?? token)
+    .join('');
+  const cleaned = undoLetterDigits(spelled).replace(DATE, ' ').replace(AMOUNT, ' ');
+  if (PHONE.test(cleaned)) return true;
+  const prefix = MOBILE_PREFIX.exec(cleaned);
+  return prefix !== null && MORE_DIGITS.test(cleaned.replace(prefix[0], ' '));
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   type ExpectedTrigger,
   type Queryable,
   type SecurityCheck,
+  memberRoles,
 } from './phase1-security-checks';
 
 /**
@@ -82,7 +83,6 @@ const TRIGGERS: ExpectedTrigger[] = [
   },
 ];
 
-const MEMBER_ROLES = ['anon', 'authenticated'] as const;
 const ADMIN_TABLES = [
   'admin_users',
   'admin_role_assignments',
@@ -146,7 +146,7 @@ async function otherChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
         -- has_table_privilege throws on a missing table; an absent table is
         -- unreachable, which is the property this check asserts.
         where to_regclass('public.' || t) is not null`,
-      [MEMBER_ROLES, ADMIN_TABLES],
+      [await memberRoles(db), ADMIN_TABLES],
     );
     const open = rows.filter((r) => r.can).map((r) => `${r.role}:${r.tbl}`);
     out.push(
@@ -185,7 +185,7 @@ async function otherChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
         `select r as role,
                 has_function_privilege(r, 'app.purge_expired_notifications()', 'EXECUTE') as can
            from unnest($1::text[]) as r`,
-        [MEMBER_ROLES],
+        [await memberRoles(db)],
       );
       const open = rows.filter((r) => r.can).map((r) => r.role);
       out.push(

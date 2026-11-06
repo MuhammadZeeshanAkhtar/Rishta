@@ -60,7 +60,7 @@ afterAll(async () => {
 describe('reads', () => {
   it('lets a viewer read the scores computed FOR them', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select overall from public.compatibility_scores`,
     );
@@ -72,7 +72,7 @@ describe('reads', () => {
     // engine thinks of him, is neither his to know nor something the product
     // offers.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select overall from public.compatibility_scores`,
     );
@@ -81,7 +81,7 @@ describe('reads', () => {
 
   it('lets a viewer read their own factors', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select dimension, facts from public.compatibility_factors`,
     );
@@ -91,7 +91,7 @@ describe('reads', () => {
 
   it('does NOT let the candidate read factors about themselves', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select dimension from public.compatibility_factors`,
     );
@@ -100,7 +100,7 @@ describe('reads', () => {
 
   it('lets a viewer read their own candidate list', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select candidate_user_id from public.match_candidates`,
     );
@@ -109,7 +109,7 @@ describe('reads', () => {
 
   it('does NOT let a member see whose lists they appear in', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select user_id from public.match_candidates`,
     );
@@ -129,7 +129,7 @@ describe('a member cannot fabricate', () => {
   it('cannot insert a compatibility score', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.compatibility_scores
            (viewer_user_id, candidate_user_id, overall, engine_version)
@@ -141,11 +141,7 @@ describe('a member cannot fabricate', () => {
 
   it('cannot raise a score computed for them', async () => {
     await expect(
-      db.as(
-        'authenticated',
-        alice.authUserId,
-        `update public.compatibility_scores set overall = 100`,
-      ),
+      db.as('api_member', alice.authUserId, `update public.compatibility_scores set overall = 100`),
     ).rejects.toThrow(/permission denied/i);
   });
 
@@ -154,7 +150,7 @@ describe('a member cannot fabricate', () => {
     // and the stored facts are what make a reason checkable.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.compatibility_factors
            (score_id, dimension, sub_score, weight, facts, explanation_key)
@@ -167,7 +163,7 @@ describe('a member cannot fabricate', () => {
   it('cannot rewrite the facts behind an existing factor', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.compatibility_factors set facts = '{"invented":true}'::jsonb`,
       ),
@@ -177,7 +173,7 @@ describe('a member cannot fabricate', () => {
   it('cannot insert themselves into another member candidate list', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.match_candidates
            (user_id, candidate_user_id, section_key, rank, batch_id)
@@ -189,13 +185,13 @@ describe('a member cannot fabricate', () => {
 
   it('cannot promote themselves up a ranking', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.match_candidates set rank = 0`),
+      db.as('api_member', alice.authUserId, `update public.match_candidates set rank = 0`),
     ).rejects.toThrow(/permission denied/i);
   });
 
   it('cannot delete a candidate row to hide someone', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.match_candidates`),
+      db.as('api_member', alice.authUserId, `delete from public.match_candidates`),
     ).rejects.toThrow(/permission denied/i);
   });
 });

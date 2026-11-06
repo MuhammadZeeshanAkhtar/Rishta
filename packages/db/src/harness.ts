@@ -86,7 +86,12 @@ export const SUPABASE_SHIM = `
     grant all on functions to anon, authenticated, service_role;
 `;
 
-export type Actor = 'anon' | 'authenticated' | 'service_role';
+/**
+ * `authenticated` is what the Supabase Data API and GraphQL run as: a member's
+ * JWT, used directly. `api_member` is what our API runs as for the same member.
+ * The same JWT claims in both; only the role differs (migration 0033).
+ */
+export type Actor = 'anon' | 'authenticated' | 'api_member' | 'service_role';
 
 export interface TestDb {
   /** Run SQL as the given role, with the given JWT subject. */
@@ -120,6 +125,12 @@ export interface ApplyMigrationsOptions {
    * Unknown prefixes throw rather than silently applying everything.
    */
   through?: string;
+  /**
+   * Carry on from the migration whose filename starts with this prefix, on a
+   * database an earlier call left part-way. For tests that put data in first, as
+   * a real project has when a migration reaches it. Skips the Supabase shim.
+   */
+  from?: string;
 }
 
 /**
@@ -132,9 +143,15 @@ export async function applyMigrations(
   db: SqlRunner,
   options: ApplyMigrationsOptions = {},
 ): Promise<void> {
-  await db.exec(SUPABASE_SHIM);
+  if (options.from === undefined) await db.exec(SUPABASE_SHIM);
 
   let files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+  if (options.from !== undefined) {
+    const from = options.from;
+    const start = files.findIndex((f) => f.startsWith(from));
+    if (start < 0) throw new Error(`No migration matches from=${from}`);
+    files = files.slice(start);
+  }
 
   if (files.length === 0) {
     throw new Error(`No migrations found in ${MIGRATIONS_DIR}`);
@@ -173,7 +190,10 @@ export async function createTestDb(): Promise<TestDb> {
       // pass for the wrong reason.
       await db.exec('begin');
       try {
-        const claims = JSON.stringify({ sub: authUserId, role: actor });
+        const claims = JSON.stringify({
+          sub: authUserId,
+          role: actor === 'api_member' ? 'authenticated' : actor,
+        });
         await db.query(`select set_config('request.jwt.claims', $1, true)`, [claims]);
         await db.exec(`set local role ${actor}`);
         const result = await db.query<T>(sql, params);

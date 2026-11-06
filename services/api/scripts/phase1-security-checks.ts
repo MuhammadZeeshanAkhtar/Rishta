@@ -30,8 +30,27 @@ export interface Queryable {
   query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
 
-/** Member-facing roles. `anon` holds the key shipped inside the app. */
-const MEMBER_ROLES = ['anon', 'authenticated'] as const;
+/**
+ * Member-facing roles that exist on this database. `anon` holds the key shipped
+ * inside the app, `authenticated` is a member's JWT used directly, and `api_member`
+ * (0033) is the API acting for a member. A privilege held by any of them counts.
+ * Asked rather than listed, because these checks also run against databases from
+ * before 0033.
+ */
+export async function memberRoles(db: Queryable): Promise<string[]> {
+  const { rows } = await db.query<{ rolname: string }>(
+    `select rolname from pg_roles where rolname in ('anon', 'authenticated', 'api_member')`,
+  );
+  return rows.map((r) => r.rolname);
+}
+
+/** The role the API's member session runs as on this database. */
+export async function apiMemberRole(db: Queryable): Promise<string> {
+  const { rows } = await db.query<{ rolname: string }>(
+    `select rolname from pg_roles where rolname = 'api_member'`,
+  );
+  return rows[0] ? 'api_member' : 'authenticated';
+}
 
 // pg_trigger.tgtype bits (src/include/catalog/pg_trigger.h). AFTER is the
 // absence of BEFORE.
@@ -170,7 +189,7 @@ async function messageChecks(db: Queryable, out: SecurityCheck[]): Promise<void>
   const { rows: kind } = await db.query<{ role: string; can: boolean }>(
     `select r as role, has_column_privilege(r, 'public.messages', 'kind', 'INSERT') as can
        from unnest($1::text[]) as r`,
-    [MEMBER_ROLES],
+    [await memberRoles(db)],
   );
   const kindOpen = kind.filter((r) => r.can).map((r) => r.role);
   out.push(
@@ -192,9 +211,9 @@ async function messageChecks(db: Queryable, out: SecurityCheck[]): Promise<void>
   // sending at all. These three are exactly what the API's insert names.
   const sendColumns = ['conversation_id', 'sender_user_id', 'body'];
   const { rows: send } = await db.query<{ col: string; can: boolean }>(
-    `select col, has_column_privilege('authenticated', 'public.messages', col, 'INSERT') as can
+    `select col, has_column_privilege($2, 'public.messages', col, 'INSERT') as can
        from unnest($1::text[]) as col`,
-    [sendColumns],
+    [sendColumns, await apiMemberRole(db)],
   );
   const sendLost = send.filter((r) => !r.can).map((r) => r.col);
   out.push(
@@ -207,7 +226,7 @@ async function messageChecks(db: Queryable, out: SecurityCheck[]): Promise<void>
       : {
           name: 'B7 members can still insert a message',
           ok: false,
-          detail: `authenticated lacks INSERT on: ${sendLost.join(', ')} — every send will fail`,
+          detail: `the API's role lacks INSERT on: ${sendLost.join(', ')} — every send will fail`,
         },
   );
 
@@ -276,7 +295,7 @@ async function interestChecks(db: Queryable, out: SecurityCheck[]): Promise<void
   const { rows } = await db.query<{ role: string; can: boolean }>(
     `select r as role, has_any_column_privilege(r, 'public.interests', 'INSERT') as can
        from unnest($1::text[]) as r`,
-    [MEMBER_ROLES],
+    [await memberRoles(db)],
   );
   const open = rows.filter((r) => r.can).map((r) => r.role);
   out.push(

@@ -35,3 +35,20 @@ onlyBuiltDependencies:
   - babel-preset-expo
   - expo-modules-core
   - expo-modules-jsi
+
+# Security fixes for packages other packages depend on (Stage 2). Each moves within
+# the same major version, to the first release with the advisory's fix, so it stays
+# inside what the depending package asked for. Remove an entry once the depending
+# package requires the fixed version itself. See docs/PRODUCTION_SECURITY.md.
+overrides:
+  # In the API's production tree, through fastify: GHSA-w74x-v6f9-j3xg and others.
+  fast-uri@>=3 <3.1.9: 3.1.9
+  fast-uri@>=4 <4.2.3: 4.2.3
+  # Expo tooling, not in the app bundle: GHSA-pqg4-j6r4-53mv (critical).
+  shell-quote@<1.11.0: ^1.11.0
+  # Expo tooling, not in the app bundle: twelve advisories, GHSA-86w9-cpqp-85rv and others.
+  node-forge@<1.4.1: ^1.4.1
+  # Test tooling only: GHSA-587h-7wmj-h5pm and others.
+  vite@<7.3.7: ^7.3.7
+  # Expo tooling and vite, not in the app bundle: GHSA-68fv-2mgg-jv7q.
+  source-map-js@<1.2.2: ^1.2.2

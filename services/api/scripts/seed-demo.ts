@@ -32,6 +32,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
+import { databaseConnection } from '../src/db/tls';
 
 const CLEAN = process.argv.includes('--clean');
 
@@ -221,8 +222,7 @@ async function main(): Promise<void> {
   }
 
   const client = new Client({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
+    ...databaseConnection(url),
     application_name: 'nikahmate-seed-demo',
   });
 

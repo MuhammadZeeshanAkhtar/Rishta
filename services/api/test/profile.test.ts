@@ -254,7 +254,8 @@ describe('POST /me/profile/submit', () => {
 
   it('does not reinstate an account that is not in onboarding', async () => {
     // A suspended member who resubmits must not promote themselves back to
-    // active. `status` only ever moves forward out of onboarding.
+    // active. `status` only ever moves forward out of onboarding. Since review
+    // N1 the request is refused outright, before it reaches the handler.
     const userId = (
       await harness.raw.query<{ user_id: string }>(
         `select user_id from public.user_auth_links where auth_user_id = $1::uuid`,
@@ -271,7 +272,8 @@ describe('POST /me/profile/submit', () => {
     );
 
     const response = await submit();
-    expect(response.statusCode).toBe(202);
+    expect(response.statusCode).toBe(403);
+    expect(response.json().code).toBe('account_restricted');
 
     const rows = await harness.raw.query<{ status: string }>(
       `select status from public.users where id = $1::uuid`,
@@ -279,10 +281,12 @@ describe('POST /me/profile/submit', () => {
     );
     expect(rows.rows[0]?.status).toBe('suspended');
 
-    // Put it back so later tests see the state they expect.
+    // Put it back so later tests see the state they expect, including the
+    // submission the refused request did not make.
     await harness.raw.query(`update public.users set status = 'active' where id = $1::uuid`, [
       userId,
     ]);
+    expect((await submit()).statusCode).toBe(202);
   });
 
   it('reports discoverability from the stored review status, not a guess', async () => {

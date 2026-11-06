@@ -52,7 +52,7 @@ export default function VerifyEmailScreen() {
   // effect rather than inside the check handler means it also fires when
   // verification is noticed by the background auth listener.
   useEffect(() => {
-    if (state === 'onboarding' || state === 'ready') router.replace('/');
+    if (state === 'onboarding' || state === 'ready' || state === 'restricted') router.replace('/');
   }, [state, router]);
 
   useEffect(() => {

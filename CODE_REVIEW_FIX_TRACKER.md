@@ -3,7 +3,7 @@
 Tracks every finding in the **NikahMate Code Review Report, 28 October 2026**
 (reviewed commit `6c67581`) through to resolution.
 
-**Last updated:** 2026-11-06 · Phase 5 and handover preparation done locally · GitHub `main` still `6c67581` · Phases 1–5 on branch `review/phases-2-5-handover`, not merged or deployed · migrations 0026–0031 applied to **no** hosted database · workspace suite 1,730 passing · final report: `docs/HANDOVER.md`
+**Last updated:** 2026-11-06 · `main` on GitHub is `75d435b` (Phases 1–5 merged) · post-merge and Stage 2 work uncommitted on `review/post-merge-security` · migrations 0026–0034 applied to **no** hosted database · workspace suite 2,473 passing · final state: `docs/PRODUCTION_SECURITY.md`
 
 ## Status definitions
 
@@ -25,10 +25,10 @@ verification · 6 partially fixed · 5 not fixed · 2 blocked by company decisio
 All 26 bugs and all 12 limitations were re-confirmed against the code in the
 Phase 0 audit. None had been fixed before this work began.
 
-**Where the code is:** GitHub `main` = `6c67581`, the reviewed commit. This work is on
-the branch `review/phases-2-5-handover`, which is not merged. The live deployment named in the report (the
-live web app and the production Supabase project) is deployed from git and therefore
-carries all 38 items.
+**Where the code is:** GitHub `main` = `75d435b`, which merged Phases 1–5. The review was of `6c67581`.
+Later work is uncommitted on `review/post-merge-security`. The live deployment named in the report (the
+live web app and the production Supabase project) was not checked. It carries all 38 items if it still
+runs `6c67581`.
 
 ## Product decisions recorded (2026-11-01)
 
@@ -119,11 +119,11 @@ and the production web export, not by an automated UI test (L12).
 
 ## Manual actions required (outside the repository)
 
-| #   | Action                                                                                                                                                                                                   | For         |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| 1   | Supabase Dashboard → API → remove `public` from the exposed schemas. Completes B7; until then the Data API stays a second entry point, limited only by grants and RLS.                                   | B7          |
-| 2   | Release 0026 → API → 0027 per environment (development first), exactly as in `DATABASE_MIGRATION_REPORT.md` → Deployment order. Commit 0027 separately so step 2 can migrate from a checkout without it. | B1 B3 B4 B7 |
-| 3   | After step 2 completes: apply **0028**, then deploy the Phase 2 API (dev only until a staging/production migration process is approved).                                                                 | B16 B24 B25 |
+| #   | Action                                                                                                                                                                                                                                                                                      | For         |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| 1   | Supabase Dashboard → Data API → remove `public` from the exposed schemas, and check `pg_graphql` (exact steps in `DATABASE_MIGRATION_REPORT.md`, 0032). Completes B7; until then the Data API stays a second entry point, limited only by grants and RLS, which 0032 tightens once applied. | B7          |
+| 2   | Release 0026 → API → 0027 per environment (development first), exactly as in `DATABASE_MIGRATION_REPORT.md` → Deployment order. Commit 0027 separately so step 2 can migrate from a checkout without it.                                                                                    | B1 B3 B4 B7 |
+| 3   | After step 2 completes: apply **0028**, then deploy the Phase 2 API (dev only until a staging/production migration process is approved).                                                                                                                                                    | B16 B24 B25 |
 
 ⁵ **B2 is Fixed, not Verified.** The server flow is proven end to end by
 `review-phase2.test.ts`, and the link helpers and pending-invite store by unit

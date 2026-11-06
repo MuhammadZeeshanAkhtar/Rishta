@@ -1,9 +1,10 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Stack } from 'expo-router';
+import { ScreenHeader } from '../../../src/components/ScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { Banner } from '../../../src/components/Banner';
 import { EmptyState } from '../../../src/components/EmptyState';
 import { SkeletonList } from '../../../src/components/LoadingSkeleton';
+import { accessActionKey, accessPermissionKey } from '../../../src/family/accessLogText';
 import { useFamilyAccessLog } from '../../../src/family/useFamily';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
 import { useTheme } from '../../../src/theme/ThemeProvider';
@@ -28,7 +29,7 @@ export default function FamilyAccessLogScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t('family.accessLogTitle') }} />
+      <ScreenHeader title={t('family.accessLogTitle')} fallback="/family" />
       <ScrollView
         style={[styles.root, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.content}
@@ -59,8 +60,11 @@ export default function FamilyAccessLogScreen() {
                   {entry.delegateDisplayName ?? entry.relationshipCode ?? ''}
                 </Text>
                 <Text style={[styles.rowSub, { color: theme.colors.textMuted }]}>
-                  {entry.action}{' '}
-                  {t('family.accessLogUnder').replace('{{permission}}', entry.permission)}
+                  {t(accessActionKey(entry.action))}{' '}
+                  {t('family.accessLogUnder').replace(
+                    '{{permission}}',
+                    t(accessPermissionKey(entry.permission)),
+                  )}
                 </Text>
                 <Text style={[styles.rowTime, { color: theme.colors.textSubtle }]}>
                   {new Date(entry.createdAt).toLocaleString()}

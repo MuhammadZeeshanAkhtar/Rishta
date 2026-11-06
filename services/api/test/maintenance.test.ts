@@ -57,6 +57,20 @@ beforeAll(async () => {
        ($1::uuid, $2::uuid, now() - interval '1 hour')`,
     [otherId, userId],
   );
+  // One suspension past its end date. Review N1.
+  const suspended = await pg.query<{ id: string }>(
+    `insert into public.users (display_name, gender, date_of_birth, country_code, status)
+     values ('Suspended', 'female', date '1995-06-15', 'pk', 'suspended') returning id`,
+  );
+  const staff = await pg.query<{ id: string }>(
+    `insert into public.admin_users (user_id) values ($1::uuid) returning id`,
+    [otherId],
+  );
+  await pg.query(
+    `insert into public.moderation_actions (subject_user_id, actor_admin_id, action, reason, expires_at, previous_status)
+     values ($1::uuid, $2::uuid, 'suspend', 'a week', now() - interval '1 hour', 'active')`,
+    [suspended.rows[0]!.id, staff.rows[0]!.id],
+  );
   await pg.query(
     `insert into public.family_invitations
        (owner_user_id, invitee_contact, relationship_code, tier, token_hash, expires_at, created_at) values
@@ -75,6 +89,8 @@ const EXPECTED = {
   'security events older than 12 months': 1,
   'profile views older than 12 months': 1,
   'family invitations past their expiry': 1,
+  'suspensions past their end date': 1,
+  'staff access log older than 24 months': 0,
   'deletion requests past their grace period (report only)': 0,
   'abandoned photo uploads (report only)': 0,
 };

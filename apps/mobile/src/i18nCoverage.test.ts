@@ -29,6 +29,9 @@ const FILES = [
   'app/(app)/dob-correction.tsx',
   'src/photos/ProfilePhotoGallery.tsx',
   'src/account/dobCorrection.ts',
+  'src/session/restrictedContent.ts',
+  'src/account/AccountDeletionView.tsx',
+  'app/delete-account.tsx',
   ...walk('app/admin'),
   ...walk('src/admin'),
 ];

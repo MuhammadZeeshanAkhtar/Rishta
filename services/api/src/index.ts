@@ -17,6 +17,11 @@ async function main(): Promise<void> {
 
   const db = createPgDb({
     connectionString: config.DATABASE_URL,
+    tls: {
+      NODE_ENV: config.NODE_ENV,
+      DATABASE_SSL_MODE: config.DATABASE_SSL_MODE,
+      DATABASE_SSL_CA: config.DATABASE_SSL_CA,
+    },
     onServiceUse: (use: ServiceRoleUse) => {
       // Every RLS bypass can leave a trace: "the server read this because
       // account.bootstrap" is an audit trail; "the server read this" is not.

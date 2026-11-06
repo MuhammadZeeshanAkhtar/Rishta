@@ -15,9 +15,17 @@ import type { SupportedStorage } from '@nikahmate/api-client';
  * "signed out again every launch": a bug that is invisible in development and
  * infuriating in the field. So every value is split across numbered keys.
  *
- * Web falls back to localStorage, which is correct for the future website
- * (cookie-based SSR sessions, README §19) and fine for the dev web preview.
+ * WEB (Stage 2). Today the web build is the staff console and a preview. Browser
+ * storage can be read by any script on the page, which the Content-Security-Policy
+ * guards against, but `localStorage` also keeps the token on disk indefinitely, on
+ * machines that may be shared. So the session token lives in `sessionStorage`: one
+ * tab, gone when it closes. The cost is signing in again per tab. The PKCE verifier
+ * stays in `localStorage`, because an email link opens a new tab and must find it,
+ * and it is useless without the code in that link. The website planned in README §19
+ * should use cookie-based sessions instead, which script cannot read at all.
  */
+
+export const WEB_SESSION_KEY_SUFFIXES_KEPT_ACROSS_TABS = ['-code-verifier'] as const;
 
 /** Under Android's 2048-byte ceiling with room for key overhead and UTF-8. */
 const CHUNK_SIZE = 1800;
@@ -28,15 +36,24 @@ const chunkKey = (key: string, index: number): string => `${key}__${index}`;
 
 const isWeb = Platform.OS === 'web';
 
-const webStorage = (): Storage | null => {
+const browserStorage = (name: 'localStorage' | 'sessionStorage'): Storage | null => {
   try {
-    return typeof globalThis !== 'undefined' && globalThis.localStorage
-      ? globalThis.localStorage
-      : null;
+    return typeof globalThis !== 'undefined' && globalThis[name] ? globalThis[name] : null;
   } catch {
     // Private browsing and blocked site data both throw on access.
     return null;
   }
+};
+
+const keptAcrossTabs = (key: string): boolean =>
+  WEB_SESSION_KEY_SUFFIXES_KEPT_ACROSS_TABS.some((suffix) => key.endsWith(suffix));
+
+const webStorage = (key: string): Storage | null =>
+  browserStorage(keptAcrossTabs(key) ? 'localStorage' : 'sessionStorage');
+
+/** Removes a token an older build left in `localStorage`, rather than reusing it. */
+const forgetOldWebToken = (key: string): void => {
+  if (!keptAcrossTabs(key)) browserStorage('localStorage')?.removeItem(key);
 };
 
 async function removeChunks(key: string): Promise<void> {
@@ -54,7 +71,10 @@ async function removeChunks(key: string): Promise<void> {
 export const secureStorage: SupportedStorage = {
   async getItem(key: string): Promise<string | null> {
     try {
-      if (isWeb) return webStorage()?.getItem(key) ?? null;
+      if (isWeb) {
+        forgetOldWebToken(key);
+        return webStorage(key)?.getItem(key) ?? null;
+      }
 
       const stored = await SecureStore.getItemAsync(countKey(key));
       if (!stored) {
@@ -85,7 +105,7 @@ export const secureStorage: SupportedStorage = {
   async setItem(key: string, value: string): Promise<void> {
     try {
       if (isWeb) {
-        webStorage()?.setItem(key, value);
+        webStorage(key)?.setItem(key, value);
         return;
       }
 
@@ -113,7 +133,8 @@ export const secureStorage: SupportedStorage = {
   async removeItem(key: string): Promise<void> {
     try {
       if (isWeb) {
-        webStorage()?.removeItem(key);
+        forgetOldWebToken(key);
+        webStorage(key)?.removeItem(key);
         return;
       }
       await removeChunks(key);

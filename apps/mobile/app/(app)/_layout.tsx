@@ -1,5 +1,6 @@
 import { Redirect, Stack } from 'expo-router';
 import { useSession } from '../../src/session/SessionProvider';
+import { redirectFor } from '../../src/session/sessionState';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
@@ -18,11 +19,8 @@ export default function AppLayout() {
   const theme = useTheme();
 
   if (state === 'loading') return null;
-  if (state === 'signed_out' || state === 'misconfigured') {
-    return <Redirect href="/(auth)/welcome" />;
-  }
-  if (state === 'unverified') return <Redirect href="/(auth)/verify-email" />;
-  if (state === 'onboarding') return <Redirect href="/(onboarding)/basics" />;
+  const redirect = redirectFor('app', state);
+  if (redirect) return <Redirect href={redirect as never} />;
 
   return (
     <Stack

@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { unauthenticated } from '../errors';
+import { isAccountUsable } from '@nikahmate/domain';
+import type { Db } from '../db/types';
+import { accountRestricted, unauthenticated } from '../errors';
 import { bearerFrom, type AuthContext, type TokenVerifier } from './verify';
 
 declare module 'fastify' {
@@ -9,7 +11,17 @@ declare module 'fastify' {
     auth?: AuthContext;
   }
   interface FastifyInstance {
+    /**
+     * A verified token AND an account allowed to use the product (review N1).
+     * The default for every protected route: a new route is closed to a
+     * restricted account until someone deliberately opens it.
+     */
     requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /**
+     * A verified token only. For the short list of routes a restricted account
+     * still needs: exactly RESTRICTED_ACCOUNT_ROUTES below, enforced by a test.
+     */
+    requireIdentity: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     /**
      * The VERIFIED subject of this request's bearer token, or null.
      *
@@ -24,7 +36,33 @@ declare module 'fastify' {
 
 export interface AuthPluginOptions {
   verifier: TokenVerifier;
+  db: Db;
 }
+
+/**
+ * Every route a restricted account may still reach (review N1), and why. Each
+ * handler keeps its own rules: being on this list only means the request gets as
+ * far as them. Anything else answers 403 `account_restricted`.
+ *
+ * Sign-out itself is a Supabase Auth call and never reaches this API. Moderator
+ * notes, appeals and data export are not here: no such member route exists.
+ */
+export const RESTRICTED_ACCOUNT_ROUTES = [
+  // Learning where the account stands. The app explains from this answer.
+  'POST /account/bootstrap',
+  'GET /me',
+  // Lifecycle. Each handler allows only its one transition: only a deactivated
+  // account reactivates, only an active one deactivates (review-phase4 tests), so
+  // a suspended or banned member cannot pass through these to lift a restriction.
+  'POST /me/deactivate',
+  'POST /me/reactivate',
+  // Existing rule R4: a restricted member may ask for erasure, and the request is
+  // held. Cancelling returns to the exact previous status.
+  'POST /me/delete',
+  'DELETE /me/delete',
+  // Part of signing out: stops pushes reaching a device no longer in use.
+  'DELETE /me/push-tokens/:deviceId',
+] as const;
 
 /** One verification per request, whichever caller asks first. */
 type Verification = { ok: true; context: AuthContext } | { ok: false; error: unknown };
@@ -54,6 +92,13 @@ type Verification = { ok: true; context: AuthContext } | { ok: false; error: unk
  * Verified, not decoded. Keying on an unverified `sub` would let anyone spread
  * requests across buckets by forging subjects; a forged token fails here and
  * falls back to its IP.
+ *
+ * REVIEW N1. Nothing checked `users.status` on a request, so a suspended, banned,
+ * deactivated or pending-deletion member could keep messaging, sending interests
+ * and reading feeds. The check sits in `requireAuth` itself, so every route that
+ * was already protected is covered, and the exceptions must be asked for by name.
+ * It is read fresh on every request: a ban takes effect on the next call, not
+ * when a cache or token expires.
  */
 const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, options) => {
   fastify.decorateRequest('auth', undefined);
@@ -82,7 +127,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, option
     return result?.ok ? result.context.authUserId : null;
   });
 
-  fastify.decorate('requireAuth', async (request: FastifyRequest, _reply: FastifyReply) => {
+  const authenticate = async (request: FastifyRequest): Promise<AuthContext> => {
     const result = await verifyOnce(request);
     if (!result) {
       throw unauthenticated('Authorization header missing');
@@ -91,6 +136,57 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, option
     // one still say different things to the client.
     if (!result.ok) throw result.error;
     request.auth = result.context;
+    return result.context;
+  };
+
+  const readAccount = async (authUserId: string) => {
+    const rows = await options.db.asUser(authUserId, (session) =>
+      session.query<{ user_id: string | null; status: string | null }>(
+        `select app.current_user_id() as user_id,
+                (select u.status from public.users u
+                  where u.id = app.current_user_id()) as status`,
+      ),
+    );
+    return rows[0] ?? { user_id: null, status: null };
+  };
+
+  /**
+   * Whether this caller's account may use the product. True when there is no
+   * account yet: bootstrap creates it, and every other route answers 404 for it.
+   *
+   * A suspension whose end date has passed ends here, before the answer, so the
+   * member is not locked out until a maintenance run happens to come along. If
+   * lifting fails the account stays restricted: an error must never let someone
+   * through, and it must not turn a refusal into a 500 either.
+   */
+  const accountMayAct = async (request: FastifyRequest, authUserId: string): Promise<boolean> => {
+    let account = await readAccount(authUserId);
+    if (!account.user_id) return true;
+    if (account.status === 'suspended') {
+      const userId = account.user_id;
+      try {
+        await options.db.asService('account.lift_expired_suspension', (session) =>
+          session.query(`select app.lift_expired_suspensions($1::uuid)`, [userId]),
+        );
+        account = await readAccount(authUserId);
+      } catch (error) {
+        request.log.error({ err: error }, 'could not check for an expired suspension');
+      }
+    }
+    // A link whose user row is hidden is a soft-deleted account: status is null.
+    return account.status !== null && isAccountUsable(account.status);
+  };
+
+  fastify.decorate('requireAuth', async (request: FastifyRequest, _reply: FastifyReply) => {
+    const auth = await authenticate(request);
+    if (!(await accountMayAct(request, auth.authUserId))) throw accountRestricted();
+  });
+
+  fastify.decorate('requireIdentity', async (request: FastifyRequest, _reply: FastifyReply) => {
+    const auth = await authenticate(request);
+    // The answer does not matter here, but an expired suspension must still end:
+    // these are the routes the app calls to find out where it stands.
+    await accountMayAct(request, auth.authUserId);
   });
 };
 

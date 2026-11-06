@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
+import { ScreenHeader } from '../../../src/components/ScreenHeader';
 import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
-import { Stack, router } from 'expo-router';
+import { router } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { FAMILY_JOIN_PATH, RELATIONSHIP_CODES, familyInviteQueryParams } from '@nikahmate/domain';
@@ -94,7 +95,7 @@ export default function InviteFamilyScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t('family.inviteHeading') }} />
+      <ScreenHeader title={t('family.inviteHeading')} fallback="/family" />
       <ScrollView
         style={[styles.root, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.content}

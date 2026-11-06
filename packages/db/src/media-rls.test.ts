@@ -48,7 +48,7 @@ describe('photos', () => {
   it('defaults to private — A1', async () => {
     // Uploading a photo and doing nothing else must not publish it.
     const rows = await db.as<{ visibility: string; moderation_status: string }>(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select visibility, moderation_status from public.photos`,
     );
@@ -57,12 +57,12 @@ describe('photos', () => {
   });
 
   it('lets the owner read their own photos', async () => {
-    const rows = await db.as('authenticated', alice.authUserId, `select id from public.photos`);
+    const rows = await db.as('api_member', alice.authUserId, `select id from public.photos`);
     expect(rows).toHaveLength(1);
   });
 
   it('does NOT let another member read them', async () => {
-    const rows = await db.as('authenticated', bilal.authUserId, `select id from public.photos`);
+    const rows = await db.as('api_member', bilal.authUserId, `select id from public.photos`);
     expect(rows).toHaveLength(0);
   });
 
@@ -77,7 +77,7 @@ describe('photos', () => {
     // would make their photo visible without it ever being checked.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.photos set moderation_status = 'approved'`,
       ),
@@ -88,13 +88,13 @@ describe('photos', () => {
     // The path points at the bytes. Rewriting it would let someone attach a
     // row they control to an object they do not own.
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.photos set storage_path = 'x/y.jpg'`),
+      db.as('api_member', alice.authUserId, `update public.photos set storage_path = 'x/y.jpg'`),
     ).rejects.toThrow(/permission denied/);
   });
 
   it('does NOT let a member move a photo to another account', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.photos set user_id = $1`, [
+      db.as('api_member', alice.authUserId, `update public.photos set user_id = $1`, [
         bilal.userId,
       ]),
     ).rejects.toThrow(/permission denied/);
@@ -103,7 +103,7 @@ describe('photos', () => {
   it('does NOT let a member insert a photo for someone else', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.photos (user_id, storage_path, content_type)
          values ($1::uuid, $1::text || '/x/o.jpg', 'image/jpeg')`,
@@ -170,7 +170,7 @@ describe('photos', () => {
       [alice.userId],
     );
     const rows = await db.as<{ id: string }>(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select id from public.photos where id = $1`,
       [extra[0]!.id],
@@ -182,7 +182,7 @@ describe('photos', () => {
 describe('photo_variants', () => {
   it('lets the owner read variants of their own photo', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select variant from public.photo_variants`,
     );
@@ -191,7 +191,7 @@ describe('photo_variants', () => {
 
   it('does NOT expose another member variants', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select variant from public.photo_variants`,
     );
@@ -203,7 +203,7 @@ describe('photo_variants', () => {
     // `blurred` variant at the unblurred original and defeat the tier.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.photo_variants (photo_id, variant, storage_path)
          values ($1, 'full', 'anything.jpg')`,
@@ -215,7 +215,7 @@ describe('photo_variants', () => {
   it('does NOT let a member repoint an existing variant', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.photo_variants set storage_path = 'original.jpg'`,
       ),
@@ -254,11 +254,7 @@ describe('media_moderation_results — restricted', () => {
 
   it('is unreachable by the member whose photo it describes', async () => {
     await expect(
-      db.as(
-        'authenticated',
-        alice.authUserId,
-        `select verdict from public.media_moderation_results`,
-      ),
+      db.as('api_member', alice.authUserId, `select verdict from public.media_moderation_results`),
     ).rejects.toThrow(/permission denied/);
   });
 

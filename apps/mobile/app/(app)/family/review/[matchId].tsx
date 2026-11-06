@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ScreenHeader } from '../../../../src/components/ScreenHeader';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { ReviewPacket } from '@nikahmate/domain';
 import { Banner } from '../../../../src/components/Banner';
@@ -100,7 +101,7 @@ export default function ReviewPacketScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t('family.packetTitle') }} />
+      <ScreenHeader title={t('family.packetTitle')} fallback="/family" />
       <ScrollView
         style={[styles.root, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.content}
@@ -123,7 +124,9 @@ export default function ReviewPacketScreen() {
               </Text>
 
               <View style={styles.chips}>
-                {c.countryCode ? <InfoChip icon="location-outline" label={c.countryCode} /> : null}
+                {c.countryCode ? (
+                  <InfoChip icon="location-outline" label={c.countryCode.toUpperCase()} />
+                ) : null}
                 {c.maritalStatusCode ? (
                   <InfoChip
                     icon="heart-outline"

@@ -208,10 +208,10 @@ migrations, and `docs/SUPABASE_SETUP.md` defers both projects to Phase 13.
 **Correction (2026-11-02).** A production environment does exist outside the
 repository: the manager's report names a manually deployed web app, API and
 Supabase project (the live deployment and the production Supabase project). That
-project is not the one in the local `.env`. It runs the reviewed commit `6c67581`;
-the branch `review/phases-2-5-handover` is neither merged nor deployed, and none of 0026–0031
-is applied to it. It needs the same release order,
-through the approved process below once one exists, never from a laptop.
+project is not the one in the local `.env`. When this was written it ran the reviewed commit
+`6c67581`. `main` has since moved to `75d435b`, and what the host now runs, and which migrations
+its database holds, have not been checked. It needs the release order in
+`docs/PRODUCTION_SECURITY.md`, through an approved process once one exists, never from a laptop.
 
 - **Do not** apply 0026 or 0027 to staging or production from a local developer
   checkout, and do not put staging or production credentials in a local
@@ -725,6 +725,156 @@ breakages fails its check.
 | `photo_requests`, `photo_grants` | Keep; stop the routes instead | Yes if dropped (who shared with whom) | A dropped grant table silently un-shares; harmless but surprising. |
 
 ---
+
+## 0032 — `20261106000032_review_post_merge_security.sql` (post-merge security audit)
+
+**Not applied anywhere.** Findings N2/B7, N1 and N4 from the post-merge audit.
+
+### What it changes
+
+- **N2/B7.** `profiles_select_visible`, `photos_select_visible` and
+  `photo_variants_select_visible` are replaced by owner-only policies. A member's
+  direct read (Data API, GraphQL, or any future exposure) returns only their own
+  rows, whatever the Dashboard says. The API's own cross-member reads already ran
+  under registered service-role uses, except photo access, which this change moves
+  to `photo.read_access`.
+- **N1.** `app.current_account_can_act()`, and a `*_refuse_restricted_account`
+  RESTRICTIVE policy on every member-reachable table. Exempt for read only, because
+  `GET /me` needs them: `users`, `user_settings`, `verification_status`,
+  `family_relationships`, `family_permissions`. `users` and `user_settings` still
+  refuse writes. A matching restrictive policy on the `photos` bucket.
+- **N1, timed suspensions.** `moderation_actions.previous_status`, a nullable
+  `actor_admin_id` allowed to be null only for the system's own expiry record, and
+  `app.lift_expired_suspensions()`.
+
+### Behaviour changes a caller could notice
+
+- Every protected API route answers 403 `account_restricted` to a suspended, banned,
+  deactivated or pending-deletion account. The exceptions are
+  `RESTRICTED_ACCOUNT_ROUTES` in `services/api/src/auth/plugin.ts`.
+- A suspension with an end date now ends on that date. Without a date it never ends
+  by itself.
+- `POST /admin/users/:id/actions` refuses an end date on anything but a suspension,
+  an end date in the past, and suspending a banned account (409).
+- Staff are refused (403 `staff_protected`) on their own account and content, and on
+  anyone the hierarchy places above them. See `routes/admin.ts`.
+
+### Safety for existing data
+
+No row is changed. Suspensions recorded before 0032 keep their stored `expires_at`,
+so any such date already past **will take effect** at the member's next request or
+the next maintenance run. Check them before applying:
+
+```sql
+select subject_user_id, expires_at, reason from public.moderation_actions
+ where action = 'suspend' and expires_at <= now();
+```
+
+### Release order and compatibility
+
+Apply with the other unapplied migrations: **0026 → Phase 1 API → 0027 → 0028 + 0029
+
+- 0030 + 0031 + 0032 → this API.**
+
+* This API on a database without 0032: account actions fail, because they write
+  `previous_status`. So 0032 goes first.
+* The previous API on a database with 0032: other members' photo galleries are empty
+  and photo requests say there is nothing to request, until the new API is live. No
+  private data is exposed in that window. Measured by running the previous API's
+  tests against 0032: every other route behaved as before.
+
+### Required Dashboard action (not performed)
+
+See `docs/PRODUCTION_SECURITY.md`. An earlier version of this section said Realtime was
+unused. That was wrong: chat uses it for live delivery (`subscribeToMessages`), which is why
+0034 keeps exactly the `messages` access Realtime needs.
+
+### What `verify:db` checks
+
+`scripts/storage-policy-checks.ts` replaces the old four-name comparison, which failed
+on every correctly migrated project: each `photos_bucket_*` policy's command, role,
+permissive or restrictive mode and clause, and any other policy that can reach the
+bucket. `scripts/account-security-checks.ts` checks the three items above. `verify:db`
+still has not been run against a hosted project.
+
+### Defaults that need a company decision
+
+These were chosen as the most restrictive reading of existing rules, and are easy to
+change. None of them is a policy the company has stated.
+
+- **Staff ranks.** `admin` outranks `moderator` and `support`, which rank equally. On
+  account actions the target must rank strictly below the actor, so an admin cannot
+  act on another admin, and that case needs an operator with the service role.
+- **Honouring end dates.** A suspension with an end date ends on that date. The field,
+  and the admin screen's end-date input, already existed; only the effect is new.
+- **Clearing a ban.** A moderator can still clear a ban an admin imposed.
+- **What a restricted member is told.** The status only. No reason, end date, appeal
+  route or support contact appears, because none has been decided.
+- **What a restricted member can reach.** Nothing but `RESTRICTED_ACCOUNT_ROUTES`, so
+  also not their own messages, notifications or profile.
+- **A family delegate.** The check applies to the caller, so a delegate can still act
+  on a suspended owner's review, as far as those routes otherwise allow.
+
+### Rollback implications (0032)
+
+Recreating the 0012 policies **reopens N2**. Dropping the restrictive policies leaves
+only the API gate in front of restricted accounts. Keep the `moderation_actions` rows
+with a null actor: they are the record of a suspension ending.
+
+## 0033 and 0034 — Stage 2: a role only the API can use
+
+`20261106000033_review_stage2_api_role.sql` and `20261106000034_review_stage2_cutover.sql`.
+**Not applied anywhere.**
+
+### What they change
+
+- **B7, root cause.** The API and the Data API both ran as `authenticated`, so every write the
+  API needs was open to anyone with a member JWT. 0033 creates `api_member`, which inherits
+  `authenticated` (so every RLS policy and function grant applies) and copies its table and
+  column privileges. `authenticator` is not a member, so a forged `role` claim cannot reach it.
+  0034 then revokes everything from `authenticated`, except `id`, `conversation_id` and
+  `created_at` on `messages`, which Realtime needs.
+- **Storage writes follow moderation.** A member can write an object only for their own photo
+  while it is pending and not yet finalized. They could previously replace an approved photo, or
+  the blurred copy no moderator sees, directly through the Storage API.
+- **N3.** `photos.original_needs_strip` marks every photo present when 0033 runs, and
+  `app.photo_variant_readable` refuses another member's `full` read while it is set.
+  `primary_before_requeue` keeps a main photo's place through re-review. No photo's visibility
+  changes. See `docs/LEGACY_CONTENT_RUNBOOK.md`.
+- **Staff photo access.** `pii_access_log` (ERD, 24-month retention) and, from 0034,
+  `photos_bucket_select_moderator` requires a fresh row there. The API writes those only for
+  photos in the moderation queue.
+- **Deletion from onboarding.** `users_identity_complete` also allows `pending_deletion`, because
+  asking before filling in a profile failed with a 400.
+
+### Release order and compatibility
+
+**0026 to 0033 in one run → current API → 0034.** `migrate --through=<version>` stops at a given
+migration. A fresh project can apply everything, then start the API. This replaces the older plan
+of deploying an API between 0026 and 0027: the API that exists now needs 0033, so that is no
+longer possible. 0033 lends back the column 0027 revokes, so messages keep sending on the live API
+(`6c67581`) from the end of this run until 0034. Only the seconds between 0027 and 0033 are affected.
+
+| Combination                  | Result                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| Previous API, through 0033   | Works: 555 of 561 of its tests. See docs/PRODUCTION_SECURITY.md for the 6 |
+| Current API, through 0033    | Works. Tested                                                             |
+| Previous client, current API | Works: 68 of 68 checks of the old client's own code                       |
+| Current API, before 0033     | **Every member request fails**: `api_member` does not exist               |
+| Previous API, after 0034     | **Every member request fails**: `authenticated` holds nothing             |
+
+If the API connects as a different database user from the one that ran the migration,
+`grant api_member to <user>` is needed too. `verify:db` checks it can `SET ROLE api_member`.
+
+### Hosted verification required
+
+Creating a role and granting it to the migration user, Realtime with the reduced `messages`
+access, and the Storage policies have only been tested against a local stand-in.
+
+### Rollback implications
+
+Rolling back 0034 reopens direct Data API access. Rolling back 0033 needs the previous API
+restored first. Keep `pii_access_log`: it is the record of who viewed what.
 
 ## Environment changes
 

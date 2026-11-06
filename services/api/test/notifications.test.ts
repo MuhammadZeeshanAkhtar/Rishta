@@ -573,7 +573,8 @@ describe('preferences and push tokens (built in review Phase 4, L10)', () => {
   // 0030 added them; what must hold is who may reach them.
   it('keeps push tokens out of every member role', async () => {
     const rows = await harness.raw.query<{ can: boolean }>(
-      `select has_table_privilege('authenticated', 'public.push_tokens', 'SELECT')
+      `select has_table_privilege('api_member', 'public.push_tokens', 'SELECT')
+           or has_table_privilege('authenticated', 'public.push_tokens', 'SELECT')
            or has_table_privilege('anon', 'public.push_tokens', 'SELECT') as can`,
     );
     expect(rows.rows[0]!.can).toBe(false);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import {
   MAX_PHOTOS_PER_USER,
@@ -13,6 +13,7 @@ import { Button } from '../components/Button';
 import { useLocale } from '../i18n/LocaleProvider';
 import { useTheme } from '../theme/ThemeProvider';
 import { getClient } from '../api/client';
+import { confirmAction } from '../lib/confirm';
 import { describeError } from '../lib/errors';
 import { MIN_TOUCH_TARGET, radius, spacing, typography } from '../theme/tokens';
 
@@ -121,14 +122,13 @@ export function PhotoManager() {
   };
 
   const confirmDelete = (photo: OwnPhoto) => {
-    Alert.alert(t('photos.deleteTitle'), t('photos.deleteBody'), [
-      { text: t('common.cancel'), style: 'cancel' },
-      {
-        text: t('photos.delete'),
-        style: 'destructive',
-        onPress: () => void act(() => getClient().deletePhoto(photo.id)),
-      },
-    ]);
+    confirmAction({
+      title: t('photos.deleteTitle'),
+      message: t('photos.deleteBody'),
+      confirmLabel: t('photos.delete'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => void act(() => getClient().deletePhoto(photo.id)),
+    });
   };
 
   const move = (index: number, delta: number) => {

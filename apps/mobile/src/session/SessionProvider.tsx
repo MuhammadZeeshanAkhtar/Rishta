@@ -9,9 +9,12 @@ import React, {
 } from 'react';
 import * as Localization from 'expo-localization';
 import { isNikahMateError, type AuthSession, type NikahMateError } from '@nikahmate/api-client';
-import { DEFAULT_LOCALE, type Me } from '@nikahmate/domain';
+import { DEFAULT_LOCALE, type DeletionRequest, type Me } from '@nikahmate/domain';
 import { getClient, MissingConfigError } from '../api/client';
 import { forgetCards } from '../discovery/cardCache';
+import { sessionStateFor, type SessionState } from './sessionState';
+
+export type { SessionState } from './sessionState';
 
 /**
  * Session state, and the routing gates that depend on it.
@@ -19,16 +22,9 @@ import { forgetCards } from '../discovery/cardCache';
  * One source of truth for "who is signed in", derived from two facts that can
  * disagree: Supabase holds the auth session, our API holds the account. A
  * verified auth account with no profile is NOT a usable member (README §9.1),
- * so the gate is computed from both rather than from the token alone.
- *
- *   signed_out     no session
- *   unverified     session, email not confirmed
- *   onboarding     verified, profile incomplete
- *   ready          verified, profile complete
+ * so the gate is computed from both rather than from the token alone. The states
+ * and the routing they imply are in `sessionState.ts`.
  */
-
-export type SessionState =
-  'loading' | 'misconfigured' | 'signed_out' | 'unverified' | 'onboarding' | 'ready';
 
 interface SessionContextValue {
   state: SessionState;
@@ -52,18 +48,21 @@ interface SessionContextValue {
   completeAuthLink: (url: string) => Promise<string | null>;
   /** Sets a new password for the current (recovery) session. */
   updatePassword: (password: string) => Promise<void>;
+  /** Me tab: hides the account, keeping everything. The gates then explain it. */
+  deactivate: () => Promise<void>;
+  /** Restricted screen: undoes the member's own deactivation (review N7). */
+  reactivate: () => Promise<void>;
+  /** Restricted screen: cancels the member's own deletion request (review N7). */
+  cancelDeletion: () => Promise<void>;
+  /** Asks for this account to be deleted. The gates then show the pending state. */
+  requestDeletion: () => Promise<void>;
+  /** The open request, when it was made in this session. No route reads one back. */
+  deletionRequest: DeletionRequest | null;
   /** The email awaiting verification, so the verify screen can name it. */
   pendingEmail: string | null;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
-
-function stateFor(session: AuthSession | null, me: Me | null): SessionState {
-  if (!session) return 'signed_out';
-  if (!session.user.emailVerified) return 'unverified';
-  if (!me) return 'onboarding';
-  return me.profileCompleted && me.status === 'active' ? 'ready' : 'onboarding';
-}
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -71,6 +70,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<SessionState>('loading');
   const [configError, setConfigError] = useState<string[] | null>(null);
   const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [deletionRequest, setDeletionRequest] = useState<DeletionRequest | null>(null);
 
   // Guards against a late response from a previous account overwriting the
   // current one — switching accounts quickly is exactly when that bites.
@@ -109,7 +109,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       });
       if (generation.current !== mine) return;
       setMe(account);
-      setState(stateFor(next, account));
+      setState(sessionStateFor(next, account));
     } catch (error) {
       if (generation.current !== mine) return;
       // The account could not be loaded. Treat it as onboarding rather than
@@ -124,6 +124,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setState('onboarding');
     }
   }, []);
+
+  // The latest session, for the listener below, which outlives any one render.
+  const currentSession = useRef<AuthSession | null>(null);
+  currentSession.current = session;
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +145,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         setState('misconfigured');
         return;
       }
+
+      // Restricted while using the app (review N7): re-read the account, which
+      // moves the gates to the explanation. Bootstrap is not refused for a
+      // restricted account, so this cannot loop.
+      client.http.onAccountRestricted = () => {
+        void loadAccount(currentSession.current);
+      };
 
       try {
         const existing = await client.auth.getSession();
@@ -167,6 +178,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
       unsubscribe?.();
+      try {
+        getClient().http.onAccountRestricted = undefined;
+      } catch {
+        // No client was ever configured, so there is nothing to detach.
+      }
     };
   }, [loadAccount]);
 
@@ -191,6 +207,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setMe(null);
     setPendingEmail(null);
+    setDeletionRequest(null);
     // Other people's cards were shown to THIS member under the privacy rules
     // that applied to them. They must not survive into whoever signs in next
     // on this device.
@@ -244,6 +261,33 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     );
   }, [loadAccount, signOut]);
 
+  const deactivate = useCallback(async () => {
+    await getClient().deactivateAccount();
+    await loadAccount(session);
+  }, [loadAccount, session]);
+
+  const reactivate = useCallback(async () => {
+    await getClient().reactivateAccount();
+    await loadAccount(session);
+  }, [loadAccount, session]);
+
+  const cancelDeletion = useCallback(async () => {
+    await getClient().cancelAccountDeletion();
+    setDeletionRequest(null);
+    await loadAccount(session);
+  }, [loadAccount, session]);
+
+  const requestDeletion = useCallback(async () => {
+    try {
+      setDeletionRequest(await getClient().requestAccountDeletion());
+    } catch (error) {
+      // Already open, from another device or before a restart. The person is where
+      // they meant to be, so show them that rather than an error.
+      if (!isNikahMateError(error) || error.kind !== 'conflict') throw error;
+    }
+    await loadAccount(session);
+  }, [loadAccount, session]);
+
   const value = useMemo<SessionContextValue>(
     () => ({
       state,
@@ -258,6 +302,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       refresh,
       completeAuthLink,
       updatePassword,
+      deactivate,
+      reactivate,
+      cancelDeletion,
+      requestDeletion,
+      deletionRequest,
       pendingEmail: pendingEmail ?? session?.user.email ?? null,
     }),
     [
@@ -273,6 +322,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       refresh,
       completeAuthLink,
       updatePassword,
+      deactivate,
+      reactivate,
+      cancelDeletion,
+      requestDeletion,
+      deletionRequest,
       pendingEmail,
     ],
   );

@@ -40,7 +40,7 @@ afterAll(async () => {
 describe('reads', () => {
   it('lets a member read their own entitlements', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select entitlement_key, value from public.user_entitlements`,
     );
@@ -52,7 +52,7 @@ describe('reads', () => {
     // Bilal asking for Alice's row by id gets nothing, rather than an error
     // that would confirm the row exists.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select entitlement_key from public.user_entitlements where user_id = $1::uuid`,
       [alice.userId],
@@ -73,7 +73,7 @@ describe('a member cannot elevate themselves', () => {
     // The whole reason this table is service-role-write.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.user_entitlements (user_id, entitlement_key, value)
          values ($1::uuid, 'who_viewed_me', 'true'::jsonb)`,
@@ -85,7 +85,7 @@ describe('a member cannot elevate themselves', () => {
   it('cannot raise the value of an entitlement they already hold', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.user_entitlements set value = '999'::jsonb where user_id = $1::uuid`,
         [alice.userId],
@@ -96,7 +96,7 @@ describe('a member cannot elevate themselves', () => {
   it('cannot delete an entitlement to escape a restriction', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `delete from public.user_entitlements where user_id = $1::uuid`,
         [alice.userId],
@@ -107,7 +107,7 @@ describe('a member cannot elevate themselves', () => {
   it('cannot write an entitlement onto another member', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.user_entitlements (user_id, entitlement_key, value)
          values ($1::uuid, 'profile_boost', 'true'::jsonb)`,
@@ -139,7 +139,7 @@ describe('the service role manages entitlements', () => {
       [bilal.userId],
     );
     const left = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select entitlement_key from public.user_entitlements`,
     );

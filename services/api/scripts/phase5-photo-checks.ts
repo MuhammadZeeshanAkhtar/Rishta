@@ -1,4 +1,10 @@
-import { normalise, type Queryable, type SecurityCheck } from './phase1-security-checks';
+import {
+  apiMemberRole,
+  memberRoles,
+  normalise,
+  type Queryable,
+  type SecurityCheck,
+} from './phase1-security-checks';
 
 /**
  * The Phase 5 photo-access configuration (code review, 2026-11-05; migration
@@ -13,7 +19,6 @@ import { normalise, type Queryable, type SecurityCheck } from './phase1-security
  *   L3  the Storage viewer policy is present and uses the rule (Supabase only)
  */
 
-const MEMBER_ROLES = ['anon', 'authenticated'] as const;
 const TABLES = ['photo_requests', 'photo_grants'] as const;
 const FUNCTIONS = [
   'app.has_photo_grant(uuid,uuid,uuid)',
@@ -26,6 +31,8 @@ async function checks(db: Queryable, out: SecurityCheck[]): Promise<void> {
   {
     const label = 'L3 photo_requests and photo_grants: RLS forced, members read only';
     const problems: string[] = [];
+    const roles = await memberRoles(db);
+    const apiRole = await apiMemberRole(db);
     for (const table of TABLES) {
       const { rows } = await db.query<{ rls: boolean; forced: boolean }>(
         `select c.relrowsecurity as rls, c.relforcerowsecurity as forced
@@ -41,12 +48,16 @@ async function checks(db: Queryable, out: SecurityCheck[]): Promise<void> {
       const { rows: privs } = await db.query<{ role: string; priv: string; can: boolean }>(
         `select r as role, p as priv, has_table_privilege(r, $1, p) as can
            from unnest($2::text[]) as r, unnest(array['INSERT','UPDATE','DELETE','SELECT']) as p`,
-        [`public.${table}`, MEMBER_ROLES],
+        [`public.${table}`, roles],
       );
       for (const p of privs) {
-        const allowed = p.role === 'authenticated' && p.priv === 'SELECT';
+        // `authenticated` may still hold SELECT between 0033 and 0034. The Data API
+        // checks, not this one, are what say that must end.
+        const allowed = p.priv === 'SELECT' && (p.role === apiRole || p.role === 'authenticated');
         if (p.can && !allowed) problems.push(`${p.role} holds ${p.priv} on ${table}`);
-        if (!p.can && allowed) problems.push(`authenticated cannot SELECT ${table}`);
+        if (!p.can && p.role === apiRole && p.priv === 'SELECT') {
+          problems.push(`${apiRole} cannot SELECT ${table}`);
+        }
       }
     }
     out.push(

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -10,16 +9,20 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { MAX_MESSAGE_LENGTH } from '@nikahmate/domain';
+import { MAX_MESSAGE_LENGTH, type ConversationStage } from '@nikahmate/domain';
 import { Banner } from '../../../src/components/Banner';
 import { Button } from '../../../src/components/Button';
 import { SkeletonList } from '../../../src/components/LoadingSkeleton';
+import { ScreenHeader } from '../../../src/components/ScreenHeader';
 import { StatusBadge } from '../../../src/components/StatusBadge';
+import { stageRow } from '../../../src/chat/stage';
 import { useThread } from '../../../src/chat/useChat';
 import { getClient } from '../../../src/api/client';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
+import { confirmAction } from '../../../src/lib/confirm';
+import { describeError } from '../../../src/lib/errors';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 import { iconSize, radius, spacing, typography } from '../../../src/theme/tokens';
 
@@ -64,31 +67,58 @@ export default function ChatScreen() {
     if (sent) setDraft('');
   }, [draft, send]);
 
-  const advanceStage = useCallback(async () => {
+  const [stage, setStage] = useState<ConversationStage | null>(null);
+  const [stageBusy, setStageBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const loadStage = useCallback(async () => {
     if (!conversationId) return;
     try {
-      await getClient().proposeStage(conversationId);
-      reload();
+      setStage(await getClient().getStage(conversationId));
     } catch {
-      /* The stage row re-reads on reload; a failed proposal needs no banner. */
+      // The conversation itself still works; the stage row simply is not shown.
+      setStage(null);
     }
-  }, [conversationId, reload]);
+  }, [conversationId]);
+
+  // Re-read whenever the thread is, so an answer from the other side shows up.
+  useEffect(() => {
+    void loadStage();
+  }, [loadStage, detail]);
+
+  const runStage = useCallback(
+    async (change: () => Promise<unknown>) => {
+      setStageBusy(true);
+      setActionError(null);
+      try {
+        await change();
+        reload();
+        await loadStage();
+      } catch (err) {
+        setActionError(describeError(err, t).message);
+        await loadStage();
+      } finally {
+        setStageBusy(false);
+      }
+    },
+    [loadStage, reload, t],
+  );
 
   const leave = useCallback(() => {
     if (!conversationId) return;
-    Alert.alert(t('chat.leave'), t('chat.leaveConfirm'), [
-      { text: t('common.cancel'), style: 'cancel' },
-      {
-        text: t('chat.leave'),
-        style: 'destructive',
-        onPress: () => {
-          void getClient()
-            .leaveConversation(conversationId)
-            .then(() => router.back())
-            .catch(() => undefined);
-        },
+    confirmAction({
+      title: t('chat.leave'),
+      message: t('chat.leaveConfirm'),
+      confirmLabel: t('chat.leave'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        setActionError(null);
+        void getClient()
+          .leaveConversation(conversationId)
+          .then(() => router.back())
+          .catch((err: unknown) => setActionError(describeError(err, t).message));
       },
-    ]);
+    });
   }, [conversationId, t]);
 
   // REVIEW B24. Blocking from inside the conversation. The profile screen's
@@ -98,20 +128,40 @@ export default function ChatScreen() {
   const counterpartUserId = detail?.counterpartUserId ?? null;
   const block = useCallback(() => {
     if (!counterpartUserId) return;
-    Alert.alert(t('chat.block'), t('chat.blockConfirm'), [
-      { text: t('common.cancel'), style: 'cancel' },
-      {
-        text: t('chat.block'),
-        style: 'destructive',
-        onPress: () => {
-          void getClient()
-            .blockUser(counterpartUserId)
-            .then(() => reload())
-            .catch(() => undefined);
-        },
+    confirmAction({
+      title: t('chat.block'),
+      message: t('chat.blockConfirm'),
+      confirmLabel: t('chat.block'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        setActionError(null);
+        void getClient()
+          .blockUser(counterpartUserId)
+          .then(() => reload())
+          .catch((err: unknown) => setActionError(describeError(err, t).message));
       },
-    ]);
+    });
   }, [counterpartUserId, reload, t]);
+
+  const matchId = detail?.matchId ?? null;
+  const unmatch = useCallback(() => {
+    if (!matchId) return;
+    confirmAction({
+      title: t('chat.unmatch'),
+      message: t('chat.unmatchConfirm'),
+      confirmLabel: t('chat.unmatch'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        setActionError(null);
+        void getClient()
+          .unmatch(matchId)
+          .then(() => reload())
+          .catch((err: unknown) => setActionError(describeError(err, t).message));
+      },
+    });
+  }, [matchId, reload, t]);
+
+  const row = stageRow(stage, detail?.canWrite ?? false);
 
   const closedReason = detail?.writeBlockedReason ?? null;
   const closedCopy = closedReason
@@ -120,7 +170,46 @@ export default function ChatScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: detail?.counterpartDisplayName ?? t('chat.title') }} />
+      <ScreenHeader
+        title={detail?.counterpartDisplayName ?? t('chat.title')}
+        fallback="/messages"
+        right={
+          detail ? (
+            <>
+              {detail.canWrite ? (
+                <Pressable
+                  onPress={unmatch}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('chat.unmatch')}
+                  testID="chat-unmatch"
+                >
+                  <Ionicons
+                    name="heart-dislike-outline"
+                    size={iconSize.sm}
+                    color={theme.colors.textSubtle}
+                  />
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={block}
+                accessibilityRole="button"
+                accessibilityLabel={t('chat.block')}
+                testID="chat-block"
+              >
+                <Ionicons name="ban-outline" size={iconSize.sm} color={theme.colors.textSubtle} />
+              </Pressable>
+              <Pressable
+                onPress={leave}
+                accessibilityRole="button"
+                accessibilityLabel={t('chat.leave')}
+                testID="chat-leave"
+              >
+                <Ionicons name="exit-outline" size={iconSize.sm} color={theme.colors.textSubtle} />
+              </Pressable>
+            </>
+          ) : null
+        }
+      />
       <KeyboardAvoidingView
         style={[styles.root, { backgroundColor: theme.colors.background }]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -135,24 +224,67 @@ export default function ChatScreen() {
               tone="neutral"
             />
             <View style={styles.headerActions}>
-              {detail.canWrite && detail.stage < 5 ? (
-                <Pressable onPress={() => void advanceStage()} accessibilityRole="button">
+              {row.kind === 'propose' ? (
+                <Pressable
+                  onPress={() => void runStage(() => getClient().proposeStage(detail.id))}
+                  disabled={stageBusy}
+                  accessibilityRole="button"
+                  testID="chat-stage-propose"
+                >
                   <Text style={[styles.headerLink, { color: theme.colors.brand }]}>
-                    {t('chat.stageAdvance').replace('{{stage}}', String(detail.stage + 1))}
+                    {t('chat.stageAdvance').replace('{{stage}}', String(row.toStage))}
                   </Text>
                 </Pressable>
               ) : null}
-              <Pressable
-                onPress={block}
-                accessibilityRole="button"
-                accessibilityLabel={t('chat.block')}
-                testID="chat-block"
-              >
-                <Ionicons name="ban-outline" size={iconSize.sm} color={theme.colors.textSubtle} />
-              </Pressable>
-              <Pressable onPress={leave} accessibilityRole="button" testID="chat-leave">
-                <Ionicons name="exit-outline" size={iconSize.sm} color={theme.colors.textSubtle} />
-              </Pressable>
+              {row.kind === 'waiting' ? (
+                <Text
+                  style={[styles.headerLink, { color: theme.colors.textMuted }]}
+                  testID="chat-stage-waiting"
+                >
+                  {t('chat.stageWaiting')}
+                </Text>
+              ) : null}
+              {row.kind === 'final' ? (
+                <Text style={[styles.headerLink, { color: theme.colors.textMuted }]}>
+                  {t('chat.stageFinal')}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {row.kind === 'asked' ? (
+          <View
+            style={[
+              styles.stageAsk,
+              {
+                backgroundColor: theme.colors.brandSurface,
+                borderBottomColor: theme.colors.border,
+              },
+            ]}
+            testID="chat-stage-asked"
+          >
+            <Text style={[styles.stageAskText, { color: theme.colors.text }]}>
+              {t('chat.stageAsked').replace('{{stage}}', String(row.toStage))}
+            </Text>
+            <View style={styles.stageAskActions}>
+              <Button
+                label={t('chat.stageAccept')}
+                loading={stageBusy}
+                onPress={() =>
+                  void runStage(() => getClient().respondToStage(conversationId ?? '', true))
+                }
+                testID="chat-stage-accept"
+              />
+              <Button
+                label={t('chat.stageDecline')}
+                variant="ghost"
+                disabled={stageBusy}
+                onPress={() =>
+                  void runStage(() => getClient().respondToStage(conversationId ?? '', false))
+                }
+                testID="chat-stage-decline"
+              />
             </View>
           </View>
         ) : null}
@@ -165,6 +297,7 @@ export default function ChatScreen() {
         >
           {error ? <Banner tone="error" message={t('chat.errorLoad')} /> : null}
           {sendError ? <Banner tone="error" message={t('chat.errorSend')} /> : null}
+          {actionError ? <Banner tone="error" message={actionError} /> : null}
 
           {loading ? (
             <SkeletonList />
@@ -267,6 +400,14 @@ const styles = StyleSheet.create({
   },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   headerLink: { ...typography.caption },
+  stageAsk: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  stageAskText: { ...typography.body },
+  stageAskActions: { flexDirection: 'row', gap: spacing.sm },
   thread: { flex: 1 },
   threadContent: { padding: spacing.lg, gap: spacing.sm },
   empty: { ...typography.body, textAlign: 'center', marginTop: spacing.xl },

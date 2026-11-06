@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { confirmAction } from '../../../src/lib/confirm';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -47,7 +48,7 @@ import { layout, radius, spacing, typography } from '../../../src/theme/tokens';
  */
 export default function MeScreen() {
   const { t } = useLocale();
-  const { signOut } = useSession();
+  const { signOut, deactivate } = useSession();
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -58,6 +59,19 @@ export default function MeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const confirmDeactivate = () => {
+    confirmAction({
+      title: t('account.deactivateTitle'),
+      message: t('account.deactivateBody'),
+      confirmLabel: t('account.deactivate'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        // The session gates move the person to the restricted screen once it is done.
+        void deactivate().catch((err: unknown) => setError(describeError(err, t).message));
+      },
+    });
+  };
 
   const load = useCallback(async () => {
     try {
@@ -189,6 +203,34 @@ export default function MeScreen() {
           onPress={() => router.push('/(app)/dob-correction')}
           testID="me-dob-correction"
         />
+        <ActionRow
+          icon="bookmark-outline"
+          label={t('account.savedTitle')}
+          sublabel={t('account.savedHint')}
+          onPress={() => router.push('/(app)/account/saved' as never)}
+          testID="me-saved"
+        />
+        <ActionRow
+          icon="notifications-outline"
+          label={t('account.notificationsTitle')}
+          sublabel={t('account.notificationsHint')}
+          onPress={() => router.push('/(app)/account/notification-settings' as never)}
+          testID="me-notification-settings"
+        />
+        <ActionRow
+          icon="ban-outline"
+          label={t('account.blockedTitle')}
+          sublabel={t('account.blockedHint')}
+          onPress={() => router.push('/(app)/account/blocked' as never)}
+          testID="me-blocked"
+        />
+        <ActionRow
+          icon="flag-outline"
+          label={t('account.reportsTitle')}
+          sublabel={t('account.reportsHint')}
+          onPress={() => router.push('/(app)/account/reports' as never)}
+          testID="me-reports"
+        />
       </View>
 
       {/* Separated by space and a rule rather than by colour. Signing out is
@@ -201,6 +243,20 @@ export default function MeScreen() {
           onPress={() => void signOut()}
           destructive
           testID="me-sign-out"
+        />
+        <ActionRow
+          icon="pause-circle-outline"
+          label={t('account.deactivate')}
+          sublabel={t('account.deactivateHint')}
+          onPress={confirmDeactivate}
+          testID="me-deactivate"
+        />
+        <ActionRow
+          icon="trash-outline"
+          label={t('accountDeletion.link')}
+          onPress={() => router.push('/delete-account' as never)}
+          destructive
+          testID="me-delete-account"
         />
       </View>
     </ScrollView>

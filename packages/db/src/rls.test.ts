@@ -43,7 +43,7 @@ describe('reference_items (public)', () => {
 
   it('is readable by a signed-in member', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select code from public.reference_items`,
     );
@@ -75,7 +75,7 @@ describe('reference_items (public)', () => {
   it('cannot be written by a signed-in member', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.reference_items (type, code) values ('hobby', 'hacked')`,
       ),
@@ -90,7 +90,7 @@ describe('reference_items (public)', () => {
 describe('users', () => {
   it('lets a member read their own row', async () => {
     const rows = await db.as<{ display_name: string }>(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select display_name from public.users`,
     );
@@ -100,7 +100,7 @@ describe('users', () => {
 
   it('does NOT let a member read another member', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select display_name from public.users where id = $1`,
       [alice.userId],
@@ -120,7 +120,7 @@ describe('users', () => {
     // A valid JWT whose subject has no user_auth_links row: current_user_id()
     // returns null, and `id = null` is null, which is not true.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       STRANGER_AUTH_ID,
       `select display_name from public.users`,
     );
@@ -129,7 +129,7 @@ describe('users', () => {
 
   it('lets a member update their own display name', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.users set display_name = 'Alice Updated' returning display_name`,
     );
@@ -138,7 +138,7 @@ describe('users', () => {
 
   it('does NOT let a member update another member', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `update public.users set display_name = 'Hacked' where id = $1 returning id`,
       [alice.userId],
@@ -152,7 +152,7 @@ describe('users', () => {
     // choose its own status.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.users (display_name, gender, date_of_birth, country_code)
          values ('Self Made', 'male', date '1990-01-01', 'pk')`,
@@ -164,14 +164,14 @@ describe('users', () => {
     // Deletion is a workflow with a grace period and retention holds (E1),
     // not a DELETE statement.
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.users`),
+      db.as('api_member', alice.authUserId, `delete from public.users`),
     ).rejects.toThrow();
   });
 
   it('hides soft-deleted rows even from their owner', async () => {
     const ghost = await seedUser(db, { displayName: 'Ghost' });
     await db.admin(`update public.users set deleted_at = now() where id = $1`, [ghost.userId]);
-    const rows = await db.as('authenticated', ghost.authUserId, `select id from public.users`);
+    const rows = await db.as('api_member', ghost.authUserId, `select id from public.users`);
     expect(rows).toHaveLength(0);
   });
 });
@@ -190,7 +190,7 @@ describe('users — system columns are not member-writable', () => {
   it('does NOT let a suspended member lift their own suspension', async () => {
     const suspended = await seedUser(db, { displayName: 'Suspended', status: 'suspended' });
     await expect(
-      db.as('authenticated', suspended.authUserId, `update public.users set status = 'active'`),
+      db.as('api_member', suspended.authUserId, `update public.users set status = 'active'`),
     ).rejects.toThrow(/permission denied/);
   });
 
@@ -202,17 +202,13 @@ describe('users — system columns are not member-writable', () => {
       done.userId,
     ]);
     await expect(
-      db.as(
-        'authenticated',
-        done.authUserId,
-        `update public.users set profile_completed_at = null`,
-      ),
+      db.as('api_member', done.authUserId, `update public.users set profile_completed_at = null`),
     ).rejects.toThrow(/permission denied/);
   });
 
   it('does NOT let a member soft-delete themselves outside the deletion workflow', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.users set deleted_at = now()`),
+      db.as('api_member', alice.authUserId, `update public.users set deleted_at = now()`),
     ).rejects.toThrow(/permission denied/);
   });
 });
@@ -226,7 +222,7 @@ describe('user_auth_links (restricted)', () => {
     // No GRANT and no policy. Two independent reasons this fails, which is the
     // point of a `restricted` table.
     await expect(
-      db.as('authenticated', alice.authUserId, `select * from public.user_auth_links`),
+      db.as('api_member', alice.authUserId, `select * from public.user_auth_links`),
     ).rejects.toThrow(/permission denied/);
   });
 
@@ -240,7 +236,7 @@ describe('user_auth_links (restricted)', () => {
     // The table is unreadable, yet the resolver every policy depends on can
     // read it. That is the whole point of SECURITY DEFINER here.
     const rows = await db.as<{ uid: string }>(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select app.current_user_id() as uid`,
     );
@@ -256,14 +252,14 @@ describe('user_consents (restricted)', () => {
       [alice.userId],
     );
     await expect(
-      db.as('authenticated', alice.authUserId, `select * from public.user_consents`),
+      db.as('api_member', alice.authUserId, `select * from public.user_consents`),
     ).rejects.toThrow(/permission denied/);
   });
 
   it('cannot be written by a member', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.user_consents (user_id, consent_type, version, granted)
          values ($1, 'terms', 'v1', true)`,
@@ -279,17 +275,13 @@ describe('user_consents (restricted)', () => {
 
 describe('user_settings (owner)', () => {
   it('lets a member read their own settings', async () => {
-    const rows = await db.as(
-      'authenticated',
-      alice.authUserId,
-      `select * from public.user_settings`,
-    );
+    const rows = await db.as('api_member', alice.authUserId, `select * from public.user_settings`);
     expect(rows).toHaveLength(1);
   });
 
   it('does NOT expose another member settings', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select * from public.user_settings where user_id = $1`,
       [alice.userId],
@@ -303,7 +295,7 @@ describe('user_settings (owner)', () => {
     // without one is refused — see review-phase1-rls.test.ts. This test's
     // subject is the owner policy, so it uses a setting every member owns.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.user_settings set discovery_paused = true returning discovery_paused`,
     );
@@ -312,7 +304,7 @@ describe('user_settings (owner)', () => {
 
   it('does NOT let a member change another member settings', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `update public.user_settings set incognito = true where user_id = $1 returning user_id`,
       [alice.userId],
@@ -323,7 +315,7 @@ describe('user_settings (owner)', () => {
   it('does NOT let a member write a column that is not a setting', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.user_settings set created_at = now() - interval '5 years'`,
       ),
@@ -341,7 +333,7 @@ describe('user_devices (owner)', () => {
 
   it('lets a member see their own devices', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select device_id from public.user_devices`,
     );
@@ -350,7 +342,7 @@ describe('user_devices (owner)', () => {
 
   it('does NOT let a member see another member devices', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select device_id from public.user_devices`,
     );
@@ -359,7 +351,7 @@ describe('user_devices (owner)', () => {
 
   it('lets a member revoke their own device', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.user_devices set revoked_at = now() where device_id = 'dev-a' returning id`,
     );
@@ -376,7 +368,7 @@ describe('user_devices (owner)', () => {
       [alice.userId],
     );
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.user_devices set revoked_at = null where device_id = 'dev-revoked' returning id`,
     );
@@ -388,7 +380,7 @@ describe('user_devices (owner)', () => {
     // up revoked.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.user_devices set revoked_at = null where device_id = 'dev-a'`,
       ),
@@ -398,7 +390,7 @@ describe('user_devices (owner)', () => {
   it('does NOT let a member rewrite what a device is', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.user_devices set platform = 'ios' where device_id = 'dev-a'`,
       ),
@@ -409,7 +401,7 @@ describe('user_devices (owner)', () => {
 describe('verification_status', () => {
   it('lets a member read their own status', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select * from public.verification_status`,
     );
@@ -418,7 +410,7 @@ describe('verification_status', () => {
 
   it('does NOT let a member read another member status', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select * from public.verification_status where user_id = $1`,
       [alice.userId],
@@ -429,7 +421,7 @@ describe('verification_status', () => {
   it('cannot be written by a member — verification is not self-declared', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.verification_status set phone_verified_at = now()`,
       ),
@@ -451,7 +443,7 @@ describe('security_events (system, append-only)', () => {
 
   it('lets a member read their own events', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select event_type from public.security_events`,
     );
@@ -460,7 +452,7 @@ describe('security_events (system, append-only)', () => {
 
   it('does NOT let a member read another member events', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select event_type from public.security_events`,
     );
@@ -470,7 +462,7 @@ describe('security_events (system, append-only)', () => {
   it('cannot be written by a member', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.security_events (user_id, event_type) values ($1, 'sign_in')`,
         [alice.userId],
@@ -481,7 +473,7 @@ describe('security_events (system, append-only)', () => {
   it('cannot be updated by a member', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.security_events set event_type = 'sign_out'`,
       ),
@@ -490,7 +482,7 @@ describe('security_events (system, append-only)', () => {
 
   it('cannot be deleted by a member — an audit a client can erase is not an audit', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.security_events`),
+      db.as('api_member', alice.authUserId, `delete from public.security_events`),
     ).rejects.toThrow();
   });
 });

@@ -29,12 +29,15 @@
  *   security events older than 12 months   app.purge_expired_security_events()
  *   profile views older than 12 months     app.purge_expired_profile_views()
  *   family invitations past their expiry   app.expire_family_invitations()
+ *   suspensions past their end date        app.lift_expired_suspensions()
+ *   staff access log older than 24 months  app.purge_expired_pii_access_log()
  * Reported, never changed (their execution needs what does not exist yet):
  *   deletion requests past their grace     — execution needs Supabase Auth admin
  *   abandoned photo uploads                — byte removal needs a Storage key
  */
 
 import { Client, type QueryResultRow } from 'pg';
+import { databaseConnection, explainTlsFailure } from '../src/db/tls';
 
 export interface Queryable {
   query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -68,6 +71,25 @@ export const TASKS: readonly Task[] = [
     name: 'family invitations past their expiry',
     count: `select count(*)::int as n from public.family_invitations where status = 'pending' and expires_at < now()`,
     apply: 'select app.expire_family_invitations() as n',
+  },
+  {
+    name: 'suspensions past their end date',
+    count: `select count(*)::int as n
+              from public.users u
+              join lateral (
+                select m.action, m.expires_at from public.moderation_actions m
+                 where m.subject_user_id = u.id and m.action in ('suspend', 'ban', 'clear')
+                 order by m.created_at desc, m.id desc limit 1
+              ) latest on true
+             where u.status = 'suspended' and u.deleted_at is null
+               and latest.action = 'suspend'
+               and latest.expires_at is not null and latest.expires_at <= now()`,
+    apply: 'select app.lift_expired_suspensions() as n',
+  },
+  {
+    name: 'staff access log older than 24 months',
+    count: `select count(*)::int as n from public.pii_access_log where accessed_at < now() - interval '24 months'`,
+    apply: 'select app.purge_expired_pii_access_log() as n',
   },
   {
     name: 'deletion requests past their grace period (report only)',
@@ -178,8 +200,7 @@ async function main(): Promise<void> {
   }
   const apply = process.argv.includes('--apply');
   const client = new Client({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
+    ...databaseConnection(url),
     application_name: 'nikahmate-maintenance',
   });
   try {
@@ -188,7 +209,7 @@ async function main(): Promise<void> {
     write({
       level: 'error',
       msg: `could not connect to ${maskedHost(url)}`,
-      error: (error as Error).message,
+      error: explainTlsFailure(error) ?? (error as Error).message,
     });
     process.exit(1);
   }

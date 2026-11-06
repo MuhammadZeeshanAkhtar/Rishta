@@ -18,8 +18,8 @@ would be a separate decision.
 ## Before you start (company)
 
 1. **Expo:** an account with access to the company's organisation.
-2. **Use the reviewed code.** Build from the branch `review/phases-2-5-handover`, which must exist
-   first, or from `main` only after the changes have been merged into it.
+2. **Use the reviewed code.** `main` holds Phases 1–5. Build from it only after the later security work,
+   uncommitted on `review/post-merge-security`, has been committed and merged.
 3. **Supabase:** the hosted project with all migrations applied, and the app's redirect URL
    `nikahmate://auth/callback` added under **Authentication → URL Configuration**. Without it,
    email verification links will not return to the app.

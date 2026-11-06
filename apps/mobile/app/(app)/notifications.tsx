@@ -10,6 +10,7 @@ import { useLocale } from '../../src/i18n/LocaleProvider';
 import { useTheme } from '../../src/theme/ThemeProvider';
 import { getClient } from '../../src/api/client';
 import { describeError } from '../../src/lib/errors';
+import { notificationTarget } from '../../src/notifications/target';
 import { MIN_TOUCH_TARGET, layout, radius, spacing, typography } from '../../src/theme/tokens';
 
 /**
@@ -120,17 +121,8 @@ export default function NotificationsScreen() {
   const open = useCallback(
     (notification: AppNotification) => {
       void markRead(notification);
-      const data = notification.data as Record<string, string | undefined>;
-      if (notification.type === 'new_match') router.push('/(app)/(tabs)/messages');
-      else if (notification.type === 'interest_received') router.push('/(app)/(tabs)/interests');
-      else if (notification.type === 'interest_accepted' && data.actorUserId) {
-        router.push(`/(app)/profile/${data.actorUserId}`);
-      } else if (
-        notification.type === 'photo_request' ||
-        notification.type === 'photo_request_answered'
-      ) {
-        router.push('/(app)/photo-requests');
-      }
+      const target = notificationTarget(notification.type, notification.data);
+      if (target) router.push(target as never);
     },
     [markRead, router],
   );

@@ -130,7 +130,7 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
    */
   fastify.post(
     '/account/bootstrap',
-    { preHandler: fastify.requireAuth },
+    { preHandler: fastify.requireIdentity },
     async (request, reply) => {
       const auth = requireAuthContext(request);
 
@@ -216,7 +216,7 @@ export const accountRoutes: FastifyPluginAsync<AccountRoutesOptions> = async (fa
    * Runs as the caller, so RLS is the thing deciding what comes back. A bug in
    * this handler cannot widen it.
    */
-  fastify.get('/me', { preHandler: fastify.requireAuth }, async (request) => {
+  fastify.get('/me', { preHandler: fastify.requireIdentity }, async (request) => {
     const auth = requireAuthContext(request);
 
     const me = await db.asUser(auth.authUserId, async (session) => {

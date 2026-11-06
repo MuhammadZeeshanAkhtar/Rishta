@@ -41,23 +41,19 @@ afterAll(async () => {
 
 describe('reports — the reporter reads their own, and only their own', () => {
   it('lets the reporter read their report', async () => {
-    const rows = await db.as('authenticated', reporter.authUserId, `select id from public.reports`);
+    const rows = await db.as('api_member', reporter.authUserId, `select id from public.reports`);
     expect(rows).toHaveLength(1);
   });
 
   it('shows the REPORTED member nothing', async () => {
     // ERD §14: "The reported party sees nothing." There is no policy that
     // could return their own row to them, and the absence is the control.
-    const rows = await db.as('authenticated', reported.authUserId, `select id from public.reports`);
+    const rows = await db.as('api_member', reported.authUserId, `select id from public.reports`);
     expect(rows).toEqual([]);
   });
 
   it('shows an unrelated member nothing', async () => {
-    const rows = await db.as(
-      'authenticated',
-      bystander.authUserId,
-      `select id from public.reports`,
-    );
+    const rows = await db.as('api_member', bystander.authUserId, `select id from public.reports`);
     expect(rows).toEqual([]);
   });
 
@@ -72,7 +68,7 @@ describe('reports — the reporter reads their own, and only their own', () => {
 
   it('cannot be reached by naming the row id directly', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       reported.authUserId,
       `select id from public.reports where id = $1::uuid`,
       [reportId],
@@ -88,7 +84,7 @@ describe('reports — no member write path of any kind', () => {
     // pre-dismissed.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         reporter.authUserId,
         `insert into public.reports (reporter_user_id, reported_user_id, category)
          values (app.current_user_id(), $1::uuid, 'scam')`,
@@ -102,7 +98,7 @@ describe('reports — no member write path of any kind', () => {
     // would rewrite the thing being reviewed.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         reporter.authUserId,
         `update public.reports set status = 'dismissed' where id = $1::uuid`,
         [reportId],
@@ -112,12 +108,9 @@ describe('reports — no member write path of any kind', () => {
 
   it('refuses a member DELETE', async () => {
     await expect(
-      db.as(
-        'authenticated',
-        reporter.authUserId,
-        `delete from public.reports where id = $1::uuid`,
-        [reportId],
-      ),
+      db.as('api_member', reporter.authUserId, `delete from public.reports where id = $1::uuid`, [
+        reportId,
+      ]),
     ).rejects.toThrow(/permission denied/i);
   });
 });

@@ -1,5 +1,6 @@
 import React from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Banner } from '../components/Banner';
 import { Button } from '../components/Button';
@@ -39,6 +40,7 @@ export function OnboardingStep({
 }) {
   const { t } = useLocale();
   const theme = useTheme();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const index = stepIndex(stepKey);
@@ -92,6 +94,15 @@ export function OnboardingStep({
           {error ? <Banner tone="error" message={error} /> : null}
 
           <View style={styles.fields}>{children}</View>
+
+          {/* Someone who has made an account can ask to delete it from any point. */}
+          <Button
+            label={t('accountDeletion.link')}
+            variant="ghost"
+            onPress={() => router.push('/delete-account' as never)}
+            style={styles.deleteLink}
+            testID="onboarding-delete-account"
+          />
         </View>
       </ScrollView>
 
@@ -138,6 +149,7 @@ const styles = StyleSheet.create({
   title: { ...typography.title, marginTop: spacing.md },
   subtitle: { ...typography.body, marginTop: spacing.xs, marginBottom: spacing.lg },
   fields: { gap: spacing.lg, marginTop: spacing.md },
+  deleteLink: { marginTop: spacing.xl },
   footer: {
     flexDirection: 'row',
     gap: spacing.md,
