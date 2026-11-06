@@ -33,13 +33,14 @@ export interface Queryable {
 /** Member-facing roles. `anon` holds the key shipped inside the app. */
 const MEMBER_ROLES = ['anon', 'authenticated'] as const;
 
-// pg_trigger.tgtype bits (src/include/catalog/pg_trigger.h).
-const ROW = 1;
-const BEFORE = 2;
-const INSERT = 4;
-const UPDATE = 16;
+// pg_trigger.tgtype bits (src/include/catalog/pg_trigger.h). AFTER is the
+// absence of BEFORE.
+export const ROW = 1;
+export const BEFORE = 2;
+export const INSERT = 4;
+export const UPDATE = 16;
 
-interface ExpectedTrigger {
+export interface ExpectedTrigger {
   finding: string;
   name: string;
   table: string;
@@ -80,9 +81,23 @@ const TRIGGERS: ExpectedTrigger[] = [
 ];
 
 /** Lower-cased, whitespace collapsed — so formatting never decides a check. */
-const normalise = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
+export const normalise = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
 
 async function triggerChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
+  await checkTriggers(db, out, TRIGGERS);
+}
+
+/**
+ * Checks each expected trigger against the catalog: present on its table,
+ * enabled, firing at the exact timing/level/events, watching exactly its
+ * columns, calling its function, and that function's body still containing
+ * the fragments that make it do its job. Shared with the Phase 2 checks.
+ */
+export async function checkTriggers(
+  db: Queryable,
+  out: SecurityCheck[],
+  triggers: readonly ExpectedTrigger[],
+): Promise<void> {
   const { rows } = await db.query<{
     name: string;
     tbl: string;
@@ -108,10 +123,10 @@ async function triggerChecks(db: Queryable, out: SecurityCheck[]): Promise<void>
        join pg_proc p on p.oid = t.tgfoid
        join pg_namespace pn on pn.oid = p.pronamespace
       where not t.tgisinternal and t.tgname = any($1::text[])`,
-    [TRIGGERS.map((t) => t.name)],
+    [triggers.map((t) => t.name)],
   );
 
-  for (const want of TRIGGERS) {
+  for (const want of triggers) {
     const label = `${want.finding} trigger ${want.name}`;
     const found = rows.filter((r) => r.name === want.name && r.tbl === want.table);
     const row = found[0];

@@ -259,6 +259,50 @@ export class AuthClient {
     if (error) throw fromAuthError(error);
   }
 
+  // --- Second factor (review L1: staff need aal2) -----------------------------
+  //
+  // Only the admin interface uses these. The API decides whether a token is
+  // good enough (`aal2` for staff, unless their row waives it); these only let
+  // a staff member obtain such a token from Supabase Auth. Nothing here is
+  // trusted for authorization.
+
+  /** The session's assurance level now, and what it could be raised to. */
+  async getAssurance(): Promise<{ current: 'aal1' | 'aal2' | null; next: 'aal1' | 'aal2' | null }> {
+    const { data, error } = await this.supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error) throw fromAuthError(error);
+    return {
+      current: (data.currentLevel as 'aal1' | 'aal2' | null) ?? null,
+      next: (data.nextLevel as 'aal1' | 'aal2' | null) ?? null,
+    };
+  }
+
+  /** Verified authenticator-app (TOTP) factors. */
+  async listTotpFactors(): Promise<Array<{ id: string; friendlyName: string | null }>> {
+    const { data, error } = await this.supabase.auth.mfa.listFactors();
+    if (error) throw fromAuthError(error);
+    return (data.totp ?? []).map((f) => ({ id: f.id, friendlyName: f.friendly_name ?? null }));
+  }
+
+  /**
+   * Starts enrolling an authenticator app. `qrCode` is an SVG data URI for the
+   * app to scan; `secret` is the same key for manual entry. Neither is stored
+   * by us; the factor is only usable once `verifyTotp` succeeds.
+   */
+  async enrollTotp(): Promise<{ factorId: string; qrCode: string; secret: string }> {
+    const { data, error } = await this.supabase.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: `NikahMate staff ${new Date().toISOString().slice(0, 10)}`,
+    });
+    if (error) throw fromAuthError(error);
+    return { factorId: data.id, qrCode: data.totp.qr_code, secret: data.totp.secret };
+  }
+
+  /** Verifies a 6-digit code; on success the session is upgraded to aal2. */
+  async verifyTotp(factorId: string, code: string): Promise<void> {
+    const { error } = await this.supabase.auth.mfa.challengeAndVerify({ factorId, code });
+    if (error) throw fromAuthError(error);
+  }
+
   /** Re-reads the user from the server. Used to detect verification landing. */
   async refreshUser(): Promise<AuthUser | null> {
     const { data, error } = await this.supabase.auth.getUser();

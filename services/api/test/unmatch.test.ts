@@ -528,19 +528,22 @@ describe('nothing else is touched', () => {
     expect(Number.parseInt(participants.rows[0]!.n, 10)).toBe(1);
   });
 
-  it('exposes no family-review surface', async () => {
+  it('refuses a family re-request on an ended match', async () => {
+    // Was "exposes no family-review surface"; the surface exists since review
+    // Phase 4. An ended match is closed to it.
     const { alice, matchId } = await matched();
-    for (const [method, url] of [
-      ['GET', `/matches/${matchId}/family-review`],
-      ['POST', `/matches/${matchId}/family-review`],
-    ] as const) {
-      const response = await harness.app.inject({
-        method,
-        url,
-        headers: authHeader(alice.authId),
-        payload: {},
-      });
-      expect([404, 405], `${method} ${url}`).toContain(response.statusCode);
-    }
+    await harness.app.inject({
+      method: 'POST',
+      url: `/matches/${matchId}/unmatch`,
+      headers: authHeader(alice.authId),
+      payload: {},
+    });
+    const again = await harness.app.inject({
+      method: 'POST',
+      url: `/matches/${matchId}/family-review`,
+      headers: authHeader(alice.authId),
+      payload: {},
+    });
+    expect(again.statusCode).toBe(409);
   });
 });

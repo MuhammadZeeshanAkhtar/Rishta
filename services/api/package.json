@@ -9,6 +9,7 @@
     "start": "tsx --env-file-if-exists=.env src/index.ts",
     "migrate": "tsx --env-file-if-exists=.env scripts/migrate.ts",
     "migrate:status": "tsx --env-file-if-exists=.env scripts/migrate.ts --status",
+    "maintenance": "tsx --env-file-if-exists=.env scripts/maintenance.ts",
     "verify:db": "tsx --env-file-if-exists=.env scripts/verify-db.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -97,18 +97,30 @@ const TEST_CONFIG: Config = {
  */
 export const testVerifier: TokenVerifier = {
   async verify(token: string): Promise<AuthContext> {
-    const match = /^test:([0-9a-fA-F-]{36})(?::(.*))?$/.exec(token);
+    const match = /^test:([0-9a-fA-F-]{36})(?::([^#]*))?(?:#(aal[12]))?$/.exec(token);
     if (!match) throw unauthenticated('Invalid or expired token');
-    return {
+    const context: AuthContext = {
       authUserId: match[1]!,
       email: match[2] || undefined,
       expiresAt: Math.floor(Date.now() / 1000) + 3600,
     };
+    if (match[3]) context.aal = match[3];
+    return context;
   },
 };
 
-export function authHeader(authUserId: string, email?: string): Record<string, string> {
-  return { authorization: `Bearer test:${authUserId}${email ? `:${email}` : ''}` };
+/**
+ * `aal` stands in for Supabase Auth MFA: `aal2` is a token issued after a
+ * second factor. Only the admin surface reads it (review L1).
+ */
+export function authHeader(
+  authUserId: string,
+  email?: string,
+  aal?: 'aal1' | 'aal2',
+): Record<string, string> {
+  return {
+    authorization: `Bearer test:${authUserId}${email ? `:${email}` : ''}${aal ? `#${aal}` : ''}`,
+  };
 }
 
 function createPgliteDb(pg: PGlite, serviceUses: ServiceRoleUse[]): Db {

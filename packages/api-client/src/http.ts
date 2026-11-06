@@ -36,6 +36,9 @@ const STATUS_TO_KIND: Record<number, ApiErrorKind> = {
   403: 'forbidden',
   404: 'not_found',
   409: 'conflict',
+  // Review B21: the API now names these; to a person they are still "fix the input".
+  413: 'validation_failed',
+  415: 'validation_failed',
   422: 'validation_failed',
   429: 'rate_limited',
 };

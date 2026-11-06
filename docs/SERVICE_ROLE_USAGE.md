@@ -541,6 +541,163 @@ names who was there.
 
 **Scope:** one participant row.
 
+### `admin.authorize`
+
+**Where:** [`routes/admin.ts`](../services/api/src/routes/admin.ts) — `requireAdmin`
+
+**Why:** `admin_users` and `admin_role_assignments` (migration 0029, review
+L1) are restricted: no member grant and no policy. Members must neither learn
+who the moderators are nor be able to become one.
+
+**Safety:** keyed by the verified token subject only; returns the caller's own
+admin row and unexpired roles, nothing about anyone else. MFA (`aal2`) is then
+checked in code before any other admin path runs.
+
+**Scope:** one admin row.
+
+### `admin.read_queue`
+
+**Where:** [`routes/admin.ts`](../services/api/src/routes/admin.ts) — the `GET /admin/...` queues
+
+**Why:** moderation is reading OTHER members' pending photos, profiles,
+reports and date-of-birth requests, which owner-only RLS forbids by design.
+
+**Safety:** reached only after `admin.authorize` confirms an active moderator
+or support role with MFA. Each queue selects the fields a decision needs and
+pages them; no route returns members' contact details.
+
+**Scope:** pending items, one page at a time.
+
+### `admin.decide`
+
+**Where:** [`routes/admin.ts`](../services/api/src/routes/admin.ts) — the `POST /admin/...` decisions
+
+**Why:** `photos.moderation_status`, `profiles.review_status`, report status,
+`users.status` and a locked `users.date_of_birth` (B6) are server state with no
+member grant. A member able to write them could approve their own photo or lift
+their own ban.
+
+**Safety:** every decision and its `admin_action_audit` row are written in the
+same transaction; the audit is append-only for every role (0029 trigger). Bans
+and suspensions require a non-blank reason (database constraint).
+
+**Scope:** the one item decided, plus its audit row.
+
+### `profile.read_public`
+
+**Where:** [`routes/public-profile.ts`](../services/api/src/routes/public-profile.ts) — `GET /profiles/:userId`
+
+**Why:** the name, age, gender and field-visibility choices of ANOTHER member
+live in owner-only tables (`users`, `profile_field_visibility`); evaluated as
+the viewer they are invisible by design. Review L4.
+
+**Safety:** one row, gated inside the query by `app.can_view_profile(viewer,
+target)` — blocked, suspended, unapproved or deleted members return nothing.
+The date of birth becomes an age in SQL and is never returned. The route then
+drops every field the target's visibility choices withhold from this viewer.
+
+**Scope:** one member's public fields.
+
+### `account.lifecycle`
+
+**Where:** [`routes/me.ts`](../services/api/src/routes/me.ts) — deactivate, reactivate, `/me/delete`
+
+**Why:** `users.status` has no member grant (a member who could write it could
+lift their own suspension), and `account_deletion_requests` is restricted.
+
+**Safety:** keyed by the caller's own id. Only active → deactivated,
+deactivated → active, and → `pending_deletion` and back to the exact previous
+status are written; suspended or banned members cannot reactivate themselves.
+
+**Scope:** the caller's own user row and deletion request.
+
+### `notifications.push_tokens`
+
+**Where:** [`routes/me.ts`](../services/api/src/routes/me.ts) — `/me/push-tokens`, device revocation
+
+**Why:** `push_tokens` is restricted (ERD §15): a token reaches a device, so no
+client may read the table.
+
+**Safety:** writes only, keyed by the caller's own id and the device they name.
+
+**Scope:** the caller's own tokens.
+
+### `profile.record_view`
+
+**Where:** [`routes/public-profile.ts`](../services/api/src/routes/public-profile.ts) — `POST /profiles/:userId/view`
+
+**Why:** `profile_views` is system-only; views are kept for abuse
+investigation, incognito ones included.
+
+**Safety:** written only after the caller's own session confirms
+`app.can_view_profile` for the target; repeated views within 30 minutes count
+once.
+
+**Scope:** one row.
+
+### `profile.read_views`
+
+**Where:** [`routes/public-profile.ts`](../services/api/src/routes/public-profile.ts) — `GET /me/profile-views`
+
+**Why:** the rows about the caller and other members' incognito settings are
+not member-readable.
+
+**Safety:** entitlement-checked first (`who_viewed_me`); returns viewer ids
+only, filtered by `app.can_view_profile`, with effective-incognito viewers
+removed. Cards are then built through the existing `discovery.read_cards` path.
+
+**Scope:** one page of viewer ids.
+
+### `family.match_review`
+
+**Where:** [`routes/matches.ts`](../services/api/src/routes/matches.ts) — `/matches/:matchId/family-review`
+
+**Why:** the counterpart's review row is invisible to the owner under RLS, and
+re-requesting writes review, match and notification state no member may write.
+
+**Safety:** only for a match the caller's own session can read. The
+counterpart's side is reduced to a bare decision — never who decided, never
+the note. A re-request touches only the owner's own review, and is refused
+whenever the other family rejected (R16 is an escape from one's own family's
+silence or refusal, never a way to overrule the other family).
+
+**Scope:** one match's reviews; the owner's own delegates' notifications.
+
+---
+
+### `photo.request`
+
+**Where:** [`routes/photo-access.ts`](../services/api/src/routes/photo-access.ts) — `POST /profiles/:userId/photo-request`
+
+**Why:** `photo_requests` (0031) has no member write grant. The request carries
+a free-text message that must pass the contact-details filter (L9, decision 3);
+a Data API insert would skip it, which is the B7 lesson. The owner's
+notification is server state too.
+
+**Safety:** only after the route has checked, AS THE CALLER, that they may view
+the owner's profile, that a requestable photo exists, and that no grant, open
+request or recent decline stands. Inserts one row with the caller as requester,
+and one notification carrying ids only.
+
+**Scope:** one request row; one notification for its owner.
+
+---
+
+### `photo.respond`
+
+**Where:** [`routes/photo-access.ts`](../services/api/src/routes/photo-access.ts) — `POST /me/photo-requests/:requestId/respond`
+
+**Why:** the answer changes the request, creates the grant (`photo_grants` has
+no member write grant — a grant is the owner's decision and must not be
+self-issued by a requester), and notifies the requester.
+
+**Safety:** the route first reads the request AS THE CALLER and requires that
+they are its owner; the update is conditional on that owner and on `pending`.
+A grant never reaches a `private` photo (`app.photo_variant_readable`).
+
+**Scope:** one request; at most one grant from the owner to the requester; one
+notification.
+
 ---
 
 ## Not on this list, deliberately

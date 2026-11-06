@@ -10,6 +10,14 @@ work.
 
 **Phase 1 migrations:** 0026 and 0027, released in that order **with the API
 deployed between them**. See [Deployment order](#deployment-order-phase-1).
+**Phase 2 migration:** 0028, applied after Phase 1 completes and **before** the
+Phase 2 API.
+**Phase 3 migration:** 0029, applied after 0028 and **before** the Phases 2–3 API
+(`## 0029` below). See [Deployment order (Phase 2)](#deployment-order-phase-2).
+**Phase 4 migration:** 0030, applied after 0029 and **before** the Phase 4 API
+(`## 0030` below).
+**Phase 5 migration:** 0031, applied after 0030 and **before** the Phase 5 API
+(`## 0031` below). It carries a Storage policy that only Supabase can verify.
 The migration procedure documented here is **DEV ONLY**: staging and production
 have no approved migration process yet (see
 [Staging and production](#staging-and-production-not-configured)).
@@ -197,6 +205,14 @@ There is **no approved migration process for staging or production**, and none
 is configured. The repository has no deployment configuration, CI never runs
 migrations, and `docs/SUPABASE_SETUP.md` defers both projects to Phase 13.
 
+**Correction (2026-11-02).** A production environment does exist outside the
+repository: the manager's report names a manually deployed web app, API and
+Supabase project (the live deployment and the production Supabase project). That
+project is not the one in the local `.env`. It runs the reviewed commit `6c67581`;
+the branch `review/phases-2-5-handover` is neither merged nor deployed, and none of 0026–0031
+is applied to it. It needs the same release order,
+through the approved process below once one exists, never from a laptop.
+
 - **Do not** apply 0026 or 0027 to staging or production from a local developer
   checkout, and do not put staging or production credentials in a local
   `.env`.
@@ -307,6 +323,406 @@ two disagree about a character (U+0085 NEXT LINE is a likely candidate, since
 and surface as a 500 rather than a 400. Not established on PGlite and not
 tested against hosted Supabase. Mapping `check_violation` to a 4xx belongs with
 B14/B21 (Phase 3).
+
+---
+
+## 0028 — `20261101000028_review_phase2_conversation_safety.sql` (Phase 2)
+
+**Status:** written and tested on PGlite · **not applied** to any hosted
+project.
+
+| Change                                                                                       | Finding | Kind                 |
+| -------------------------------------------------------------------------------------------- | ------- | -------------------- |
+| `stage_transitions_status_valid` gains `cancelled`                                           | B16     | check constraint     |
+| `stage_transitions_responded_consistent`: `cancelled` has a time and **no** responder        | B16     | check constraint     |
+| `app.cancel_pending_stage_proposals(conversation)`: pending → cancelled, service role only   | B16     | new function         |
+| trigger `blocks_cancel_stage_proposals` (AFTER INSERT on `blocks`)                           | B16     | new function/trigger |
+| trigger `matches_cancel_stage_proposals` (AFTER UPDATE OF `ended_at`, `communication_state`) | B16     | new function/trigger |
+| trigger `conversation_participants_cancel_stage_proposals` (AFTER UPDATE OF `left_at`)       | B16/B25 | new function/trigger |
+| one-time cancellation of proposals already stranded in closed threads                        | B16     | data backfill        |
+| `app.can_write_message`: refuses a thread **anyone** has left                                | B25     | replaced function    |
+| `app.has_interacted_with(target)`: caller-scoped, STABLE SECURITY DEFINER                    | B24     | new function         |
+
+### Behaviour changes a caller could notice
+
+- A pending stage proposal becomes `cancelled` the moment its thread closes:
+  by a block (including one inserted through the Data API), an unmatch, a
+  family revocation, or either participant leaving. The current stage never
+  moves.
+- Once either participant has left, **neither** can insert a message, through
+  the API or the Data API. Decision (2026-11-01): permanent, no rejoin.
+- `app.has_interacted_with` is new and changes nothing on its own; the Phase 2
+  block route calls it.
+
+### Trigger interactions (checked before writing it)
+
+- **No recursion.** The only table these functions write is
+  `stage_transitions`, which has no triggers. They watch `blocks`, `matches`
+  and `conversation_participants`, none of which they write.
+- **Ordering.** All three are AFTER triggers, so they see each row as left by
+  every BEFORE trigger (0021's `matches_gate_new_period`, 0026's
+  `matches_guard_family_approval`, the `touch` triggers), never a value one of
+  those is about to change. `matches_open_conversation` (AFTER, 0025) only
+  creates threads and is unaffected.
+- **No inconsistent stage.** Only `status` and `responded_at` of a **pending**
+  row change. `conversation_stages.current_stage` is never written.
+- **Races.** Stage respond locks the pending row `FOR UPDATE`; the cancelling
+  `UPDATE … where status = 'pending'` re-checks after waiting. Exactly one
+  wins and the other changes nothing. Respond also re-checks
+  `app.can_write_message` inside its transaction, holding the lock. (Proven by
+  reasoning and by the deterministic tests; PGlite cannot run the race itself,
+  see L12.)
+- **Revival.** An ended match revived by setting `ended_at` back to null is not
+  a closing; its proposals were cancelled when it ended. The one-pending index
+  no longer holds a cancelled row, so a new proposal can be made (tested).
+- **Scope.** A block cancels only conversations between that pair; an unmatch
+  or revocation only that match's conversation. Answered proposals are history
+  and are never touched (tested).
+
+### Safety for existing data
+
+- Both replaced constraints accept every row their predecessors accepted, so
+  neither can fail on existing data.
+- The backfill cancels only **pending** proposals in threads that are already
+  closed (match ended, not in a writable state, blocked, or someone left). Open
+  threads keep theirs. Tested on a database built at 0027 with real rows, then
+  migrated.
+- `app.can_write_message` is replaced with the same signature, so its grants and
+  the message insert policy that calls it are kept.
+
+---
+
+## Deployment order (Phase 2)
+
+**After Phase 1 has completed** (0026 → Phase 1 API → 0027). Then
+**0028 → Phase 2 API**. The runner applies pending files in filename order, so
+0028 cannot be applied before 0027 from any checkout that contains both.
+
+### Compatibility
+
+| Database   | Phase 1 API (`0de536f`)                                                                                                                                                                                                                                        | Phase 2 API                                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Up to 0027 | works (status quo)                                                                                                                                                                                                                                             | **breaks every block**: `PUT /blocks/:id` calls `app.has_interacted_with`, which does not exist yet. Do not deploy before 0028. |
+| 0028       | works, with one edge: a send into a thread the counterpart has left passes that API's route check (it does not know `counterpart_left`) and is then refused by the database, so it returns an error instead of a clean 409. Derived from the code, not tested. | **works** (every Phase 2 suite runs on it)                                                                                      |
+
+Keep the window between applying 0028 and deploying the Phase 2 API short.
+
+### Exact order (DEV ONLY)
+
+The same rule as Phase 1: a local checkout, the development project only. Do
+not run staging or production migrations this way (see
+[Staging and production](#staging-and-production-not-configured)).
+
+1. Phase 1 complete on dev: `migrate:status` shows 0001–0027 applied.
+2. Optional, read-only: how many proposals the backfill will cancel.
+
+   ```sql
+   select count(*) from public.stage_transitions st
+     join public.conversations c on c.id = st.conversation_id
+     join public.matches m on m.id = c.match_id
+    where st.status = 'pending'
+      and (m.ended_at is not null
+           or m.communication_state not in ('open', 'family_approved')
+           or app.is_blocked(m.user_a_id, m.user_b_id)
+           or exists (select 1 from public.conversation_participants p
+                       where p.conversation_id = c.id and p.left_at is not null));
+   ```
+
+3. From a checkout of the Phase 2 commit, `migrate:status` must list exactly one
+   pending migration, **0028**:
+
+   ```bash
+   pnpm --filter @nikahmate/api migrate:status
+   ```
+
+   ```bash
+   pnpm --filter @nikahmate/api migrate
+   ```
+
+4. Verify. Every Phase 1 **and** Phase 2 check must pass:
+
+   ```bash
+   pnpm --filter @nikahmate/api verify:db
+   ```
+
+5. Deploy the Phase 2 API, then the web build of the app.
+6. Smoke-test: open an invitation link as a second account and accept it;
+   propose a stage, block from the chat header, and confirm the proposal is
+   gone; leave a conversation and confirm the other side shows it closed;
+   send an interest with a phone number in the note and confirm it is refused.
+
+**Recovery.** If step 3 fails it rolls back cleanly. If the Phase 2 API
+misbehaves after step 5, roll the API back to `0de536f`: it runs on 0028 with
+the one edge above. Reversing 0028 itself is a new migration (below).
+
+---
+
+## What `verify:db` checks for Phase 2
+
+`services/api/scripts/phase2-safety-checks.ts`, called from `verify-db.ts`,
+reusing Phase 1's trigger checker.
+
+| Check                                                                             | Fails when                                                                                               |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `B16 trigger blocks_cancel_stage_proposals`                                       | missing; disabled; not AFTER INSERT FOR EACH ROW; another function; its function no longer cancels       |
+| `B16 trigger matches_cancel_stage_proposals`                                      | missing; disabled; not watching exactly `communication_state, ended_at`; another function; body neutered |
+| `B16 trigger conversation_participants_cancel_stage_proposals`                    | missing; disabled; not AFTER UPDATE OF `left_at`; another function; body neutered                        |
+| `B16 app.cancel_pending_stage_proposals cancels only, and members cannot call it` | missing; members can EXECUTE it; it touches `current_stage`; it is no longer limited to pending rows     |
+| `B16 stage_transitions allows cancelled, with no responder`                       | either constraint lacks the `cancelled` branch                                                           |
+| `B25 app.can_write_message refuses a thread anyone has left`                      | missing, or reverted to 0025's one-sided rule                                                            |
+| `B24 app.has_interacted_with is caller-scoped and not callable by anon`           | missing; not STABLE SECURITY DEFINER; not caller-scoped; anon can EXECUTE it; authenticated cannot       |
+
+**Proven to fail:** `services/api/test/verify-phase2-safety.test.ts`. All checks
+pass on a correct database, all fail on a database from before 0028, and each of
+18 single breakages fails exactly its own check. Not run against a live database
+(the development project is unreachable).
+
+---
+
+## Rollback implications (0028)
+
+0028 is unapplied everywhere, so it can still be corrected in place. Once
+applied anywhere, every reversal is a new migration.
+
+| Change                                          | Reversal (in a new migration)        | Data loss    | Hazard                                                                                                                                                                                                                       |
+| ----------------------------------------------- | ------------------------------------ | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Three cancellation triggers and their functions | `drop trigger`, `drop function`      | None         | Stage proposals outlive closed threads again; the route still refuses to accept them.                                                                                                                                        |
+| `app.cancel_pending_stage_proposals`            | `drop function`, after the triggers  | None         | Dropping it first breaks every block, unmatch, revocation and leave at runtime, because the triggers call it.                                                                                                                |
+| `stage_transitions` constraints                 | Drop them and re-add 0025's forms    | **Possible** | **Re-adding fails** once any row is `cancelled`: every proposal a closing cancelled, plus the backfill. Making it pass means rewriting those rows as `declined` with an invented responder. A data decision, not a rollback. |
+| `app.can_write_message`                         | `create or replace` with 0025's body | None         | Reopens one-sided leaving (B25), through the Data API as well.                                                                                                                                                               |
+| `app.has_interacted_with`                       | `drop function`                      | None         | The Phase 2 block route calls it: revert the API first, or every block fails.                                                                                                                                                |
+
+---
+
+## 0029 — `20261102000029_review_phase3_moderation.sql` (Phase 3)
+
+**Status:** written and tested on PGlite · **not applied** to any hosted
+project. Corrected once before release: its own test showed the rename
+re-review trigger, written as `SECURITY DEFINER`, saw its owner as
+`current_user` and never fired for members. It now runs with the caller's
+rights and calls an argument-free definer helper.
+
+| Change                                                                                                     | Finding | Kind                        |
+| ---------------------------------------------------------------------------------------------------------- | ------- | --------------------------- |
+| Existing pending primaries cleared; `photos_primary_approved`                                              | B13     | data fix + check constraint |
+| `app.enforce_dob_locked` + trigger `users_dob_locked`                                                      | B6      | function/trigger            |
+| `app.rereview_on_profile_edit` + trigger `profiles_rereview_on_edit`                                       | B6      | function/trigger            |
+| `app.send_own_profile_to_review` + `app.rereview_on_name_change` + trigger `users_rereview_on_name_change` | B6      | functions/trigger           |
+| `admin_users`, `admin_role_assignments`, `admin_action_audit` (append-only trigger), `moderation_actions`  | L1      | 4 restricted tables         |
+| `dob_correction_requests` + snapshot trigger, owner RLS, column INSERT grant                               | B6      | table                       |
+| `app.purge_expired_notifications` (12 months, service role only)                                           | B26     | function                    |
+| `app.is_active_moderator` (role + `aal2` when MFA required)                                                | L1      | function                    |
+| Storage policy `photos_bucket_select_moderator` (guarded; no-op outside Supabase)                          | L1 / B5 | storage policy              |
+
+### Behaviour changes a caller could notice
+
+- A member cannot change their date of birth once their profile is complete —
+  through the API (409 with a pointer to the correction request) or the Data
+  API. The server can, through the audited correction workflow.
+- A member editing their about-me, looking-for, institution or family
+  background, or renaming themselves, after a review decision sends the
+  profile back to `pending` — out of discovery until a moderator decides.
+- Only an approved photo can be primary.
+- Admin tables exist but no member can read or write them.
+
+### Safety for existing data
+
+- Pending photos that were primary are un-set first, so the constraint cannot
+  fail on existing rows. Nothing else rewrites data.
+- Triggers act on future writes only.
+
+### Release order and compatibility
+
+**0026 → Phase 1 API → 0027 → 0028 → 0029 → Phases 2–3 API.** 0028 and 0029
+can be applied in one `migrate` run; then deploy the API immediately.
+
+| Database   | Phase 1/2 API                                                                                                                                                                                                                                                                                                                  | Phase 3 API                                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| up to 0028 | works                                                                                                                                                                                                                                                                                                                          | admin routes and `/me/dob-correction-requests` fail (tables missing); submitted profiles stay `pending` with no moderator path. **Do not deploy before 0029.** |
+| 0029       | works, with edges: a DOB change after completion or a primary set on an unfinalized photo returns 500 instead of a clean 4xx (no error mapping in those versions); a member editing reviewed text goes back to `pending` and is re-approved only by resubmitting (the old stub). Derived from the code; keep the window short. | **works** (every Phase 3 suite runs on it)                                                                                                                     |
+
+**After applying 0029, before anyone can moderate,** an operator creates the
+first staff account with the service role (SQL editor on the dev project) —
+there is deliberately no API for this:
+
+```sql
+insert into public.admin_users (user_id)
+select user_id from public.user_auth_links where auth_user_id = '<staff auth user id>';
+
+insert into public.admin_role_assignments (admin_user_id, role_key)
+select id, 'moderator' from public.admin_users
+ where user_id = (select user_id from public.user_auth_links where auth_user_id = '<staff auth user id>');
+```
+
+Staff then need **MFA enabled in Supabase Auth** (Dashboard) and must sign in
+with a second factor: the API refuses an admin token that is not `aal2`.
+
+### What `verify:db` checks for Phase 3
+
+`services/api/scripts/phase3-moderation-checks.ts`, called from `verify-db.ts`:
+the five triggers (presence, enabled, timing, columns, function, body), the
+primary-photo constraint, that the rename trigger is NOT `SECURITY DEFINER`
+and its helper takes no argument, that members hold no privilege on any admin
+table, that the moderator predicate requires `aal2`, and that only the service
+role can purge notifications. **Proven to fail:** `test/verify-phase3-moderation.test.ts`
+— all pass on a correct database, all but one (vacuous) fail before 0029, and
+each of 13 single breakages fails exactly its own check.
+
+### Rollback implications (0029)
+
+| Change                                   | Reversal                                                                   | Data loss          | Hazard                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------- |
+| Triggers (DOB lock, re-review, snapshot) | `drop trigger`, `drop function`                                            | None               | Reopens B6 for members (and the Data API).                                                |
+| `photos_primary_approved`                | `drop constraint`                                                          | None               | Reopens B13 at the database level; the route still refuses.                               |
+| Admin tables                             | **Do not drop.** Revoke staff by setting `admin_users.status = 'disabled'` | **Yes** if dropped | `admin_action_audit` is the record of every moderation decision (ERD retention: 7 years). |
+| `dob_correction_requests`                | Keep; stop the API routes instead                                          | Yes if dropped     | The history of corrections and who approved them.                                         |
+| Storage moderator policy                 | `drop policy`                                                              | None               | Moderators can no longer view queued photos.                                              |
+| `purge_expired_notifications`            | `drop function`                                                            | None               | Retention stops; the maintenance task then fails loudly.                                  |
+
+---
+
+## 0030 — `20261104000030_review_phase4_account_api.sql` (Phase 4)
+
+**Status:** written and tested on PGlite · **not applied** to any hosted
+project. Additive only: four new tables, one trigger, four functions. No
+existing table, column, policy or grant is changed.
+
+| Change                                                                                                                                                                     | Finding  | Kind                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------ |
+| `notification_preferences` — owner-only RLS (forced), member SELECT/INSERT/DELETE; 15 valid types; `security_alert` cannot be silenced in-app; quiet hours both or neither | L10 / L8 | table                                |
+| `app.respect_notification_preferences` + trigger `notifications_respect_preferences` (BEFORE INSERT on `notifications`: in-app OFF → no row, for every writer)             | L10      | function/trigger                     |
+| `push_tokens` (one per user and device)                                                                                                                                    | L8       | restricted table (service role only) |
+| `profile_views` (no self-views; source enum; two indexes)                                                                                                                  | L10      | system table (service role only)     |
+| `account_deletion_requests` (one open per member; grace ≥ request; hold needs reason; `previous_status` kept for cancel)                                                   | L7 / L10 | restricted table (service role only) |
+| `app.purge_expired_security_events`, `app.purge_expired_profile_views` (12 months), `app.expire_family_invitations`                                                        | L11      | functions, service role only         |
+
+### Behaviour changes a caller could notice
+
+- A member who turns a notification type's in-app setting off receives no
+  inbox entry of that type from any path (API, Data API, service role). Before
+  0030 every type was always delivered.
+- Nothing else changes for an existing caller: the other tables are new and
+  unreachable by members.
+
+### Safety for existing data
+
+- No existing row is read or rewritten by the migration. The trigger acts on
+  future `notifications` inserts only, and only when a preference row exists
+  (none do at release), so delivery is unchanged until a member opts out.
+
+### Release order and compatibility
+
+**… → 0029 → 0030 → Phase 4 API.** 0030 can be applied in the same `migrate`
+run as 0028 and 0029.
+
+| Database   | Phase 1–3 API                                                               | Phase 4 API                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| up to 0029 | works                                                                       | `/me/notification-preferences`, `/me/push-tokens`, `/me/delete`, `/profiles/{id}/view`, `/me/profile-views`, device revoke fail (tables missing). **Do not deploy before 0030.** |
+| 0030       | works (the new tables are unused; the trigger is inert with no preferences) | **works** (every Phase 4 suite runs on it)                                                                                                                                       |
+
+### What `verify:db` checks for Phase 4
+
+`services/api/scripts/phase4-account-checks.ts`, called from `verify-db.ts`:
+the trigger (presence, enabled, BEFORE INSERT FOR EACH ROW, function, body);
+no member privilege on `push_tokens`, `profile_views`,
+`account_deletion_requests` (and that they exist); `notification_preferences`
+RLS enabled, forced, every policy scoped to the owner; the three L11 functions
+present and not executable by `anon` or `authenticated`. **Proven to fail:**
+`test/verify-phase4-account.test.ts` — all pass on a correct database, all
+fail before 0030, and each of 10 single breakages fails exactly its own check.
+
+### Rollback implications (0030)
+
+| Change                                      | Reversal                                     | Data loss                         | Hazard                                                               |
+| ------------------------------------------- | -------------------------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| Trigger `notifications_respect_preferences` | `drop trigger`, `drop function`              | None                              | Opted-out members receive inbox entries again.                       |
+| `notification_preferences`                  | Keep; stop the API routes instead            | Yes if dropped (members' choices) | —                                                                    |
+| `push_tokens`                               | `drop table` is safe while push is not built | Tokens (re-registered by the app) | —                                                                    |
+| `profile_views`                             | Keep                                         | Yes if dropped                    | The views are also an abuse-investigation record.                    |
+| `account_deletion_requests`                 | **Do not drop**                              | **Yes**                           | Accounts in `pending_deletion` lose the status to restore on cancel. |
+| L11 functions                               | `drop function`                              | None                              | The maintenance task then reports those tasks as failed (exit 1).    |
+
+The maintenance task that calls these functions is documented in
+`docs/MAINTENANCE.md`.
+
+## 0031 — `20261105000031_review_phase5_photo_access.sql` (Phase 5)
+
+**Status:** written and tested on PGlite · **not applied** to any hosted
+project. **Its Storage policy is a no-op outside Supabase and has never run
+against real Storage.** Additive: two tables, three functions, one Storage
+policy. No existing table, policy or grant is changed.
+
+| Change                                                                                                                          | Finding | Kind                                    |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------- |
+| `photo_requests` — one open request per pair, not to oneself, message 1–300 chars, answered ⇔ `responded_at`; parties read only | L3      | table (member SELECT only)              |
+| `photo_grants` — owner → grantee, `photo_id` null = all eligible photos, one live grant per pair; parties read only             | L3      | table (member SELECT only)              |
+| `app.has_photo_grant`, `app.photo_variant_readable` (the rule), `app.can_read_photo_object` (the rule by exact Storage path)    | L3      | functions (authenticated, service_role) |
+| Storage policy `photos_bucket_select_authorised_viewer` on `storage.objects` (guarded; no-op without the storage schema)        | L3      | storage policy                          |
+
+**The rule** (company decision 2): approved, not deleted, viewer may view the
+profile (`app.can_view_profile`), and by visibility — `public`: every object;
+`blurred`: the blurred file only, the rest with a grant; `on_request`: nothing
+without a grant; `private`: nothing, ever, grant or not. **Interpretation
+flagged for confirmation:** a grant reveals `blurred` and `on_request` photos,
+never `private` ones (so setting a photo private is also how an owner
+withdraws a grant), and a declined request blocks a new one for 30 days.
+
+### Behaviour changes a caller could notice
+
+- None for an existing caller: the tables are new and the Storage policy only
+  ADDS read access, for the objects the rule allows.
+- On Supabase, a signed-in member can now sign (and so download) another
+  member's allowed photo objects directly from Storage — exactly the objects
+  the API would return. This is the intended effect of decision 2.
+
+### Safety for existing data
+
+- No existing row is read or rewritten. Existing photos are `private` by
+  default (A1), so nothing becomes visible to anyone until an owner chooses a
+  wider visibility and a moderator approves the photo.
+
+### Release order and compatibility
+
+**… → 0030 → 0031 → Phase 5 API.** 0031 can be applied in the same
+`migrate` run as 0028–0030.
+
+| Database   | Phase 1–4 API                                     | Phase 5 API                                                                                                      |
+| ---------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| up to 0030 | works                                             | `/profiles/{id}/photos`, photo requests fail (functions and tables missing). **Do not deploy before 0031.**      |
+| 0031       | works (new tables unused; policy only adds reads) | **works on PGlite**; on Supabase, signing another member's photo depends on the Storage policy — verify it there |
+
+### What `verify:db` checks for Phase 5
+
+`services/api/scripts/phase5-photo-checks.ts`, called from `verify-db.ts`:
+both tables exist with RLS enabled and forced, `authenticated` holds SELECT
+and nothing else, `anon` nothing; the three functions exist and `anon` cannot
+execute them; the rule's body still refuses private and unapproved photos and
+still calls `app.can_view_profile`; and, **on a Supabase database only**, that
+`photos_bucket_select_authorised_viewer` exists for SELECT and uses
+`app.can_read_photo_object` (on a database without the storage schema this
+check reports "verify on the hosted project" rather than passing silently).
+**Proven to fail:** `test/verify-phase5-photos.test.ts` — all pass on a correct
+database, the table and rule checks fail before 0031, and each of 7 single
+breakages fails its check.
+
+### Hosted verification still required (company)
+
+1. Apply 0031; run `verify:db`; confirm the Storage check passes (not the
+   "verify on the hosted project" message).
+2. With two test members: owner uploads, a moderator approves, owner sets
+   `blurred`. As the viewer, `GET /profiles/{owner}/photos` returns the
+   blurred URL and it downloads; a direct Storage sign request for the
+   original is refused.
+3. Request → approve → the original downloads; owner sets the photo
+   `private` → signing it is refused again.
+
+### Rollback implications (0031)
+
+| Change                           | Reversal                      | Data loss                             | Hazard                                                             |
+| -------------------------------- | ----------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
+| Storage viewer policy            | `drop policy`                 | None                                  | Cross-member photos stop working (back to the pre-L3 state). Safe. |
+| Rule functions                   | `drop function … cascade`     | None                                  | Drops the policy with them; the photo routes then fail (500).      |
+| `photo_requests`, `photo_grants` | Keep; stop the routes instead | Yes if dropped (who shared with whom) | A dropped grant table silently un-shares; harmless but surprising. |
 
 ---
 

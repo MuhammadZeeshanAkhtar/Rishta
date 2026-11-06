@@ -3,11 +3,14 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import type { Config } from './config';
 import { ApiError, internalError } from './errors';
+import { mapDatabaseError, problemCodeForStatus } from './http/problems';
 import authPlugin from './auth/plugin';
 import type { TokenVerifier } from './auth/verify';
 import type { Db } from './db/types';
 import type { StorageClient } from './storage/client';
 import { accountRoutes } from './routes/account';
+import { adminRoutes } from './routes/admin';
+import { meRoutes } from './routes/me';
 import { conversationRoutes } from './routes/conversations';
 import { discoveryRoutes } from './routes/discovery';
 import { familyRoutes } from './routes/family';
@@ -15,7 +18,9 @@ import { interestRoutes } from './routes/interests';
 import { matchRoutes } from './routes/matches';
 import { notificationRoutes } from './routes/notifications';
 import { photoRoutes } from './routes/photos';
+import { photoAccessRoutes } from './routes/photo-access';
 import { profileRoutes } from './routes/profile';
+import { publicProfileRoutes } from './routes/public-profile';
 import { referenceRoutes } from './routes/reference';
 import { safetyRoutes } from './routes/safety';
 import { captureException } from './observability/sentry';
@@ -125,6 +130,7 @@ export async function buildApp({
     'POST /interests',
     'POST /reports',
     'POST /family/invitations',
+    'POST /profiles/:userId/photo-request',
   ]);
   app.addHook('onRoute', (route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
@@ -168,6 +174,12 @@ export async function buildApp({
 
   app.setErrorHandler(async (error: FastifyError, request, reply) => {
     if (error instanceof ApiError) {
+      if (error.status >= 500) {
+        // Ours, not theirs: log the detail (review B15 — it may carry an
+        // upstream response) and report it. The body below carries none of it.
+        request.log.error({ err: error, cause: error.cause }, 'Internal error');
+        captureException(error);
+      }
       if (error.retryAfterSeconds !== undefined) {
         void reply.header('Retry-After', String(error.retryAfterSeconds));
       }
@@ -181,11 +193,24 @@ export async function buildApp({
         .send({ code: 'rate_limited', message: 'Too many requests. Please slow down.' });
     }
 
+    // REVIEW B21. Every Fastify 4xx used to come back as `validation_failed`,
+    // so a client could not tell "photo too large" from "bad field". The
+    // status is kept; the code now says which.
     if (typeof error.statusCode === 'number' && error.statusCode < 500) {
       return reply.code(error.statusCode).send({
-        code: 'validation_failed',
+        code: problemCodeForStatus(error.statusCode, error.code),
         message: error.message,
       });
+    }
+
+    // REVIEW B14. A database error the CALLER caused — a malformed id, a
+    // duplicate, a violated invariant, a write the row policy refuses — is a
+    // 4xx, not a 500 and a Sentry alert. Logged at warn, never reported as an
+    // exception, and the Postgres text is never returned.
+    const mapped = mapDatabaseError(error);
+    if (mapped) {
+      request.log.warn({ pgCode: (error as { code?: string }).code }, 'database refused request');
+      return reply.code(mapped.status).send(mapped.toBody());
     }
 
     // Unexpected. Log and report the detail; return none of it. An error
@@ -207,12 +232,21 @@ export async function buildApp({
   await app.register(accountRoutes, { db });
   await app.register(referenceRoutes, { db });
   await app.register(profileRoutes, { db });
+  // Review L4: another member's profile, permission-filtered.
+  await app.register(publicProfileRoutes, { db });
+  // Review L10: account self-service (entitlements, quotas, devices, lifecycle,
+  // notification preferences, push tokens).
+  await app.register(meRoutes, { db });
   await app.register(photoRoutes, { db, storage });
+  // Review L3: another member's photos and photo requests (0031).
+  await app.register(photoAccessRoutes, { db, storage });
   await app.register(discoveryRoutes, { db });
   await app.register(interestRoutes, { db });
   await app.register(matchRoutes, { db });
   await app.register(notificationRoutes, { db });
   await app.register(safetyRoutes, { db });
+  // Review L1: the moderation backend. Staff only; see routes/admin.ts.
+  await app.register(adminRoutes, { db, storage });
   await app.register(familyRoutes, { db });
   await app.register(conversationRoutes, { db });
 

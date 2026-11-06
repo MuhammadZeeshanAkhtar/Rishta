@@ -3,6 +3,7 @@ import { badRequest, notFound } from '../errors';
 import { requireAuthContext } from '../auth/plugin';
 import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
+import { isUuid } from '../http/params';
 
 /**
  * The notification inbox.
@@ -159,7 +160,7 @@ export const notificationRoutes: FastifyPluginAsync<NotificationRoutesOptions> =
       const auth = requireAuthContext(request);
       const params = request.params as { notificationId?: string };
       const notificationId = params.notificationId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(notificationId)) throw badRequest('Invalid notification id');
+      if (!isUuid(notificationId)) throw badRequest('Invalid notification id');
 
       const updated = await db.asUser(auth.authUserId, async (session) => {
         // Existence is checked through the same RLS-scoped read that the

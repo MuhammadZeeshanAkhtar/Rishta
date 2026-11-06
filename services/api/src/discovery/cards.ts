@@ -191,9 +191,13 @@ export async function buildCards(
       compatibilityScore: row.overall === null ? null : Number.parseFloat(row.overall),
       topReasons: byCandidate.get(row.user_id) ?? [],
       verification: {
+        // REVIEW B20. Which checks a member passed, never WHEN. A timestamp
+        // tells another member when someone verified or was reviewed, and
+        // `/me` deliberately exposes booleans only. `earnedAt` stays in the
+        // shape (the contract has it nullable) and is always null on a card.
         badges: badges
           .filter(([, earnedAt]) => earnedAt !== null)
-          .map(([key, earnedAt]) => ({ key, earnedAt })),
+          .map(([key]) => ({ key, earnedAt: null })),
       },
       isShortlisted: shortlisted.has(row.user_id),
     };

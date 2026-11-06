@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FREE_PLAN_ENTITLEMENTS } from '@nikahmate/domain';
 import { grantEntitlement } from '../src/entitlements/service';
 import { authHeader, createHarness, randomAuthId, type TestHarness } from './helpers';
+import { memberLocalDate } from '../src/db/sql';
 
 /**
  * `POST /interests` and withdrawal.
@@ -70,7 +71,7 @@ const quotaUsed = async (userId: string): Promise<number> => {
   const rows = await harness.raw.query<{ count: number }>(
     `select count from public.usage_counters
       where user_id = $1::uuid and counter_key = 'daily_interests'
-        and period_start = current_date`,
+        and period_start = ${memberLocalDate('$1::uuid')}`,
     [userId],
   );
   return rows.rows[0]?.count ?? 0;

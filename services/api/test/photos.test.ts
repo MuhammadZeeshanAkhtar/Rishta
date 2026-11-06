@@ -68,6 +68,20 @@ const req = (
   });
 
 /** Upload target → simulated client upload → finalize. */
+/**
+ * A moderator's approval. Since review B5 nothing is approved on upload: a
+ * finalized photo waits in the moderation queue. Tests that need an approved
+ * photo say so explicitly; the moderation route itself is tested in
+ * review-phase3.test.ts.
+ */
+async function approve(photoId: string): Promise<void> {
+  await harness.raw.query(
+    `update public.photos set moderation_status = 'approved', moderated_at = now()
+      where id = $1::uuid`,
+    [photoId],
+  );
+}
+
 async function uploadPhoto(auth = authId): Promise<{ photoId: string; path: string }> {
   const created = await req('POST', '/me/photos/upload-url', auth, {
     contentType: 'image/jpeg',
@@ -178,8 +192,9 @@ describe('declared content type must match the decoded image', () => {
   ] as const)('accepts %s when the file really is %s', async (declared, format) => {
     // R1: before the client fix the app declared image/jpeg for everything,
     // so the PNG and WebP cases here were exactly what broke.
+    // Accepted, then queued for human review (review B5) — not approved.
     const result = await uploadAs(declared, await encoded(format));
-    expect(result).toEqual({ created: 201, finalized: 202, moderation: 'approved' });
+    expect(result).toEqual({ created: 201, finalized: 202, moderation: 'pending' });
   });
 
   it.each([
@@ -299,6 +314,14 @@ describe('visibility and urls', () => {
     expect(before.urls.full).toBeNull();
 
     await req('POST', `/me/photos/${photoId}/finalize`, localAuth);
+    const finalized = (await req('GET', '/me/photos', localAuth))
+      .json()
+      .items.find((p: { id: string }) => p.id === photoId);
+    // Finalized is not approved (review B5): still no full URL.
+    expect(finalized.moderationStatus).toBe('pending');
+    expect(finalized.urls.full).toBeNull();
+
+    await approve(photoId);
     const after = (await req('GET', '/me/photos', localAuth))
       .json()
       .items.find((p: { id: string }) => p.id === photoId);
@@ -344,6 +367,9 @@ describe('primary, order and delete', () => {
   it('keeps exactly one primary photo', async () => {
     const first = await uploadPhoto(localAuth);
     const second = await uploadPhoto(localAuth);
+    // Only an approved photo can be primary (review B13).
+    await approve(first.photoId);
+    await approve(second.photoId);
 
     await req('PATCH', `/me/photos/${first.photoId}`, localAuth, { isPrimary: true });
     await req('PATCH', `/me/photos/${second.photoId}`, localAuth, { isPrimary: true });

@@ -568,26 +568,32 @@ describe('marking read', () => {
 // Boundaries
 // ---------------------------------------------------------------------------
 
-describe('nothing beyond the inbox', () => {
-  it('has no push, preferences or token tables', async () => {
-    const rows = await harness.raw.query<{ n: string }>(
-      `select count(*)::text as n from information_schema.tables
-        where table_schema = 'public'
-          and table_name in ('push_tokens', 'notification_preferences')`,
+describe('preferences and push tokens (built in review Phase 4, L10)', () => {
+  // These used to assert the tables and endpoints did not exist. Migration
+  // 0030 added them; what must hold is who may reach them.
+  it('keeps push tokens out of every member role', async () => {
+    const rows = await harness.raw.query<{ can: boolean }>(
+      `select has_table_privilege('authenticated', 'public.push_tokens', 'SELECT')
+           or has_table_privilege('anon', 'public.push_tokens', 'SELECT') as can`,
     );
-    expect(Number.parseInt(rows.rows[0]!.n, 10)).toBe(0);
+    expect(rows.rows[0]!.can).toBe(false);
   });
 
-  it('exposes no notification-preferences endpoint', async () => {
+  it('serves notification preferences to their owner, defaulting to on', async () => {
     const member = await seedMember('female');
-    for (const method of ['GET', 'PUT'] as const) {
-      const response = await harness.app.inject({
-        method,
-        url: '/me/notification-preferences',
-        headers: authHeader(member.authId),
-        payload: {},
-      });
-      expect([404, 405], method).toContain(response.statusCode);
-    }
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/me/notification-preferences',
+      headers: authHeader(member.authId),
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    const body = response.json() as { types: { inApp: boolean; push: boolean }[] };
+    expect(body.types.length).toBeGreaterThan(0);
+    expect(body.types.every((t) => t.inApp && t.push)).toBe(true);
+    const anonymous = await harness.app.inject({
+      method: 'GET',
+      url: '/me/notification-preferences',
+    });
+    expect(anonymous.statusCode).toBe(401);
   });
 });

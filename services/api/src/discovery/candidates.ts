@@ -415,6 +415,109 @@ const DEFAULT_LIMIT = 500;
  * is a later decision (ADR 0007 is deferred, and pg-boss is not installed);
  * this is what that job, or an API route, will call.
  */
+/**
+ * What the filter step reads about the viewer: their own row, their partner
+ * preferences, and which criteria they marked hard. Shared by generation and
+ * by the preference-impact count, so both filter on exactly the same inputs.
+ */
+async function loadFilterInputs(
+  session: DbSession,
+  viewerUserId: string,
+): Promise<{
+  viewerRow: CandidateRow & PreferencesRow & { height_cm: number | null };
+  prefs: PreferencesRow;
+  rules: PreferenceRule[];
+} | null> {
+  const viewerRows = await session.query<
+    CandidateRow & PreferencesRow & { height_cm: number | null }
+  >(
+    `select ${CANDIDATE_COLUMNS}, p.height_cm
+       from public.profiles p
+       join public.users u on u.id = p.user_id
+       left join public.user_locations l on l.user_id = p.user_id
+      where p.user_id = $1::uuid and p.deleted_at is null`,
+    [viewerUserId],
+  );
+  const viewerRow = viewerRows[0];
+  if (!viewerRow) return null;
+
+  const prefRows = await session.query<PreferencesRow>(
+    `select ${PREFERENCE_COLUMNS} from public.partner_preferences where user_id = $1::uuid`,
+    [viewerUserId],
+  );
+  const prefs = prefRows[0] ?? ({} as PreferencesRow);
+
+  const ruleRows = await session.query<{
+    criterion: string;
+    is_hard: boolean;
+    weight: string | number;
+  }>(`select criterion, is_hard, weight from public.preference_rules where user_id = $1::uuid`, [
+    viewerUserId,
+  ]);
+  const rules: PreferenceRule[] = ruleRows.map((r) => ({
+    criterion: r.criterion,
+    isHard: r.is_hard,
+    weight: typeof r.weight === 'number' ? r.weight : Number.parseFloat(r.weight),
+  }));
+  return { viewerRow, prefs, rules };
+}
+
+/** Counts stop here; a pool this large is "plenty", and an exact figure costs a scan. */
+export const IMPACT_COUNT_CAP = 1000;
+
+export interface PreferenceImpact {
+  matchingProfiles: number;
+  withoutHardFilters: number;
+  narrowestCriteria: Array<{ criterion: string; excludedCount: number }>;
+  /** True when a count reached IMPACT_COUNT_CAP, so it means "at least". */
+  capped: boolean;
+}
+
+/**
+ * How many profiles the viewer's preferences admit — review L10,
+ * `GET /me/preferences/impact`.
+ *
+ * Runs the SAME `selectEligible` filter discovery uses (blocks, visibility,
+ * pause/incognito, gender, age/height ranges, hard criteria): once with every
+ * hard criterion, once with none, and once per hard criterion without it — so
+ * `excludedCount` is how many more profiles loosening that one criterion would
+ * admit. Counts are capped at IMPACT_COUNT_CAP.
+ */
+export async function countEligible(db: Db, viewerUserId: string): Promise<PreferenceImpact> {
+  return db.asService('compatibility.write_scores', async (session) => {
+    const inputs = await loadFilterInputs(session, viewerUserId);
+    if (!inputs) {
+      return { matchingProfiles: 0, withoutHardFilters: 0, narrowestCriteria: [], capped: false };
+    }
+    const { viewerRow, prefs, rules } = inputs;
+    const hard = [...new Set(rules.filter((r) => r.isHard).map((r) => r.criterion))];
+    const count = async (criteria: readonly string[]): Promise<number> =>
+      (
+        await selectEligible(session, viewerUserId, viewerRow.gender, prefs, {
+          hardCriteria: criteria,
+          limit: IMPACT_COUNT_CAP,
+        })
+      ).length;
+
+    const matching = await count(hard);
+    const withoutHard = await count([]);
+    const narrowest: Array<{ criterion: string; excludedCount: number }> = [];
+    for (const criterion of hard) {
+      const without = await count(hard.filter((c) => c !== criterion));
+      narrowest.push({ criterion, excludedCount: Math.max(0, without - matching) });
+    }
+    narrowest.sort(
+      (a, b) => b.excludedCount - a.excludedCount || a.criterion.localeCompare(b.criterion),
+    );
+    return {
+      matchingProfiles: matching,
+      withoutHardFilters: withoutHard,
+      narrowestCriteria: narrowest,
+      capped: withoutHard >= IMPACT_COUNT_CAP,
+    };
+  });
+}
+
 export async function generateCandidates(
   db: Db,
   viewerUserId: string,
@@ -428,40 +531,11 @@ export async function generateCandidates(
   const { viewer, eligible, rules } = await db.asService(
     'compatibility.write_scores',
     async (session) => {
-      const viewerRows = await session.query<
-        CandidateRow & PreferencesRow & { height_cm: number | null }
-      >(
-        `select ${CANDIDATE_COLUMNS}, p.height_cm
-           from public.profiles p
-           join public.users u on u.id = p.user_id
-           left join public.user_locations l on l.user_id = p.user_id
-          where p.user_id = $1::uuid and p.deleted_at is null`,
-        [viewerUserId],
-      );
-      const viewerRow = viewerRows[0];
-      if (!viewerRow) {
+      const inputs = await loadFilterInputs(session, viewerUserId);
+      if (!inputs) {
         return { viewer: null, eligible: [] as CandidateRow[], rules: [] as PreferenceRule[] };
       }
-
-      const prefRows = await session.query<PreferencesRow>(
-        `select ${PREFERENCE_COLUMNS} from public.partner_preferences where user_id = $1::uuid`,
-        [viewerUserId],
-      );
-      const prefs = prefRows[0] ?? ({} as PreferencesRow);
-
-      const ruleRows = await session.query<{
-        criterion: string;
-        is_hard: boolean;
-        weight: string | number;
-      }>(
-        `select criterion, is_hard, weight from public.preference_rules where user_id = $1::uuid`,
-        [viewerUserId],
-      );
-      const parsedRules: PreferenceRule[] = ruleRows.map((r) => ({
-        criterion: r.criterion,
-        isHard: r.is_hard,
-        weight: typeof r.weight === 'number' ? r.weight : Number.parseFloat(r.weight),
-      }));
+      const { viewerRow, prefs, rules: parsedRules } = inputs;
 
       const candidates = await selectEligible(session, viewerUserId, viewerRow.gender, prefs, {
         hardCriteria: parsedRules.filter((r) => r.isHard).map((r) => r.criterion),
@@ -674,6 +748,7 @@ export async function ensureCandidates(
   viewerUserId: string,
   section: DiscoverySection = 'recommended',
   options: GenerateOptions = {},
+  claim: { cooldownMinutes?: number } = {},
 ): Promise<EnsureReport> {
   // THE CLAIM. One statement, and the race is decided by Postgres rather than
   // by read-then-write in the application.
@@ -704,7 +779,7 @@ export async function ensureCandidates(
                       < now() - make_interval(mins => $4::int)
               )
         returning user_id`,
-      [viewerUserId, section, COOLDOWN_MINUTES, STALE_MINUTES],
+      [viewerUserId, section, claim.cooldownMinutes ?? COOLDOWN_MINUTES, STALE_MINUTES],
     );
     return rows.length > 0;
   });

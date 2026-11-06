@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { findContactDetails } from '@nikahmate/domain';
 import { badRequest, conflict, notFound, quotaExhausted } from '../errors';
 import { requireAuthContext } from '../auth/plugin';
 import { loadEntitlements, valueOf } from '../entitlements/service';
 import { interestAccepted, interestReceived, newMatch, notify } from '../notifications/service';
 import type { Db, DbSession } from '../db/types';
+import { memberLocalDate } from '../db/sql';
 import {
   CARDS_BY_USER_IDS,
   buildCards,
@@ -13,6 +15,7 @@ import {
   parseLimit,
   type CardRow,
 } from '../discovery/cards';
+import { isUuid } from '../http/params';
 
 /**
  * Interests — send, withdraw and read.
@@ -144,6 +147,17 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
 
     const { recipientUserId, note } = parsed.data;
 
+    // REVIEW L9 (company decision 3, strict). A note reaches the recipient
+    // before any match, so it must not carry a phone number, an email, a
+    // link, a handle or a messaging/social platform. Refused before anything
+    // is written or any quota is spent. The field-level reason lets a client
+    // explain it; the note itself is never echoed back.
+    if (note !== undefined && findContactDetails(note).length > 0) {
+      throw badRequest('An interest note cannot include contact details', {
+        note: 'contact_details_not_allowed',
+      });
+    }
+
     const senderUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!senderUserId) throw notFound('Profile not found');
     // Checked before the transaction because it needs no data: a self-interest
@@ -195,9 +209,15 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       //    only one of them can be the sixth.
       if (limit <= 0) throw quotaExhausted('Daily interest limit reached');
 
+      // REVIEW B23. The day is the SENDER's day, not the database's: with
+      // `current_date` (UTC) a member in Pakistan got a fresh allowance at
+      // 5 AM. The contract already promised "midnight in the user's
+      // timezone". A zone Postgres does not recognise (members can write the
+      // column through the Data API) falls back to UTC rather than failing
+      // the send.
       const counted = await session.query<{ count: number }>(
         `insert into public.usage_counters (user_id, counter_key, period_start, count)
-         values ($1::uuid, $2::text, current_date, 1)
+         select $1::uuid, $2::text, ${memberLocalDate('$1::uuid')}, 1
          on conflict (user_id, counter_key, period_start)
            do update set count = public.usage_counters.count + 1
          returning count`,
@@ -292,7 +312,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       const auth = requireAuthContext(request);
       const params = request.params as { interestId?: string };
       const interestId = params.interestId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(interestId)) throw badRequest('Invalid interest id');
+      if (!isUuid(interestId)) throw badRequest('Invalid interest id');
 
       const parsed = respondSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('decision must be accept, decline or maybe_later');
@@ -645,7 +665,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
     const auth = requireAuthContext(request);
     const params = request.params as { interestId?: string };
     const interestId = params.interestId ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(interestId)) throw badRequest('Invalid interest id');
+    if (!isUuid(interestId)) throw badRequest('Invalid interest id');
 
     const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!viewerUserId) throw notFound('Interest not found');
@@ -678,7 +698,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       const auth = requireAuthContext(request);
       const params = request.params as { interestId?: string };
       const interestId = params.interestId ?? '';
-      if (!/^[0-9a-f-]{36}$/i.test(interestId)) throw badRequest('Invalid interest id');
+      if (!isUuid(interestId)) throw badRequest('Invalid interest id');
 
       const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!viewerUserId) throw notFound('Interest not found');

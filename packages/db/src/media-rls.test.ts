@@ -145,10 +145,15 @@ describe('photos', () => {
   });
 
   it('allows only one primary photo per person', async () => {
-    await db.admin(`update public.photos set is_primary = true where id = $1`, [photoId]);
+    // Both APPROVED: since 0029 (review B13) only an approved photo can be
+    // primary at all, and this test is about there being only one.
+    await db.admin(
+      `update public.photos set moderation_status = 'approved', is_primary = true where id = $1`,
+      [photoId],
+    );
     const second = await db.admin<{ id: string }>(
-      `insert into public.photos (user_id, storage_path, content_type)
-       values ($1::uuid, $1::text || '/p2/original.jpg', 'image/jpeg') returning id`,
+      `insert into public.photos (user_id, storage_path, content_type, moderation_status)
+       values ($1::uuid, $1::text || '/p2/original.jpg', 'image/jpeg', 'approved') returning id`,
       [alice.userId],
     );
     await expect(

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { authHeader, createHarness, randomAuthId, type TestHarness } from './helpers';
+import { memberLocalDate } from '../src/db/sql';
 
 /**
  * `POST /interests/{id}/respond`, and the match an acceptance produces.
@@ -106,7 +107,7 @@ const quotaUsed = async (userId: string): Promise<number> => {
   const rows = await harness.raw.query<{ count: number }>(
     `select count from public.usage_counters
       where user_id = $1::uuid and counter_key = 'daily_interests'
-        and period_start = current_date`,
+        and period_start = ${memberLocalDate('$1::uuid')}`,
     [userId],
   );
   return rows.rows[0]?.count ?? 0;
@@ -556,20 +557,23 @@ describe('later slices remain unbuilt', () => {
     const { recipient, interestId } = await pending();
     const body = (await respond(recipient, interestId, 'accept')).json();
 
-    for (const [method, url] of [
-      // `unmatch` arrived in Slice 4 and is covered by unmatch.test.ts. What
-      // remains absent is a hard delete and anything family-review.
-      ['DELETE', `/matches/${body.match.id}`],
-      ['GET', `/matches/${body.match.id}/family-review`],
-      ['POST', `/matches/${body.match.id}/family-review`],
-    ] as const) {
-      const response = await harness.app.inject({
-        method,
-        url,
-        headers: authHeader(recipient.authId),
-        payload: {},
-      });
-      expect([404, 405], `${method} ${url}`).toContain(response.statusCode);
-    }
+    // `unmatch` arrived in Slice 4 (unmatch.test.ts); family review in review
+    // Phase 4 (review-phase4.test.ts). A HARD delete of a match still does not
+    // exist, and must not: the history of a match is evidence.
+    const hardDelete = await harness.app.inject({
+      method: 'DELETE',
+      url: `/matches/${body.match.id}`,
+      headers: authHeader(recipient.authId),
+      payload: {},
+    });
+    expect([404, 405]).toContain(hardDelete.statusCode);
+    // And a re-request on a match no family reviews has nothing to re-request.
+    const again = await harness.app.inject({
+      method: 'POST',
+      url: `/matches/${body.match.id}/family-review`,
+      headers: authHeader(recipient.authId),
+      payload: {},
+    });
+    expect(again.statusCode).toBe(409);
   });
 });

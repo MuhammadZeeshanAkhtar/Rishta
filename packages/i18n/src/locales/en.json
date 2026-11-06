@@ -258,6 +258,7 @@
     "unknown": "Something went wrong. Please try again.",
     "server": "We could not reach NikahMate. Please try again shortly.",
     "sessionExpired": "Your session has expired. Please sign in again.",
+    "linkOtherDevice": "This link was opened on a different device or browser from the one you signed up on. Open it there, or request a new link from this device.",
     "invalidCredentials": "That email or password did not match. Please check and try again.",
     "emailNotConfirmed": "Please verify your email before signing in.",
     "emailTaken": "An account already exists for that email. Try signing in.",
@@ -269,7 +270,16 @@
     "notFound": "We could not find that.",
     "conflict": "That has already been done.",
     "configMissing": "The app is not configured. Missing: {{values}}",
-    "photoUnreadable": "That file could not be read as an image. Try another."
+    "photoUnreadable": "That file could not be read as an image. Try another.",
+    "photoRejected": "This photo was not approved. Please choose a different photo.",
+    "profileRejected": "Your profile was not approved. Please review what you wrote and submit it again.",
+    "photoRejectedNotAPerson": "This photo was not approved: it needs to show you clearly.",
+    "photoRejectedInappropriate": "This photo was not approved: it does not meet our modesty and content guidelines.",
+    "photoRejectedContactDetails": "This photo was not approved: photos cannot include contact details.",
+    "photoRejectedQuality": "This photo was not approved: it is too unclear to recognise you. Please try a clearer one.",
+    "profileRejectedContactDetails": "Your profile was not approved: please remove contact details and submit it again.",
+    "profileRejectedInappropriate": "Your profile was not approved: some wording does not meet our guidelines. Please review it and submit again.",
+    "profileRejectedIncomplete": "Your profile was not approved: please add a little more about yourself and submit again."
   },
   "a11y": {
     "loading": "Loading",
@@ -358,7 +368,55 @@
     "emptyTitle": "Nothing new",
     "emptyBody": "Interests, matches and updates will appear here.",
     "unread": "Unread",
-    "justNow": "Just now"
+    "justNow": "Just now",
+    "photo_request": {
+      "title": "A request to see your photos",
+      "body": "A member has asked to see your photos. You decide."
+    },
+    "photo_request_answered": {
+      "title": "Your photo request was answered",
+      "body": "A member has responded to your request to see their photos."
+    },
+    "new_message": {
+      "title": "New message",
+      "body": "You have unread messages in a conversation."
+    },
+    "family_invitation": {
+      "title": "A family invitation",
+      "body": "A member has invited you to support them as family on NikahMate."
+    },
+    "family_invitation_answered": {
+      "title": "Your family invitation was answered",
+      "body": "The person you invited has responded."
+    },
+    "family_review_requested": {
+      "title": "A match is waiting for your review",
+      "body": "A family member you support has a new match to review."
+    },
+    "family_review_decided": {
+      "title": "Family review update",
+      "body": "There is an update on the family review of one of your matches."
+    },
+    "family_review_stalled": {
+      "title": "A family review is taking a while",
+      "body": "A review of your match is still waiting. You can ask your family again."
+    },
+    "stage_advance_proposed": {
+      "title": "A next step was suggested",
+      "body": "The other member has suggested moving your conversation to the next stage."
+    },
+    "verification_update": {
+      "title": "Verification update",
+      "body": "There is an update on your account verification."
+    },
+    "security_alert": {
+      "title": "Security alert",
+      "body": "There was important activity on your account. Please check it if this was not you."
+    },
+    "report_update": {
+      "title": "An update on your report",
+      "body": "Our team has reviewed a report you filed. Thank you for helping keep NikahMate safe."
+    }
   },
   "discovery": {
     "title": "Discover",
@@ -533,6 +591,22 @@
     "inviteSend": "Send invitation",
     "inviteSent": "Invitation created",
     "inviteTokenOnce": "Share this link with them now. For their safety it is shown once and cannot be retrieved later — if you lose it, cancel the invitation and send a new one.",
+    "inviteShare": "Share link",
+    "inviteShareMessage": "Assalamu alaikum. I would like you to join my family on NikahMate. Open this link in the app to accept: {{link}}",
+    "joinHeading": "Join a family",
+    "joinBody": "Accepting makes you a family member of the person who sent you this link, with the access they chose for you. Only accept a link from someone you know.",
+    "joinAccept": "Accept and join",
+    "joinDecline": "Decline",
+    "joinNotNow": "Not now",
+    "joinAccepted": "You have joined the family",
+    "joinDeclined": "Invitation declined",
+    "joinGoToFamily": "Go to Family",
+    "joinPasteBody": "Paste the invitation link you were sent.",
+    "joinPasteLabel": "Invitation link",
+    "joinInvalidLink": "That does not look like a NikahMate invitation link. Paste the whole link you were sent.",
+    "joinNotFound": "This invitation is no longer valid. It may have been used or cancelled. Ask for a new one.",
+    "joinExpired": "This invitation has expired. Ask for a new one.",
+    "joinOwn": "You cannot accept an invitation you sent yourself.",
     "invitationsTitle": "Invitations sent",
     "invitePending": "Waiting for a reply",
     "inviteExpired": "Expired",
@@ -609,6 +683,8 @@
     "stageFinal": "This is the final stage.",
     "leave": "Leave conversation",
     "leaveConfirm": "Leave this conversation? You will stop receiving messages. This does not end the match — you can do that from the match itself.",
+    "block": "Block",
+    "blockConfirm": "Block this person? You will no longer be able to message each other, and neither of you will see the other in Discover.",
     "closedPending_family_review": "Waiting for family approval before this conversation can begin.",
     "closedFamily_rejected": "Your family declined this match, so messages are closed.",
     "closedFamily_revoked": "Family approval was withdrawn. You can still read what was said.",
@@ -616,8 +692,252 @@
     "closedMatch_ended": "This match has ended. You can still read what was said.",
     "closedArchived": "This conversation is archived.",
     "closedLeft": "You left this conversation.",
+    "closedCounterpart_left": "The other person has left this conversation. It is closed for both of you.",
     "closedRead_only": "You can read this conversation but not write in it.",
     "errorLoad": "Could not load your conversations.",
     "errorSend": "That message did not send. Please try again."
+  },
+  "publicProfile": {
+    "unavailableTitle": "This profile is not available",
+    "unavailableBody": "It may have been hidden, paused or removed. There is nothing more to see here.",
+    "aboutTitle": "About",
+    "detailsTitle": "Details",
+    "fact": {
+      "age": "Age",
+      "country": "Lives in",
+      "maritalStatus": "Marital status",
+      "religiousPractice": "Practice",
+      "marriageTimeline": "Marriage timeline",
+      "relocation": "Relocation",
+      "children": "Children",
+      "languages": "Languages"
+    },
+    "hiddenFields": "{{count}} details are kept private or shared only after a match.",
+    "hiddenFieldsMatch": "{{count}} details are kept private by this member.",
+    "matched": "You are matched",
+    "interestPending": "Interest pending"
+  },
+  "photoAccess": {
+    "title": "Photos",
+    "subtitle": "Shown only as this member allows.",
+    "photoAlt": "Photo of {{name}}",
+    "blurredAlt": "Blurred photo of {{name}}",
+    "lockedAlt": "A photo shared only on request",
+    "lockedCount": "{{count}} photos are shared only on request.",
+    "request": "Ask to see photos",
+    "messageLabel": "A short message (optional)",
+    "messageHint": "Up to 300 characters. Contact details are not allowed.",
+    "send": "Send request",
+    "sent": "Your request was sent. You will be notified when they respond.",
+    "pending": "Request sent",
+    "declined": "Your request was declined. You can ask again later.",
+    "granted": "Photos shared with you",
+    "contactDetails": "Your message cannot include a phone number, email, link or social media handle."
+  },
+  "photoRequests": {
+    "title": "Photo requests",
+    "subtitle": "Requests to see your photos, and the ones you have sent.",
+    "incoming": "Received",
+    "outgoing": "Sent",
+    "approveExplains": "Approving shares your blurred and on-request photos with that member. Private photos are never shared, and making a photo private later withdraws it.",
+    "approve": "Share photos",
+    "decline": "Decline",
+    "empty": {
+      "incoming": "No requests received",
+      "outgoing": "No requests sent"
+    },
+    "emptyBody": "Photo requests will appear here.",
+    "status": {
+      "pending": "Waiting",
+      "approved": "Shared",
+      "declined": "Declined",
+      "withdrawn": "Withdrawn"
+    },
+    "openRow": "Photo requests",
+    "openRowHint": "Who has asked to see your photos"
+  },
+  "dobCorrection": {
+    "title": "Date of birth",
+    "subtitle": "Your date of birth is locked once your profile is complete. To correct a mistake, send a request to our support team.",
+    "currentTitle": "Your date of birth",
+    "notSet": "Not set",
+    "lockedExplains": "Locked. Our support team can correct it after checking a document, and every correction is recorded.",
+    "editInProfile": "You can still change it in your profile until it is complete.",
+    "formTitle": "Request a correction",
+    "requestedDob": "Correct date of birth",
+    "reason": "Why does it need correcting?",
+    "reasonHint": "At least 10 characters. Support may ask you for a document to confirm it.",
+    "submit": "Send request",
+    "submitted": "Your request was sent to our support team.",
+    "openTitle": "Request in review",
+    "openExplains": "You can send another request once this one has been decided.",
+    "lastDecision": "Last request",
+    "requested": "Requested: {{date}}",
+    "reasonFromSupport": "Reason from support: {{reason}}",
+    "status": {
+      "pending": "In review",
+      "approved": "Approved",
+      "rejected": "Not approved"
+    },
+    "sameAsCurrent": "This is already your date of birth.",
+    "reasonTooShort": "Please explain in at least 10 characters.",
+    "reasonTooLong": "Please keep it under 1,000 characters.",
+    "openRow": "Date of birth",
+    "openRowHint": "Request a correction"
+  },
+  "admin": {
+    "console": "NikahMate staff",
+    "homeTitle": "Moderation",
+    "homeSubtitle": "Signed in as: {{roles}}",
+    "queueEmpty": "Nothing waiting",
+    "role": {
+      "moderator": "Moderator",
+      "support": "Support",
+      "admin": "Administrator"
+    },
+    "area": {
+      "photos": "Photos",
+      "profiles": "Profiles",
+      "reports": "Reports",
+      "users": "Members",
+      "dobCorrections": "Date of birth",
+      "audit": "Audit log"
+    },
+    "areaHint": {
+      "photos": "Uploaded photos waiting for review, oldest first.",
+      "profiles": "Submitted and edited profiles waiting for review.",
+      "reports": "Reports from members: triage, action or dismiss.",
+      "users": "A member’s history, and warnings, suspensions and bans.",
+      "dobCorrections": "Requests to correct a locked date of birth.",
+      "audit": "Every staff decision, by whom and why."
+    },
+    "gate": {
+      "signedOutTitle": "Sign in to continue",
+      "signedOutBody": "Your session has ended. Sign in with your staff account.",
+      "notStaffTitle": "Not available",
+      "notStaffBody": "This account does not have access to the staff console.",
+      "forbiddenTitle": "Access not permitted",
+      "forbiddenBody": "Your staff account is not permitted to use this area. Ask an administrator if this is unexpected.",
+      "errorTitle": "Could not reach NikahMate",
+      "errorBody": "Check your connection and try again."
+    },
+    "mfa": {
+      "title": "Two-step verification",
+      "subtitle": "Staff must confirm a code from an authenticator app.",
+      "verifyExplains": "Open your authenticator app and enter the 6-digit code for NikahMate.",
+      "verifyStart": "Enter a code",
+      "enrolExplains": "Set up an authenticator app. You will scan a code (or enter a key), then confirm with a 6-digit code.",
+      "enrolStart": "Set up authenticator",
+      "qrAlt": "QR code for your authenticator app",
+      "codeLabel": "6-digit code",
+      "codeFormat": "Enter the 6 digits from your app.",
+      "codeWrong": "That code did not match. Try the current code.",
+      "startFailed": "Two-step verification could not be started. Please try again.",
+      "verify": "Verify"
+    },
+    "meta": {
+      "member": "Member",
+      "submitted": "Submitted"
+    },
+    "photos": {
+      "imageAlt": "Photo awaiting review",
+      "noImage": "The image could not be loaded."
+    },
+    "dob": {
+      "verifyOutside": "Check the member’s identity document before approving. Approval changes their date of birth.",
+      "memberReason": "Member’s reason"
+    },
+    "decision": {
+      "label": "Decision",
+      "approve": "Approve",
+      "reject": "Reject",
+      "chooseOne": "Choose a decision.",
+      "reasonLabel": "Reason shown to the member",
+      "reasonHint": "The member sees this wording.",
+      "reasonRequired": "Choose the reason the member will see.",
+      "noteLabel": "Note for the audit log",
+      "noteHint": "Why you decided this. Recorded with your name; never shown to the member.",
+      "noteLabelDob": "Note",
+      "noteHintDob": "Recorded with your name. If you reject, the member sees this note as the reason.",
+      "noteRequired": "Write a note of at least 5 characters.",
+      "noteTooLong": "Keep the note under 1,000 characters.",
+      "submit": "Record decision"
+    },
+    "decided": {
+      "approve": "Approved and recorded.",
+      "reject": "Rejected and recorded."
+    },
+    "reports": {
+      "filter": "Show",
+      "status": {
+        "open": "Open",
+        "triaged": "Triaged",
+        "actioned": "Actioned",
+        "dismissed": "Dismissed"
+      },
+      "reported": "Reported member",
+      "reporter": "Reported by",
+      "context": "Context",
+      "actOnMember": "Open reported member",
+      "moveTo": "Move to",
+      "outcome": "Outcome",
+      "outcomes": {
+        "actioned": "Action taken",
+        "no_violation": "No violation found",
+        "insufficient_evidence": "Not enough evidence"
+      },
+      "updated": "Report updated and recorded."
+    },
+    "users": {
+      "lookupLabel": "Member ID",
+      "lookupHint": "From a queue or a report.",
+      "lookupInvalid": "Enter a full member ID.",
+      "open": "Open member",
+      "openHistory": "Member history",
+      "history": "History",
+      "noHistory": "No staff decisions recorded for this member.",
+      "actionTitle": "Account action",
+      "actionLabel": "Action",
+      "action": {
+        "warn": "Warn",
+        "suspend": "Suspend",
+        "ban": "Ban",
+        "clear": "Lift suspension or ban"
+      },
+      "chooseAction": "Choose an action.",
+      "reasonLabel": "Reason",
+      "reasonHint": "Required. Recorded with your name, so the decision can be reviewed or appealed.",
+      "endLabel": "Suspension ends (optional)",
+      "endHint": "YYYY-MM-DD. Recorded with the action; it is not lifted automatically yet.",
+      "endOnlyForSuspend": "An end date applies only to a suspension.",
+      "endInPast": "Choose a date in the future.",
+      "hidesEverywhere": "The member will be hidden from everyone immediately.",
+      "apply": "Apply action",
+      "done": "Recorded. Account status: {{status}}.",
+      "status": {
+        "active": "active",
+        "deactivated": "deactivated",
+        "suspended": "suspended",
+        "banned": "banned",
+        "pending_deletion": "pending deletion",
+        "onboarding": "onboarding"
+      }
+    },
+    "audit": {
+      "filter": "Show",
+      "targets": {
+        "all": "Everything",
+        "user": "Members",
+        "profile": "Profiles",
+        "photo": "Photos",
+        "report": "Reports"
+      },
+      "when": "When",
+      "by": "By",
+      "target": "Target",
+      "reason": "Reason",
+      "empty": "No decisions recorded yet.",
+      "more": "Load more"
+    }
   }
 }

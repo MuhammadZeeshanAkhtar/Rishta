@@ -8,8 +8,10 @@ import {
 } from '@nikahmate/domain';
 import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
-import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
+import { parseLimit } from '../discovery/cards';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import type { Db, DbSession } from '../db/types';
+import { uuidParam } from '../http/params';
 
 /**
  * Conversations and messages (Phase 7, ERD §11).
@@ -52,6 +54,8 @@ interface ThreadRow {
   blocked: boolean;
   can_write_flag: boolean;
   left: boolean;
+  /** The OTHER participant has left (review B25). */
+  counterpart_left: boolean;
   unread_count: number;
   last_preview: string | null;
   position: number;
@@ -67,6 +71,11 @@ interface ThreadRow {
 function writeBlockedReason(row: ThreadRow): WriteBlockedReason | null {
   if (row.left) return 'left';
   if (row.blocked) return 'blocked';
+  // REVIEW B25. Leaving closes the conversation for BOTH participants, and
+  // permanently. Before this the one left behind could keep writing into a
+  // thread the leaver could no longer open. The database refuses it too
+  // (0028, app.can_write_message), so this is the reason, not the control.
+  if (row.counterpart_left) return 'counterpart_left';
   if (row.match_ended) return 'match_ended';
   if (row.status !== 'active') return 'archived';
   if (!row.can_write_flag) return 'read_only';
@@ -106,6 +115,12 @@ const THREAD_SELECT = `
          app.is_blocked(m.user_a_id, m.user_b_id) as blocked,
          me.can_write as can_write_flag,
          (me.left_at is not null) as left,
+         exists (
+           select 1 from public.conversation_participants other
+            where other.conversation_id = c.id
+              and other.user_id <> app.current_user_id()
+              and other.left_at is not null
+         ) as counterpart_left,
          (
            select count(*)::int
              from public.messages msg
@@ -227,21 +242,29 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
     const auth = requireAuthContext(request);
     const query = request.query as { cursor?: string; limit?: string };
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const { page, viewerUserId } = await db.asUser(auth.authUserId, async (session) => {
       // Newest traffic first, with threads nobody has spoken in falling back
       // to when they opened — a brand-new match should not sort below a
       // conversation that went quiet a month ago.
-      const rows = await session.query<ThreadRow>(
-        `select *, (row_number() over (
-                      order by coalesce(last_message_at, created_at) desc, id
-                    ))::int - 1 as position
+      //
+      // REVIEW B10. Keyset on (activity time, id) instead of an offset into
+      // row_number(): a new message no longer shifts every later thread by
+      // one, so a page never repeats a thread. A thread that gets a message
+      // WHILE the list is being paged moves above the cursor and shows at the
+      // top on the next refresh — inherent to a list sorted by activity.
+      const rows = await session.query<ThreadRow & { cursor_at: string }>(
+        `select threads.*,
+                ${keysetTime('coalesce(threads.last_message_at, threads.created_at)')} as cursor_at
            from (${THREAD_SELECT}) threads
-          order by position
-          limit ${limit + 1} offset coalesce($1::int + 1, 0)`,
-        [after],
+          where $1::timestamptz is null
+             or (coalesce(threads.last_message_at, threads.created_at), threads.id)
+                < ($1::timestamptz, $2::uuid)
+          order by coalesce(threads.last_message_at, threads.created_at) desc, threads.id desc
+          limit ${limit + 1}`,
+        [after?.at ?? null, after?.id ?? null],
       );
       return { page: rows, viewerUserId: await resolveViewer(session) };
     });
@@ -260,7 +283,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
 
     return {
       items: rows.map((row) => toSummary(row, names.get(row.counterpart_user_id) ?? null)),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });
@@ -269,7 +292,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
 
   fastify.get('/conversations/:id', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
-    const { id } = request.params as { id: string };
+    const id = uuidParam(request, 'id', 'conversation id');
 
     const thread = await loadThread(auth.authUserId, id);
     if (!thread) throw notFound('Conversation not found');
@@ -316,10 +339,10 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'conversation id');
       const query = request.query as { cursor?: string; limit?: string };
       const limit = parseLimit(query.limit);
-      const after = decodeCursor(query.cursor);
+      const after = decodeKeyset(query.cursor);
       if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
       // Membership is the read question, and RLS already answers it. A
@@ -337,24 +360,26 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
           kind: string;
           edited_at: string | null;
           created_at: string;
-          position: number;
+          cursor_at: string;
         }>(
           // Newest first: a chat opens at the bottom, and paging backwards is
           // what "load earlier" means.
-          `select id, sender_user_id, acted_by_user_id, body, kind, edited_at,
-                  created_at, position
-             from (
-               select msg.*,
-                      (row_number() over (order by msg.created_at desc, msg.id))::int - 1
-                        as position
-                 from public.messages msg
-                where msg.conversation_id = $1::uuid
-                  and msg.deleted_at is null
-             ) ranked
-            where $2::int is null or position > $2::int
-            order by position
+          //
+          // REVIEW B10. Keyset on (created_at, id); `messages_thread_idx`
+          // (conversation_id, created_at desc) serves it. "Earlier than the
+          // oldest message I have" does not change when new messages arrive,
+          // so "load earlier" in an active chat no longer repeats or skips.
+          `select msg.id, msg.sender_user_id, msg.acted_by_user_id, msg.body, msg.kind,
+                  msg.edited_at, msg.created_at,
+                  ${keysetTime('msg.created_at')} as cursor_at
+             from public.messages msg
+            where msg.conversation_id = $1::uuid
+              and msg.deleted_at is null
+              and ($2::timestamptz is null
+                   or (msg.created_at, msg.id) < ($2::timestamptz, $3::uuid))
+            order by msg.created_at desc, msg.id desc
             limit ${limit + 1}`,
-          [id, after],
+          [id, after?.at ?? null, after?.id ?? null],
         );
         return { page: rows, viewerUserId: await resolveViewer(session) };
       });
@@ -375,7 +400,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
           editedAt: row.edited_at,
           createdAt: row.created_at,
         })),
-        nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+        nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
         hasMore,
       };
     },
@@ -396,7 +421,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'conversation id');
       const parsed = sendMessageSchema.safeParse(request.body);
       if (!parsed.success) {
         throw badRequest(
@@ -447,13 +472,41 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
       try {
         await db.asService('conversation.notify_message', (session) =>
           session.query(
+            // REVIEW B25. Never to someone who has left. A send into a thread
+            // the counterpart left is already refused (above, and by 0028),
+            // so this is the second lock on the same door: a participant
+            // who walked away is not told about a thread they cannot open.
+            //
+            // REVIEW B26. ONE row per conversation, not one per message: the
+            // row is revived — unread again, newest again, its count bumped —
+            // instead of a new row being written for every message. The inbox
+            // shows "3 new messages from Ayesha" once, and the table grows
+            // with conversations rather than with chat volume.
             `insert into public.notifications (user_id, type, payload, dedupe_key)
-             values ($1::uuid, 'new_message', $2::jsonb, $3)
-             on conflict do nothing`,
+             select $1::uuid, 'new_message', $2::jsonb, $3
+              where not exists (
+                select 1 from public.conversation_participants p
+                 where p.conversation_id = $4::uuid
+                   and p.user_id = $1::uuid
+                   and p.left_at is not null
+              )
+             on conflict (user_id, type, dedupe_key) do update
+               set payload = jsonb_build_object(
+                     'conversationId', $4::text,
+                     'messageId', excluded.payload ->> 'messageId',
+                     'count', case
+                       when public.notifications.read_at is null
+                         then coalesce((public.notifications.payload ->> 'count')::int, 1) + 1
+                       else 1
+                     end
+                   ),
+                   read_at = null,
+                   created_at = now()`,
             [
               thread.counterpart_user_id,
-              JSON.stringify({ conversationId: id, messageId: created.id }),
-              `new_message:${created.id}`,
+              JSON.stringify({ conversationId: id, messageId: created.id, count: 1 }),
+              `new_message:${id}`,
+              id,
             ],
           ),
         );
@@ -483,7 +536,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'conversation id');
       const parsed = markReadSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid read marker');
 
@@ -519,7 +572,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
 
   fastify.get('/conversations/:id/stage', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
-    const { id } = request.params as { id: string };
+    const id = uuidParam(request, 'id', 'conversation id');
 
     const thread = await loadThread(auth.authUserId, id);
     if (!thread) throw notFound('Conversation not found');
@@ -577,7 +630,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'conversation id');
 
       const thread = await loadThread(auth.authUserId, id);
       if (!thread) throw notFound('Conversation not found');
@@ -643,12 +696,19 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'conversation id');
       const parsed = respondToStageSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid response');
 
       const thread = await loadThread(auth.authUserId, id);
       if (!thread) throw notFound('Conversation not found');
+
+      // REVIEW B16. Propose and send both refused a closed thread; respond
+      // did not, so a proposal made before a block, unmatch or family
+      // revocation could still be accepted afterwards and advance a
+      // conversation nobody may write in.
+      const reason = writeBlockedReason(thread);
+      if (reason !== null) throw conflict(`This conversation is not open: ${reason}`);
 
       const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!viewerUserId) throw notFound('No account for this session');
@@ -667,6 +727,17 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
         const proposal = rows[0];
         if (!proposal) return { kind: 'none' as const };
         if (proposal.proposed_by_user_id === viewerUserId) return { kind: 'own' as const };
+
+        // Asked again INSIDE the transaction, holding the proposal's lock.
+        // The check above ran before it, and a block can land in between;
+        // this is the answer that cannot be stale. (A closing that commits
+        // first also cancels the proposal — 0028 — and the select above then
+        // finds nothing.)
+        const open = await session.query<{ ok: boolean }>(
+          `select app.can_write_message($1::uuid, $2::uuid) as ok`,
+          [viewerUserId, id],
+        );
+        if (!open[0]?.ok) return { kind: 'closed' as const };
 
         await session.query(
           `update public.stage_transitions
@@ -691,6 +762,7 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
 
       if (outcome.kind === 'none') throw notFound('No stage proposal is waiting');
       if (outcome.kind === 'own') throw conflict('You cannot answer your own proposal');
+      if (outcome.kind === 'closed') throw conflict('This conversation is not open');
 
       return {
         conversationId: id,
@@ -706,16 +778,22 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
    * Leave a conversation.
    *
    * Sets `left_at` rather than deleting the row, so the history keeps its
-   * participants and a report filed later still names who was there. The
-   * counterpart is unaffected: this is not an unmatch, and `/matches/:id/end`
-   * remains the way to end the relationship itself.
+   * participants and a report filed later still names who was there. This is
+   * not an unmatch, and `/matches/:id/unmatch` remains the way to end the
+   * relationship itself.
+   *
+   * REVIEW B25. Leaving closes the conversation for BOTH participants,
+   * permanently (decision 2026-11-01; no rejoin). The counterpart sees
+   * `counterpart_left`, 0028's app.can_write_message refuses either side's
+   * insert, the pending stage proposal is cancelled by 0028's trigger, and no
+   * message notification is raised for the person who left.
    */
   fastify.post(
     '/conversations/:id/leave',
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'conversation id');
 
       const thread = await loadThread(auth.authUserId, id);
       if (!thread) throw notFound('Conversation not found');

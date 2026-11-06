@@ -91,7 +91,17 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     // 401/403 here means RLS refused — which, given the token is the caller's
     // own, means a path outside their folder. That is a bug in our path
     // construction, not something the caller can fix, so it is a 500.
-    throw internalError(`Storage ${what} failed (${response.status}): ${detail.slice(0, 200)}`);
+    //
+    // REVIEW B15. The upstream text used to be IN the message, and ApiError
+    // messages are sent to the client. It now travels as the error's cause:
+    // the error handler logs and reports it; the response says only that
+    // something went wrong.
+    throw internalError(undefined, {
+      upstream: 'storage',
+      operation: what,
+      status: response.status,
+      detail: detail.slice(0, 200),
+    });
   }
 
   return {

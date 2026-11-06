@@ -194,7 +194,7 @@ describe('POST /me/profile/submit', () => {
     expect(Object.keys(response.json().fields ?? {}).length).toBeGreaterThan(0);
   });
 
-  it('accepts a complete profile and approves it through the Phase 5 stub', async () => {
+  it('accepts a complete profile and queues it for review', async () => {
     // `users` identity is written during onboarding; set it directly here so
     // this test is about submission, not about the identity endpoint.
     await harness.raw.query(
@@ -213,10 +213,10 @@ describe('POST /me/profile/submit', () => {
 
     const response = await submit();
     expect(response.statusCode).toBe(202);
-    // TEMPORARY, and deliberately asserted so removing the stub fails loudly
-    // here rather than silently emptying Discover. Phase 8 replaces this with
-    // the moderation queue and this expectation returns to 'pending'.
-    expect(response.json().reviewStatus).toBe('approved');
+    // REVIEW B6. The auto-approval stub is gone, as this test anticipated:
+    // a submitted profile waits for a moderator and is not discoverable.
+    expect(response.json().reviewStatus).toBe('pending');
+    expect(response.json().isDiscoverable).toBe(false);
     expect(harness.serviceUses).toContain('profile.submit_for_review');
   });
 
@@ -286,12 +286,11 @@ describe('POST /me/profile/submit', () => {
   });
 
   it('reports discoverability from the stored review status, not a guess', async () => {
-    // Was "pending is not approved". With the Phase 5 auto-approval stub the
-    // profile really is approved, and the honest assertion is that
     // `isDiscoverable` agrees with `reviewStatus` rather than either being
-    // hardcoded. That holds before and after Phase 8 removes the stub.
+    // hardcoded. Since review B6 removed the auto-approval stub, a submitted
+    // profile is `pending` until a moderator decides.
     const completion = (await get('/me/profile/completion')).json();
-    expect(completion.reviewStatus).toBe('approved');
+    expect(completion.reviewStatus).toBe('pending');
     expect(completion.isDiscoverable).toBe(completion.reviewStatus === 'approved');
   });
 });

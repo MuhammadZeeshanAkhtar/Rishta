@@ -22,3 +22,6 @@ export * from './discovery';
 export * from './safety';
 export * from './family';
 export * from './conversation';
+export * from './contact-details';
+export * from './family-invite';
+export * from './admin';

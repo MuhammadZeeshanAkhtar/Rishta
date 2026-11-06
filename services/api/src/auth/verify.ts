@@ -20,6 +20,12 @@ export interface AuthContext {
   email: string | undefined;
   /** Token expiry, seconds since epoch. */
   expiresAt: number | undefined;
+  /**
+   * Authenticator assurance level (`aal1` password, `aal2` after a second
+   * factor). Read only by the admin surface, which requires `aal2` (review
+   * L1; README §9.1 makes 2FA mandatory for staff).
+   */
+  aal?: string;
 }
 
 export interface TokenVerifier {
@@ -68,11 +74,13 @@ export function createTokenVerifier(config: Config): TokenVerifier {
         throw unauthenticated('Token has no subject');
       }
 
-      return {
+      const context: AuthContext = {
         authUserId: payload.sub,
         email: typeof payload.email === 'string' ? payload.email : undefined,
         expiresAt: typeof payload.exp === 'number' ? payload.exp : undefined,
       };
+      if (typeof payload.aal === 'string') context.aal = payload.aal;
+      return context;
     },
   };
 }

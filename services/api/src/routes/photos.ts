@@ -8,6 +8,7 @@ import {
   photoReorderSchema,
   photoUpdateSchema,
   type OwnPhoto,
+  type PhotoContentType,
 } from '@nikahmate/domain';
 import { badRequest, conflict, notFound } from '../errors';
 import { bearerFrom, type AuthContext } from '../auth/verify';
@@ -16,7 +17,8 @@ import type { Db, DbSession } from '../db/types';
 import { isoTimestamp } from '../db/sql';
 import type { StorageClient } from '../storage/client';
 import { SIGNED_URL_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS } from '../storage/client';
-import { generateVariants, readDimensions } from '../storage/variants';
+import { generateVariants, readDimensions, stripOriginal } from '../storage/variants';
+import { uuidParam } from '../http/params';
 
 /**
  * Photos, and the per-field profile visibility left over from Phase 3.
@@ -61,6 +63,31 @@ export interface PhotoRoutesOptions {
   db: Db;
   storage: StorageClient;
 }
+
+/**
+ * Defaults for the fourteen controllable keys (ERD E6).
+ *
+ * Absent rows mean "default", so this is what the client sees before anyone
+ * has touched the screen. Chosen to be useful rather than maximally closed:
+ * a profile where everything is hidden is not a profile, and someone who
+ * never opens this screen should still be findable.
+ */
+export const VISIBILITY_DEFAULTS: Readonly<Record<string, string>> = {
+  profession: 'matched_only',
+  industry: 'public',
+  employment_status: 'public',
+  institution: 'matched_only',
+  education_level: 'public',
+  field_of_study: 'public',
+  location_precision: 'city',
+  height: 'public',
+  nationality: 'public',
+  family_background: 'matched_only',
+  sect: 'public',
+  children_details: 'matched_only',
+  hobbies_and_lifestyle: 'public',
+  about_me: 'public',
+};
 
 export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
   fastify,
@@ -167,9 +194,49 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
       const folder = randomUUID();
       const path = `${userId}/${folder}/original.${extension}`;
 
+      // REVIEW B11. A row is created here, before the bytes arrive. Rows
+      // never finalized used to count toward the limit forever, so a few
+      // cancelled uploads locked a member out of adding photos. An upload not
+      // finalized within its URL's lifetime is abandoned: soft-deleted here
+      // (the server's job — members cannot soft-delete under FORCE RLS, see
+      // DELETE below) and its bytes removed, best effort.
+      const expired = await db.asService('photo.soft_delete', (session) =>
+        session.query<{ storage_path: string }>(
+          `update public.photos p
+              set deleted_at = now(), is_primary = false
+            where p.user_id = $1::uuid
+              and p.deleted_at is null
+              and p.moderation_status = 'pending'
+              and not exists (select 1 from public.photo_variants v where v.photo_id = p.id)
+              and p.created_at < now() - make_interval(secs => $2::int)
+            returning p.storage_path`,
+          [userId, UPLOAD_URL_TTL_SECONDS],
+        ),
+      );
+      if (expired.length > 0) {
+        await storage
+          .remove(
+            token,
+            expired.map((r) => r.storage_path),
+          )
+          .catch(() => undefined);
+      }
+
       const row = await db.asUser(auth.authUserId, async (session) => {
+        // A slot is held by a FINALIZED photo (it has server-written
+        // variants), a refused one, or an upload still inside its window.
+        // `photo_variants` is the marker because only the server writes it;
+        // `width` is member-insertable and would be forgeable.
         const existing = await session.query<{ n: number }>(
-          `select count(*)::int as n from public.photos where deleted_at is null`,
+          `select count(*)::int as n
+             from public.photos p
+            where p.deleted_at is null
+              and (
+                p.moderation_status <> 'pending'
+                or exists (select 1 from public.photo_variants v where v.photo_id = p.id)
+                or p.created_at >= now() - make_interval(secs => $1::int)
+              )`,
+          [UPLOAD_URL_TTL_SECONDS],
         );
         if ((existing[0]?.n ?? 0) >= MAX_PHOTOS_PER_USER) {
           throw conflict(`At most ${MAX_PHOTOS_PER_USER} photos`);
@@ -206,7 +273,7 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { photoId } = request.params as { photoId: string };
+      const photoId = uuidParam(request, 'photoId', 'photo id');
       const token = tokenOf(request.headers.authorization);
 
       const photo = await db.asUser(auth.authUserId, async (session) => {
@@ -216,6 +283,17 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
         );
         const row = rows[0];
         if (!row) throw notFound('No such photo');
+        // REVIEW B5. Finalize used to run on a photo in ANY state, so calling
+        // it again on a rejected photo approved it again — a moderator's
+        // rejection undone by the uploader. Only a pending photo that has not
+        // been finalized (no server-written variants yet) may be.
+        const done = await session.query<{ n: number }>(
+          `select count(*)::int as n from public.photo_variants where photo_id = $1`,
+          [photoId],
+        );
+        if (row.moderation_status !== 'pending' || (done[0]?.n ?? 0) > 0) {
+          throw conflict('This photo has already been finalized');
+        }
         return row;
       });
 
@@ -244,7 +322,12 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
         throw badRequest('That file is not a readable image');
       }
 
-      const variants = await generateVariants(original);
+      // REVIEW B12. The stored original loses its EXIF/GPS here, overwritten
+      // in place, before any derivative is made from it.
+      const cleanOriginal = await stripOriginal(original, photo.content_type as PhotoContentType);
+      await storage.upload(token, photo.storage_path, cleanOriginal, photo.content_type);
+
+      const variants = await generateVariants(cleanOriginal);
       const basePath = photo.storage_path.replace(/\/original\.[a-z]+$/, '');
 
       await Promise.all(
@@ -272,21 +355,24 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
           );
         }
 
-        // The moderation hook. Automated screening is a Phase 8 concern
-        // (and Gemini triage is 1.2); what matters now is that the decision
-        // is RECORDED and that nothing is visible until it says approved.
+        // REVIEW B5. This used to record `auto_stub` / `approved`, so every
+        // upload was approved the instant it arrived. No automated provider
+        // is configured (choosing one is a company decision), so the verdict
+        // is `review`: the photo stays `pending` in the moderation queue
+        // (`photos_moderation_queue_idx`) until a moderator decides
+        // (POST /admin/moderation/photos/:id). Nothing is shown to anyone
+        // else while it says pending.
         await session.query(
           `insert into public.media_moderation_results (photo_id, provider, verdict, labels)
-           values ($1, 'auto_stub', 'approved', $2::jsonb)`,
-          [photoId, JSON.stringify({ note: 'no automated provider configured' })],
+           values ($1, 'none', 'review', $2::jsonb)`,
+          [photoId, JSON.stringify({ note: 'queued for human review' })],
         );
 
-        await session.query(
-          `update public.photos
-           set width = $2, height = $3, moderation_status = 'approved', moderated_at = now()
-           where id = $1`,
-          [photoId, dimensions.width, dimensions.height],
-        );
+        await session.query(`update public.photos set width = $2, height = $3 where id = $1`, [
+          photoId,
+          dimensions.width,
+          dimensions.height,
+        ]);
       });
 
       const updated = await db.asUser(auth.authUserId, async (session) => {
@@ -305,7 +391,7 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
 
   fastify.patch('/me/photos/:photoId', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
-    const { photoId } = request.params as { photoId: string };
+    const photoId = uuidParam(request, 'photoId', 'photo id');
     const parsed = photoUpdateSchema.safeParse(request.body);
     if (!parsed.success) throw badRequest('Invalid photo update');
 
@@ -313,6 +399,21 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
     const patch = parsed.data;
 
     const row = await db.asUser(auth.authUserId, async (session) => {
+      // REVIEW B13. Only an APPROVED photo may be the profile's main image,
+      // and that is checked BEFORE the current primary is cleared — the old
+      // code cleared it first, so a refused request still left the member
+      // with no primary at all. Migration 0029 enforces it in the database.
+      if (patch.isPrimary === true) {
+        const target = await session.query<{ moderation_status: string }>(
+          `select moderation_status from public.photos where id = $1 and deleted_at is null`,
+          [photoId],
+        );
+        if (!target[0]) throw notFound('No such photo');
+        if (target[0].moderation_status !== 'approved') {
+          throw conflict('Only an approved photo can be your main photo');
+        }
+      }
+
       // Primary is exclusive, and the database enforces it with a partial
       // unique index — so the old one has to be cleared in the same
       // transaction rather than hoping the order of writes works out.
@@ -386,7 +487,7 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { photoId } = request.params as { photoId: string };
+      const photoId = uuidParam(request, 'photoId', 'photo id');
       const token = tokenOf(request.headers.authorization);
 
       const paths = await db.asUser(auth.authUserId, async (session) => {
@@ -425,31 +526,6 @@ export const photoRoutes: FastifyPluginAsync<PhotoRoutesOptions> = async (
   // ===========================================================================
   // Per-field profile visibility — the Phase 3 gap
   // ===========================================================================
-
-  /**
-   * Defaults for the fourteen controllable keys (ERD E6).
-   *
-   * Absent rows mean "default", so this is what the client sees before anyone
-   * has touched the screen. Chosen to be useful rather than maximally closed:
-   * a profile where everything is hidden is not a profile, and someone who
-   * never opens this screen should still be findable.
-   */
-  const VISIBILITY_DEFAULTS: Record<string, string> = {
-    profession: 'matched_only',
-    industry: 'public',
-    employment_status: 'public',
-    institution: 'matched_only',
-    education_level: 'public',
-    field_of_study: 'public',
-    location_precision: 'city',
-    height: 'public',
-    nationality: 'public',
-    family_background: 'matched_only',
-    sect: 'public',
-    children_details: 'matched_only',
-    hobbies_and_lifestyle: 'public',
-    about_me: 'public',
-  };
 
   fastify.get('/me/profile/visibility', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);

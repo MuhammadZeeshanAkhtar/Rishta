@@ -111,6 +111,33 @@ export async function readDimensions(
   return { width: meta.width, height: meta.height };
 }
 
+/**
+ * The original, re-encoded without its metadata — review B12.
+ *
+ * Only the thumb and blurred variants used to be re-encoded. The original was
+ * stored and served exactly as uploaded, EXIF and all — and phone cameras put
+ * the GPS position of where the photo was taken (very often home) in EXIF.
+ * Today only the owner can fetch it; the moment full photos reach other
+ * members (L3) it would leak.
+ *
+ * `rotate()` bakes the EXIF orientation into the pixels first, so the photo
+ * does not turn sideways when the tag goes. sharp writes no metadata unless
+ * asked to (no `withMetadata()` here), so EXIF, GPS, XMP and IPTC are all
+ * dropped. Same format out as in, so the stored path and declared type stay
+ * true. Decoded with the same strict `failOn` as every untrusted input.
+ */
+export async function stripOriginal(body: Buffer, contentType: PhotoContentType): Promise<Buffer> {
+  const base = sharp(body, UNTRUSTED_INPUT).rotate();
+  switch (contentType) {
+    case 'image/jpeg':
+      return base.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+    case 'image/png':
+      return base.png().toBuffer();
+    case 'image/webp':
+      return base.webp({ quality: 90 }).toBuffer();
+  }
+}
+
 export async function generateVariants(body: Buffer): Promise<GeneratedVariant[]> {
   // `rotate()` with no argument applies the EXIF orientation and then strips
   // the metadata. Without it, portrait photos from most phones arrive sideways

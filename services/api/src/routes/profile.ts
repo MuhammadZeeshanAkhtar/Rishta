@@ -1,4 +1,5 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { countEligible } from '../discovery/candidates';
 import {
   MIN_ABOUT_ME_LENGTH,
   REQUIRED_FOR_REVIEW,
@@ -402,8 +403,26 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (fa
 
       // Identity lives on `users`, not `profiles`. The column grants there are
       // narrow (display_name, gender, date_of_birth, country_code,
-      // onboarding_step) and two triggers guard the rest: gender is immutable
-      // once the profile is complete, and the age gate re-checks date_of_birth.
+      // onboarding_step) and triggers guard the rest: gender is immutable
+      // once the profile is complete, the age gate re-checks date_of_birth,
+      // and since 0029 the date of birth is locked once complete too.
+      //
+      // REVIEW B6. The lock is checked here as well so the member gets a clear
+      // 409 that names the way forward, instead of the trigger's refusal.
+      if (patch.dateOfBirth !== undefined) {
+        const locked = await session.query<{ locked: boolean }>(
+          `select (profile_completed_at is not null
+                   and date_of_birth is distinct from $1::date) as locked
+             from public.users where id = app.current_user_id()`,
+          [patch.dateOfBirth],
+        );
+        if (locked[0]?.locked) {
+          throw conflict(
+            'Your date of birth is locked once your profile is complete. Request a correction instead.',
+          );
+        }
+      }
+
       const identity = buildUpdate(
         'public.users',
         { displayName: 'display_name', dateOfBirth: 'date_of_birth', gender: 'gender' },
@@ -548,39 +567,18 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (fa
           [userId],
         );
 
-        // ===================================================================
-        // TEMPORARY — AUTO-APPROVAL STUB. Phase 8 deletes this block.
-        //
-        // Nothing else in the product can move a profile out of `pending`:
-        // review is the moderation queue, which arrives in Phase 8. Until it
-        // does, `pending` is a terminal state, and `app.can_view_profile()`
-        // requires `approved` — so without this every profile would be
-        // invisible to every other member and Discover would have nothing to
-        // show. That is the same shape of bug as a gate with no writer.
-        //
-        // Modelled on the photo stub in routes/photos.ts, which records
-        // `auto_stub` as the moderation source rather than pretending a human
-        // looked. Profiles have no moderation-results table yet, so the
-        // marker is this comment and the single call site.
-        //
-        // TO REMOVE: delete this statement. `review_status` stays `pending`,
-        // the queue approves, and nothing else in the visibility chain
-        // changes — `can_view_profile` already asks the right question.
-        // ===================================================================
-        await session.query(
-          `update public.profiles
-         set review_status = 'approved', reviewed_at = now()
-         where user_id = $1 and review_status = 'pending'`,
-          [userId],
-        );
+        // REVIEW B6. The auto-approval stub that stood here approved every
+        // profile the moment it was submitted, so anyone could publish
+        // anything. It is gone: a submitted profile stays `pending` — not
+        // discoverable — until a moderator decides
+        // (POST /admin/moderation/profiles/:userId, migration 0029's L1
+        // backend). `app.can_view_profile` already requires `approved`, so
+        // nothing else in the visibility chain changes.
       });
 
-      // Re-read rather than asserting a literal: with the auto-approval stub
-      // in place the status at this point is 'approved', and a hardcoded
-      // 'pending' would make the response disagree with the database — and
-      // with `isDiscoverable`, which the client uses to explain why a profile
-      // is or is not being shown. Re-reading also means deleting the stub
-      // needs no change here.
+      // Re-read rather than asserting a literal, so the response always
+      // agrees with the database — and with `isDiscoverable`, which the
+      // client uses to explain why a profile is or is not being shown.
       const submitted = await db.asUser(auth.authUserId, (session) => loadProfile(session, userId));
 
       return reply.code(202).send({
@@ -638,7 +636,10 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (fa
 
   // --- PUT /me/preferences ---------------------------------------------------
 
-  fastify.put('/me/preferences', { preHandler: fastify.requireAuth }, async (request) => {
+  // PUT has always applied only the fields sent, which is PATCH semantics; the
+  // two share one handler (review L10 — `updatePreferences` was specified and
+  // unbuilt). PUT's behaviour is unchanged because the app depends on it.
+  const updatePreferences = async (request: FastifyRequest) => {
     const auth = requireAuthContext(request);
     const parsed = preferencesUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -656,5 +657,22 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (fa
       if (update) await session.query(update.sql, update.params);
       return loadPreferences(session, userId);
     });
+  };
+
+  fastify.put('/me/preferences', { preHandler: fastify.requireAuth }, updatePreferences);
+  fastify.patch('/me/preferences', { preHandler: fastify.requireAuth }, updatePreferences);
+
+  // --- GET /me/preferences/impact --------------------------------------------
+
+  /**
+   * How many profiles these preferences admit (review L10), so a member can
+   * see when one criterion has narrowed their pool to almost nothing and
+   * loosen it deliberately. The same filter discovery runs (`countEligible`).
+   * Counts are capped at IMPACT_COUNT_CAP; `capped` says when one was reached.
+   */
+  fastify.get('/me/preferences/impact', { preHandler: fastify.requireAuth }, async (request) => {
+    const auth = requireAuthContext(request);
+    const userId = await resolveUserId(auth.authUserId);
+    return countEligible(db, userId);
   });
 };

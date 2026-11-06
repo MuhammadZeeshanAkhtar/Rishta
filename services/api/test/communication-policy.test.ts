@@ -370,7 +370,12 @@ describe('interests.note stays within the pair', () => {
     const alice = await seedMember('female');
     const bilal = await seedMember('male');
     const other = await seedMember('male');
-    const interestId = (await send(alice, bilal.userId, '+92 300 1234567')).json().id as string;
+    // A distinctive note rather than a phone number: since review L9 a note
+    // carrying contact details is refused at send (review-phase2.test.ts),
+    // and this test is about where an ACCEPTED note can be read.
+    const sent = await send(alice, bilal.userId, 'Planted note 7f3a, for the pair only.');
+    expect(sent.statusCode, sent.body).toBe(201);
+    const interestId = sent.json().id as string;
 
     // Not by detail read…
     expect((await get(`/interests/${interestId}`, other.authId)).statusCode).toBe(404);
@@ -388,8 +393,12 @@ describe('interests.note stays within the pair', () => {
     // by field, so a newly added field carrying it would still be caught.
     const alice = await seedMember('female');
     const bilal = await seedMember('male');
-    const plantedContact = 'reach-me-on-0300-1234567';
-    await send(alice, bilal.userId, plantedContact);
+    // Not a phone number: since review L9 that is refused at send, and the
+    // assertion below would then pass without anything having been stored.
+    // A distinctive marker that IS stored keeps this test meaningful.
+    const plantedContact = 'planted-note-marker-9c41';
+    const sent = await send(alice, bilal.userId, plantedContact);
+    expect(sent.statusCode, sent.body).toBe(201);
 
     const response = await get('/discovery/sections/recommended', bilal.authId);
     expect(response.statusCode).toBe(200);

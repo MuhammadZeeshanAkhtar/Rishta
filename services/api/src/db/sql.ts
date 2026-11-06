@@ -30,3 +30,28 @@
 export function isoTimestamp(expression: string): string {
   return `to_char(${expression} at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 }
+
+/**
+ * The member's own IANA timezone, as a SQL expression — or `'UTC'` when the
+ * stored value is not one Postgres recognises (members can write the column
+ * through the Data API, so it is not guaranteed to be valid).
+ *
+ * Shared by everything that counts "today" for a member — the daily interest
+ * quota (review B23) and the quota read-outs (/me/quotas, /me/usage) — so the
+ * day a counter is written under and the day it is read back can never
+ * disagree. `userIdParam` is a bind placeholder such as `$1::uuid`, written in
+ * our own source.
+ */
+export function memberTimezone(userIdParam: string): string {
+  return `coalesce(
+    (select s.timezone from public.user_settings s
+      where s.user_id = ${userIdParam}
+        and exists (select 1 from pg_timezone_names z where z.name = s.timezone)),
+    'UTC'
+  )`;
+}
+
+/** Today, in the member's own timezone (review B23). */
+export function memberLocalDate(userIdParam: string): string {
+  return `(now() at time zone ${memberTimezone(userIdParam)})::date`;
+}

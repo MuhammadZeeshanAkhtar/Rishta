@@ -21,6 +21,10 @@ import { join } from 'node:path';
 import { Client, type QueryResultRow } from 'pg';
 import { MIGRATIONS_DIR } from '@nikahmate/db';
 import { phase1SecurityChecks } from './phase1-security-checks';
+import { phase2SafetyChecks } from './phase2-safety-checks';
+import { phase3ModerationChecks } from './phase3-moderation-checks';
+import { phase4AccountChecks } from './phase4-account-checks';
+import { phase5PhotoChecks } from './phase5-photo-checks';
 
 interface Check {
   name: string;
@@ -37,6 +41,12 @@ const fail = (name: string, detail: string): void => {
 };
 
 const EXPECTED_TABLES = [
+  // Review Phase 4 (0030), L10.
+  'account_deletion_requests',
+  // Review Phase 3 (0029): the L1 admin/moderation backend.
+  'admin_action_audit',
+  'admin_role_assignments',
+  'admin_users',
   'blocks',
   'compatibility_factors',
   'compatibility_scores',
@@ -45,6 +55,8 @@ const EXPECTED_TABLES = [
   'conversations',
   'discovery_generation_runs',
   'dismissed_profiles',
+  // Review B6 (0029).
+  'dob_correction_requests',
   'family_access_log',
   'family_invitations',
   'family_permissions',
@@ -58,14 +70,21 @@ const EXPECTED_TABLES = [
   'media_moderation_results',
   'message_reads',
   'messages',
+  'moderation_actions',
+  'notification_preferences',
   'notifications',
   'partner_preferences',
+  // Review Phase 5 (0031), L3.
+  'photo_grants',
+  'photo_requests',
   'photo_variants',
   'photos',
   'preference_rules',
   'profile_field_visibility',
   'profile_sensitive',
+  'profile_views',
   'profiles',
+  'push_tokens',
   'reference_items',
   'reference_translations',
   'reports',
@@ -86,7 +105,16 @@ const EXPECTED_TABLES = [
 
 /** Zero policies is the control on these — see ERD §2.2. */
 const RESTRICTED = [
+  // Review Phase 4 (0030): restricted by the ERD — no member policy.
+  'account_deletion_requests',
+  'profile_views',
+  'push_tokens',
+  // Review L1 (0029): staff and their decisions. No member policy, ever.
+  'admin_action_audit',
+  'admin_role_assignments',
+  'admin_users',
   'media_moderation_results',
+  'moderation_actions',
   'profile_sensitive',
   'user_auth_links',
   'user_consents',
@@ -156,6 +184,8 @@ const FORBIDDEN_UPDATE_COLUMNS = [
 
 /** Tables permitted to carry any column-level grant at all. */
 const COLUMN_GRANTABLE_TABLES = [
+  // Review B6 (0029): `insert (user_id, requested_dob, reason)` only.
+  'dob_correction_requests',
   // Phase 7: `insert (conversation_id, sender_user_id, body, kind)` only.
   // `moderation_status`, `edited_at` and `deleted_at` are server state that
   // report evidence depends on, and a member who could set
@@ -190,6 +220,8 @@ const EXPECTED_TABLE_GRANTS = [
   'dismissed_profiles authenticated DELETE',
   'dismissed_profiles authenticated INSERT',
   'dismissed_profiles authenticated SELECT',
+  // Review B6 (0029): a member reads their own DOB correction requests.
+  'dob_correction_requests authenticated SELECT',
   // Phase 6b. SELECT only on every family table: an invitation must hash a
   // token, a grant must be refused if its phase has not arrived, a review must
   // be the first for its side, and an audit a delegate can write is not an
@@ -206,8 +238,14 @@ const EXPECTED_TABLE_GRANTS = [
   'matches authenticated SELECT',
   'message_reads authenticated SELECT',
   'messages authenticated SELECT',
+  // Review Phase 4 (0030): a member manages their own notification preferences.
+  'notification_preferences authenticated DELETE',
+  'notification_preferences authenticated INSERT',
+  'notification_preferences authenticated SELECT',
   'notifications authenticated SELECT',
   'partner_preferences authenticated SELECT',
+  'photo_grants authenticated SELECT',
+  'photo_requests authenticated SELECT',
   'photo_variants authenticated SELECT',
   'photos authenticated SELECT',
   'preference_rules authenticated DELETE',
@@ -725,6 +763,42 @@ async function structural(client: Client): Promise<void> {
     query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
   });
   for (const c of phase1) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
+  }
+
+  // --- code review Phase 2 (migration 0028) ---------------------------------
+  const phase2 = await phase2SafetyChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of phase2) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
+  }
+
+  // --- code review Phase 3 (migration 0029) ---------------------------------
+  const phase3 = await phase3ModerationChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of phase3) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
+  }
+
+  // --- code review Phase 4 (migration 0030) ---------------------------------
+  const phase4 = await phase4AccountChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of phase4) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
+  }
+
+  // --- code review Phase 5 (migration 0031) ---------------------------------
+  const phase5 = await phase5PhotoChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of phase5) {
     if (c.ok) pass(c.name, c.detail);
     else fail(c.name, c.detail ?? 'failed');
   }

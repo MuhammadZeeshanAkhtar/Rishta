@@ -16,6 +16,7 @@ import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
 import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
+import { uuidParam } from '../http/params';
 
 /**
  * Family / Wali — the review layer (Phase 6b, ADR 0011, D12).
@@ -411,7 +412,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
       const parsed = respondToInvitationSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid response');
       const { token, accept } = parsed.data;
@@ -526,7 +527,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
 
       const ownerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!ownerUserId) throw notFound('No account for this session');
@@ -566,7 +567,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
       const parsed = updatePermissionsSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid permissions');
 
@@ -636,7 +637,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const { id } = request.params as { id: string };
+      const id = uuidParam(request, 'id', 'id');
 
       const ownerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!ownerUserId) throw notFound('No account for this session');
@@ -932,7 +933,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
    */
   fastify.get('/family/reviews/:matchId', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
-    const { matchId } = request.params as { matchId: string };
+    const matchId = uuidParam(request, 'matchId', 'match id');
 
     const delegateUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!delegateUserId) throw notFound('No account for this session');
@@ -1084,7 +1085,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { matchId } = request.params as { matchId: string };
+      const matchId = uuidParam(request, 'matchId', 'match id');
       const parsed = decideReviewSchema.safeParse(request.body);
       if (!parsed.success) throw badRequest('Invalid decision');
       const { action, note } = parsed.data;
@@ -1279,7 +1280,7 @@ export const familyRoutes: FastifyPluginAsync<FamilyRoutesOptions> = async (fast
     { preHandler: fastify.requireAuth },
     async (request) => {
       const auth = requireAuthContext(request);
-      const { matchId } = request.params as { matchId: string };
+      const matchId = uuidParam(request, 'matchId', 'match id');
       const parsed = revokeReviewSchema.safeParse(request.body ?? {});
       if (!parsed.success) throw badRequest('Invalid revocation');
 

@@ -18,10 +18,16 @@ async function main(): Promise<void> {
   const db = createPgDb({
     connectionString: config.DATABASE_URL,
     onServiceUse: (use: ServiceRoleUse) => {
-      // Every RLS bypass leaves a trace. "The server read this" is not an
-      // audit trail; "the server read this because account.bootstrap" is.
+      // Every RLS bypass can leave a trace: "the server read this because
+      // account.bootstrap" is an audit trail; "the server read this" is not.
+      //
+      // REVIEW B26. At `info` this wrote a line for every service-role use —
+      // several per request — which is most of the log volume. It is a DEBUG
+      // trace now, written only when LOG_LEVEL asks for debug output, e.g.
+      // while investigating an incident.
+      if (config.LOG_LEVEL !== 'debug' && config.LOG_LEVEL !== 'trace') return;
       process.stdout.write(
-        `${JSON.stringify({ level: 'info', msg: 'service_role_use', use, at: new Date().toISOString() })}\n`,
+        `${JSON.stringify({ level: 'debug', msg: 'service_role_use', use, at: new Date().toISOString() })}\n`,
       );
     },
   });
