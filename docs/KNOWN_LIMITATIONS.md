@@ -6,7 +6,7 @@ Every entry here was verified against the code on the date below — not inferre
 from the roadmap. Where something is absent **by design**, the reasoning is given
 so it is not "fixed" by accident.
 
-**Verified:** 2026-10-19 · 1,133 tests passing · 25 migrations · 45 tables
+**Verified:** 2026-10-19; sections 3–5 and 9 updated 2026-11-05 · 1,730 tests passing · 31 migrations · 56 tables. Hosted and device checks are still outstanding: see [HANDOVER.md](HANDOVER.md).
 
 ---
 
@@ -33,8 +33,8 @@ What is still absent, and why:
   which is the point. Nothing in the product hands over a phone number.
 
 **Consequence for a new team:** the core loop is complete end to end — discover,
-interest, match, family review, conversation. Phase 8 (moderation tooling) is
-the next piece of work, and it is the one that makes `reports` useful.
+interest, match, family review, conversation. The staff console (section 5)
+now makes `reports` useful.
 
 ---
 
@@ -66,57 +66,58 @@ because this is an R16 control. `sla_notified_at` keeps it to one warning.
 
 ---
 
-## 3. Cross-user photo delivery does not work
+## 3. Cross-user photos: built, verified only locally
 
-`ProfileCard.primaryPhoto` is always `null`
-([services/api/src/discovery/cards.ts](../services/api/src/discovery/cards.ts)).
-Every profile in Discover renders a generated gradient portrait instead.
+_Updated 2026-11-05 (code review Phase 5, L3)._
 
-This is an architectural consequence, not an oversight. The Storage policies in
-[migration 0007](../supabase/migrations/20260930000007_storage.sql) scope every
-object to its owner by path, and the API calls Storage with the **caller's own
-token** — it holds no Storage service-role credential. Signing another member's
-object is therefore refused.
+Another member's photos are served by `GET /profiles/{userId}/photos`, and
+members can request, approve and decline access
+([routes/photo-access.ts](../services/api/src/routes/photo-access.ts),
+[migration 0031](../supabase/migrations/20261105000031_review_phase5_photo_access.sql)).
+The API still holds no Storage credential: it signs with the VIEWER's token,
+and a Storage policy applies the same rule the API uses
+(`app.photo_variant_readable`) — so a variant the rule refuses cannot be
+signed. `private` photos are never shown to anyone else, grant or not.
 
-Resolving it is a real decision with security weight: either grant the API a
-Storage credential (backend environment only), or add a Storage policy allowing
-a caller to sign an approved, non-private photo on a profile they may already
-view. The second keeps the "no second credential" property.
+What remains:
 
-**A member's own photos work normally** — upload, server-side blurred variant,
-moderation, reordering and deletion are all built and tested.
-
----
-
-## 4. There is no public profile endpoint
-
-`GET /profiles/{userId}` is specified in the contract and unimplemented. The
-server exposes another member only as a `ProfileCard` — an enumerated allowlist
-of eleven fields — embedded inside discovery, interests and matches.
-
-So the profile-detail screen shows compatibility and little else, and works
-around the gap with a session-scoped in-memory card cache
-([apps/mobile/src/discovery/cardCache.ts](../apps/mobile/src/discovery/cardCache.ts)).
-
-This also blocks Phase 6b: `FamilyReviewPacket.counterpart` is typed as
-`PublicProfile`, so the review packet cannot be built until this projection
-exists.
-
-Note that **per-field visibility is enforced nowhere yet**. The fourteen keys in
-`profile_field_visibility` are read and written by the owner, and have never been
-applied against another viewer, because no endpoint returns another member's
-fields. That enforcement arrives with this projection.
+- **Hosted verification.** The Storage policy is a no-op outside Supabase.
+  The rule itself is tested on PGlite, and the API tests run against a Storage
+  double that enforces it, but real Supabase Storage has not been exercised.
+- **Discovery cards** (`ProfileCard.primaryPhoto`) are still `null`: signing a
+  URL per card per page is a performance decision not taken yet. Photos appear
+  on the profile screen.
+- **No grant-revocation endpoint** (not in the contract). An owner withdraws
+  access by setting photos private, or by blocking.
 
 ---
 
-## 5. Reports are stored and nobody reads them
+## 4. Public profile: built (L4)
 
-`POST /reports` works, is tested and writes a row. There is **no moderation
-queue, no triage, no admin surface** — that is Phase 8.
+_Updated 2026-11-05 (code review Phases 3 and 5)._
 
-Filing a report currently produces no human action. The table has the indexes
-the queue will need (`(status, created_at)` and `(reported_user_id)`), and one
-open report per reporter/reported pair is enforced by a partial unique index.
+`GET /profiles/{userId}` applies per-field visibility for the viewer (public,
+matched-only; on-request and private are withheld) and the profile screen
+renders only what it returns
+([app/(app)/profile/[userId].tsx](<../apps/mobile/app/(app)/profile/[userId].tsx>)).
+The session card cache remains only as a name to show while loading.
+
+Still absent: the distance band (no coordinates are stored) and on-request
+FIELDS (only photos have a request flow).
+
+---
+
+## 5. Reports: a moderation console exists; no cases or evidence snapshots
+
+_Updated 2026-11-05 (code review Phases 3 and 5, L1)._
+
+Staff triage, action and dismiss reports, decide photo, profile and
+date-of-birth queues, and warn/suspend/ban members, in the staff console at
+`/admin` (the Expo web build), against the Phase 3 moderation API. Staff need
+an `admin_users` row with a role and a second factor (aal2); every decision is
+written with an append-only audit row the console can read. Still absent:
+grouped cases, risk signals, PII-access logging, automatic suspension expiry,
+and hosting for the console (it ships inside the web build today).
 
 `report_evidence` (ERD §14) is deliberately absent: its purpose is snapshotting
 message content by value so a bad actor deleting messages cannot destroy the
@@ -124,54 +125,50 @@ case, and there are no messages yet.
 
 ---
 
-## 6. `interests.note` is an unmediated free-text channel
+## 6. `interests.note`: contact details are filtered
 
-`POST /interests` accepts an optional 500-character note which is delivered to
-the recipient before any match exists. It is contract-required (README §4.7,
-ERD §10) and a reviewing wali is specified to see it, so it has been left exactly
-as designed.
+_Updated 2026-11-05 (code review L9, company decision 3)._
 
-It is, however, the one place in the product where "no contact exchange" is not
-currently true — nothing prevents someone typing a phone number into it. The
-boundary that _does_ hold is pinned by tests: the note reaches only the two
-parties, is capped at 500 characters, and appears nowhere in the discovery
-payload.
-
-**This is an open product decision**, not a defect. Options considered: leave it,
-cap it hard, withhold it until acceptance, or remove it.
+`POST /interests` refuses a note containing a phone number, email, link, handle or messaging
+platform. The filter cannot catch everything: Urdu number words and letter-for-digit substitution
+get through, and closing the Data API route depends on applying 0026 and the Supabase Dashboard
+change (B7).
 
 ---
 
 ## 7. Play Store requirements not yet met
 
-- **Account deletion is not implemented.** `/me/delete`, `/me/deactivate` and
-  `/me/export` are specified and absent. Google requires in-app deletion **and**
-  a web deletion route.
-- No data-safety form, no privacy policy, no age-rating submission.
-- No `eas.json`, so there is no build pipeline for a store artifact.
+_Updated 2026-11-05._
 
-Report and block — the other Play requirement for user-generated content — **are**
-implemented.
+- **Account deletion is only partly built.** Deactivation and deletion REQUESTS work
+  (`/me/deactivate`, `/me/delete`), but nothing executes a deletion after the grace period, there is
+  no in-app screen for them, and `/me/export` is absent. Google also requires a web deletion route.
+- No data-safety form, no privacy policy, no age-rating submission.
+- `apps/mobile/eas.json` builds an APK for direct distribution only. A Play Store upload needs an
+  AAB profile.
+
+Report and block, the other Play requirement for user-generated content, **are** implemented.
 
 ---
 
-## 8. No push notifications
+## 8. Push notifications are not delivered
 
-The in-app inbox is the only delivery channel. `/me/push-tokens` and
-`/me/notification-preferences` are specified and unimplemented, so a member must
-open the app to learn anything.
+_Updated 2026-11-05._
+
+The in-app inbox is the only delivery channel. The API stores push tokens and per-type preferences,
+but no provider is chosen and nothing sends a push, so a member must open the app to learn anything.
 
 ---
 
 ## 9. Testing gaps
 
-1,133 tests pass, and the database suites run against a real Postgres (PGlite)
+1,730 tests pass, and the database suites run against a real Postgres (PGlite)
 applying the migration files exactly as written. What that does **not** cover:
 
 - **No end-to-end test.** No Detox, Maestro or Playwright. No test has ever run
   against a live Supabase project.
-- **No mobile component tests.** Only the profile screens have been visually
-  verified, in a browser via `expo start --web`.
+- **No mobile component tests.** Logic behind the newest screens has unit tests; the screens
+  themselves are only type-checked and bundled.
 - **No load or penetration testing** (Phase 13).
 - **No real-device testing.** The project targets low-end Android; it has not
   been run on one.
@@ -184,8 +181,9 @@ applying the migration files exactly as written. What that does **not** cover:
   user's phone is invisible.
 - **No deployment configuration** — no Dockerfile, no hosting config. The API is
   a plain Node process (`pnpm --filter @nikahmate/api start`).
-- **No scheduler.** pg-boss was deferred, so anything periodic — the Phase 6b
-  review SLA sweep, retention sweeps, the verification SLA — has no runner.
+- **No scheduler.** pg-boss was deferred, so the Phase 6b review SLA sweep and the
+  verification SLA have no runner. Retention and invitation expiry are ready to schedule
+  ([MAINTENANCE.md](MAINTENANCE.md)), but nothing schedules them yet.
 
   Candidate generation is the exception, and it is not scheduled: it runs
   on-demand when a member opens Discover, claimed through
@@ -197,18 +195,12 @@ applying the migration files exactly as written. What that does **not** cover:
 
 ---
 
-## 11. Smaller unimplemented contract paths
+## 11. Unimplemented contract operations
 
-Specified in [openapi.yaml](openapi.yaml), not built. None blocks the core loop.
+_Updated 2026-11-05._
 
-`/discovery/search` · `/me/quotas` · `/compatibility/recompute` ·
-`/me/photo-requests` · `/me/devices` · `/me/security-events` ·
-`/me/verification/*` · `/me/profile-views` · `/me/entitlements` · `/me/usage` ·
-`/plans` · `/safety/center` · `/safety/panic-exit` · `/support/contact`
-
-Roughly 53 of 95 contract paths are implemented. The unimplemented ones are
-specified to the same level of detail as the built ones, which is the main asset
-here: the contract is the plan.
+18 of the 111 contract operations are not built. Each is marked `x-status: not-implemented` with
+its blocker in [openapi.yaml](openapi.yaml), and a test keeps that list matched to the running routes.
 
 ---
 
@@ -220,6 +212,5 @@ here: the contract is the plan.
   screen. ADR 0012 narrowed the launch to English only, so the cost of a stray
   literal is low today — but it is the thing that will bite when a second
   locale is added.
-- `ENTITIES.md` lists `photo_requests` as an M1 entity;
-  [migration 0006](../supabase/migrations/20260930000006_media.sql) records it as
-  deliberately absent.
+- [Migration 0006](../supabase/migrations/20260930000006_media.sql) records `photo_requests` as
+  deliberately absent. That comment is historical: migration 0031 added the table.

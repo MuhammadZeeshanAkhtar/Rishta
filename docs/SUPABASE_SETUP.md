@@ -214,8 +214,9 @@ In **Authentication → Providers**, for `nikahmate-dev`:
 - **Google** — enable when you have OAuth credentials.
 - **Apple** — required only once iOS ships alongside any other social login.
 
-In **Authentication → URL Configuration**, add the app's redirect scheme:
-`nikahmate://` (matches `scheme` in `apps/mobile/app.json`).
+In **Authentication → URL Configuration**, add the app's redirect URL:
+`nikahmate://auth/callback` (the scheme is `scheme` in `apps/mobile/app.json`; the path is what the
+app sends). Add the web build's `https://<host>/auth/callback` too if the web app is hosted.
 
 ### Confirmed on the dev project — 2026-09-25
 
@@ -230,7 +231,7 @@ Checked by a read-only request to the project's own public endpoints:
 | JWT signing            | **asymmetric, ES256 via JWKS** | **Leave `SUPABASE_JWT_SECRET` blank.** The API verifies through JWKS  |
 | `public` schema        | empty                          | A genuinely fresh project. Not Zufishan, and no migration applied yet |
 
-**Still to do in the dashboard:** add `nikahmate://` under
+**Still to do in the dashboard:** add `nikahmate://auth/callback` under
 **Authentication → URL Configuration**. Nothing else is blocking.
 
 > **The Data API root now requires a secret key.** Supabase changed this: the
