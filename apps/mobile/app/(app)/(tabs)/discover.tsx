@@ -16,6 +16,7 @@ import { Banner } from '../../../src/components/Banner';
 import { EmptyState } from '../../../src/components/EmptyState';
 import { SkeletonList } from '../../../src/components/LoadingSkeleton';
 import { ProfileCard } from '../../../src/components/ProfileCard';
+import { interestAlreadySent } from '../../../src/discovery/interestOutcome';
 import { useDiscoverFeed } from '../../../src/discovery/useDiscoverFeed';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
 import { useTheme } from '../../../src/theme/ThemeProvider';
@@ -57,7 +58,9 @@ export default function DiscoverScreen() {
         // written to invites a second attempt that the server will refuse.
         await feed.dismiss(profile.userId);
       } catch (err) {
-        setActionError(describeError(err, t).message);
+        // Already sent, most likely from the profile screen: the card has done its job.
+        if (interestAlreadySent(err)) feed.forget(profile.userId);
+        else setActionError(describeError(err, t).message);
       } finally {
         setBusy(null);
       }

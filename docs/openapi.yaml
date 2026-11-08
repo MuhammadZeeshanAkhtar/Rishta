@@ -264,9 +264,11 @@ paths:
         member, or a suspended/banned account, places a retention hold
         (`status: held`); the response says so in general terms.
 
-        EXECUTION is not built: erasure after the grace period needs a job
-        runner and the Supabase Auth admin API. `pnpm maintenance` reports
-        requests past their grace period; it does not execute them.
+        EXECUTION: `pnpm --filter @nikahmate/api account-erasure execute --apply`
+        anonymises each account whose grace period has ended (ERD E1), deleting
+        its photo files and its sign-in. It runs as a supervised process with
+        the service-role key, which the API never holds. Scheduling it is an
+        operator step; see docs/PRODUCTION_SECURITY.md.
       tags: [Account]
       x-access: self
       x-async: true
@@ -275,6 +277,18 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      operationId: getDeletion
+      summary: The open deletion request
+      description: |
+        When the account is due to be deleted, or why it is held. Readable by a
+        `pending_deletion` account, which is the only one that has one.
+      tags: [Account]
+      x-access: self
+      responses:
+        '200': { description: The open request, content: { application/json: { schema: { $ref: '#/components/schemas/DeletionRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       operationId: cancelDeletion
       summary: Cancel a pending deletion during the grace period

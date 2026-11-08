@@ -13,6 +13,7 @@
     "migrate:status": "tsx --env-file-if-exists=.env scripts/migrate.ts --status",
     "maintenance": "tsx --env-file-if-exists=.env scripts/maintenance.ts",
     "legacy-content": "tsx --env-file-if-exists=.env scripts/legacy-content.ts",
+    "account-erasure": "tsx --env-file-if-exists=.env scripts/account-erasure.ts",
     "verify:db": "tsx --env-file-if-exists=.env scripts/verify-db.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

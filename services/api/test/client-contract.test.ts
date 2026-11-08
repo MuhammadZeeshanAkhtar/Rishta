@@ -203,10 +203,12 @@ describe('account', () => {
 
   it('ask for deletion and change your mind', async () => {
     const client = as((await seedMember('female')).authId);
-    await client.requestAccountDeletion();
+    const asked = await client.requestAccountDeletion();
     expect((await client.getMe()).status).toBe('pending_deletion');
+    expect((await client.getAccountDeletion())?.scheduledFor).toBe(asked.scheduledFor);
     await client.cancelAccountDeletion();
     expect((await client.getMe()).status).toBe('active');
+    expect(await client.getAccountDeletion()).toBeNull();
   });
 
   it('date of birth corrections', async () => {

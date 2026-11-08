@@ -876,6 +876,38 @@ access, and the Storage policies have only been tested against a local stand-in.
 Rolling back 0034 reopens direct Data API access. Rolling back 0033 needs the previous API
 restored first. Keep `pii_access_log`: it is the record of who viewed what.
 
+## 0035 — `20261107000035_account_erasure.sql`: account erasure and the family SLA sweep
+
+**Status:** written and tested on PGlite · **not applied** to any hosted project.
+
+- `app.erase_account(uuid)` anonymises an account whose deletion request is open, due and unheld
+  (ERD E1). What it removes, closes and keeps is listed at the top of the file. It keeps
+  `user_auth_links` pointing at the tombstone, so a session token issued before the erasure cannot
+  bootstrap a new account.
+- `app.erasure_blocker(uuid)` says why an account cannot be erased, or null. The erasure tool asks it
+  to decide what to skip, then runs `erase_account`, which asks it again under row locks, before any
+  file or sign-in is deleted. The 30 days are checked from `requested_at` as well as
+  `scheduled_for`, so a wrong stored date cannot bring an erasure forward.
+- `app.notify_stalled_family_reviews(integer)` is the Family screen's 72-hour sweep for everyone, for
+  `maintenance` to run.
+- `public.account_retention_holds` records a retention (legal) hold on an account. While one is
+  unreleased, `erasure_blocker` answers `retention_hold` and `erase_account` holds the request. A
+  member who cancels a held request and asks again cannot clear it, as they could a hold that lived
+  only on the request. Row security is forced and members have no access to it.
+- All three functions are service-role only, and the holds table is out of members' reach.
+  `verify:db` checks both (`E1 only the server can erase…`), and the Data API suite now covers 58
+  tables.
+
+**Order.** Additive, and nothing in the API depends on it: apply it with 0034, after the API is
+deployed, or at any time after that. `account-erasure` and the new `maintenance` task need it.
+
+**Safety for existing data.** Creates one empty table and three functions. It changes no row until
+someone runs the erasure tool with `--apply` or places a hold.
+
+**Rollback.** Drop the three functions, then `public.account_retention_holds`. Before dropping the
+table, export any holds it contains: dropping it removes them. An erasure already carried out cannot
+be undone: that is what erasure means, which is why the tool runs dry by default.
+
 ## Environment changes
 
 | Variable                      | Default | Phase | Purpose                                                                 |

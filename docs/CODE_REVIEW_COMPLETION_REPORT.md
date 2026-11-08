@@ -8,6 +8,10 @@ reviewed commit `6c67581`; PDF SHA-256
 verified on hosted Supabase or a device. Reconciled against the code and the test results,
 not against earlier reports.
 
+> **Superseded for current status.** This is the 5 November snapshot. The current item-by-item
+> status, checked against the code on 8 November 2026, is in
+> [CODE_REVIEW_FIX_TRACKER.md](../CODE_REVIEW_FIX_TRACKER.md) → _Verification against the code_.
+
 | Where                                       | What it contains                                                                                              |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | GitHub `main`                               | `75d435b`, which merged Phases 1–5. The review was of `6c67581`.                                              |

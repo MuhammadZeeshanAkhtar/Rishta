@@ -199,7 +199,8 @@ describe('every table in public, with a member JWT', () => {
         group by c.relname order by 1`,
     );
     tables = rows.rows;
-    expect(tables.length).toBe(57);
+    // 57, plus account_retention_holds (0035).
+    expect(tables.length).toBe(58);
   });
 
   const DENIED = /permission denied/;

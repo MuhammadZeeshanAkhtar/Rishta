@@ -115,9 +115,9 @@ jobs:
             exit 1
           fi
 
-          # The legacy content tool's Storage key belongs in a supervised shell only.
-          if git grep -nE 'LEGACY_TOOL_STORAGE_KEY=.+' -- . ':(exclude)*.md' ':(exclude).github/workflows/ci.yml'; then
-            echo "::error::A value for LEGACY_TOOL_STORAGE_KEY is committed."
+          # The legacy content and erasure tools' keys belong in a supervised shell only.
+          if git grep -nE '(LEGACY_TOOL_STORAGE_KEY|ERASURE_TOOL_SERVICE_KEY)=.+' -- . ':(exclude)*.md' ':(exclude).github/workflows/ci.yml'; then
+            echo "::error::A value for a tool's service key is committed."
             exit 1
           fi
 

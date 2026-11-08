@@ -455,6 +455,38 @@ export const meRoutes: FastifyPluginAsync<MeRoutesOptions> = async (fastify, opt
     });
   });
 
+  /**
+   * The open request, so a member who restarts the app still sees when their account is
+   * due to be deleted, or why it is held. 404 when none is open.
+   */
+  fastify.get('/me/delete', { preHandler: fastify.requireIdentity }, async (request) => {
+    const auth = requireAuthContext(request);
+    const userId = await viewerOf(auth.authUserId);
+    const rows = await db.asService('account.lifecycle', (session) =>
+      session.query<{
+        requested_at: string;
+        scheduled_for: string;
+        status: string;
+        retention_hold_reason: string | null;
+      }>(
+        `select ${isoTimestamp('requested_at')} as requested_at,
+                ${isoTimestamp('scheduled_for')} as scheduled_for,
+                status, retention_hold_reason
+           from public.account_deletion_requests
+          where user_id = $1::uuid and status in ('pending', 'held')`,
+        [userId],
+      ),
+    );
+    const open = rows[0];
+    if (!open) throw notFound('No deletion request is open');
+    return {
+      requestedAt: open.requested_at,
+      scheduledFor: open.scheduled_for,
+      status: open.status,
+      heldReason: open.retention_hold_reason,
+    };
+  });
+
   fastify.delete('/me/delete', { preHandler: fastify.requireIdentity }, async (request, reply) => {
     const auth = requireAuthContext(request);
     const userId = await viewerOf(auth.authUserId);

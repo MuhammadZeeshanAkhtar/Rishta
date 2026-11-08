@@ -91,6 +91,7 @@ const EXPECTED = {
   'family invitations past their expiry': 1,
   'suspensions past their end date': 1,
   'staff access log older than 24 months': 0,
+  'family reviews past the 72-hour SLA': 0,
   'deletion requests past their grace period (report only)': 0,
   'abandoned photo uploads (report only)': 0,
 };

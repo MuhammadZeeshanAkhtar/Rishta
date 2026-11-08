@@ -56,7 +56,7 @@ interface SessionContextValue {
   cancelDeletion: () => Promise<void>;
   /** Asks for this account to be deleted. The gates then show the pending state. */
   requestDeletion: () => Promise<void>;
-  /** The open request, when it was made in this session. No route reads one back. */
+  /** The open request: made in this session, or read back after a restart. */
   deletionRequest: DeletionRequest | null;
   /** The email awaiting verification, so the verify screen can name it. */
   pendingEmail: string | null;
@@ -110,6 +110,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       if (generation.current !== mine) return;
       setMe(account);
       setState(sessionStateFor(next, account));
+      // After a restart the app no longer has the request it made, so it asks for it:
+      // the pending screen then shows the date, or why deletion is held.
+      if (account.status === 'pending_deletion') {
+        void getClient()
+          .getAccountDeletion()
+          .then((open) => {
+            if (generation.current === mine) setDeletionRequest(open);
+          })
+          .catch(() => undefined);
+      }
     } catch (error) {
       if (generation.current !== mine) return;
       // The account could not be loaded. Treat it as onboarding rather than

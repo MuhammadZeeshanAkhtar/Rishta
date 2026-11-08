@@ -31,8 +31,9 @@
  *   family invitations past their expiry   app.expire_family_invitations()
  *   suspensions past their end date        app.lift_expired_suspensions()
  *   staff access log older than 24 months  app.purge_expired_pii_access_log()
- * Reported, never changed (their execution needs what does not exist yet):
- *   deletion requests past their grace     — execution needs Supabase Auth admin
+ *   family reviews past the 72-hour SLA    app.notify_stalled_family_reviews()
+ * Reported, never changed (they need a key this script does not hold):
+ *   deletion requests past their grace     — `account-erasure execute --apply` runs them
  *   abandoned photo uploads                — byte removal needs a Storage key
  */
 
@@ -92,6 +93,20 @@ export const TASKS: readonly Task[] = [
     apply: 'select app.purge_expired_pii_access_log() as n',
   },
   {
+    // D12-g. The Family screen also sweeps this on read; this is for everyone else.
+    name: 'family reviews past the 72-hour SLA',
+    count: `select count(*)::int as n from public.family_reviews r
+             where r.decision in ('pending', 'more_info_requested')
+               and r.sla_notified_at is null
+               and r.requested_at < now() - interval '72 hours'
+               and exists (select 1 from public.matches m
+                            where m.id = r.match_id
+                              and m.communication_state = 'pending_family_review'
+                              and m.ended_at is null)`,
+    apply: 'select app.notify_stalled_family_reviews() as n',
+  },
+  {
+    // Executed by `account-erasure execute --apply`, which holds the key this lacks.
     name: 'deletion requests past their grace period (report only)',
     count: `select count(*)::int as n from public.account_deletion_requests
              where status = 'pending' and scheduled_for < now()`,

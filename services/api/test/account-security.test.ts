@@ -287,6 +287,25 @@ describe('N1: every protected route refuses a restricted account', () => {
     expect(none.statusCode).toBe(401);
   });
 
+  it('every route except the public ones refuses a request with no token', async () => {
+    const routes = registeredRoutes();
+    expect(routes.length).toBeGreaterThan(100);
+    const open: string[] = [];
+    for (const [method, path] of routes) {
+      const url = path.replace(/:\w+/g, randomAuthId());
+      const hasBody = method !== 'GET' && method !== 'DELETE';
+      const res = await harness.app.inject({
+        method: method as 'GET',
+        url,
+        ...(hasBody ? { payload: {} } : {}),
+      });
+      if (!(res.statusCode === 401 && res.json().code === 'unauthenticated')) {
+        open.push(`${method} ${path}`);
+      }
+    }
+    expect(open.sort()).toEqual([...PUBLIC_ROUTES].sort());
+  }, 120_000);
+
   it('a token with no account yet gets the same answers as before', async () => {
     const authId = randomAuthId();
     expect((await call('GET', '/me', authId)).statusCode).toBe(404);

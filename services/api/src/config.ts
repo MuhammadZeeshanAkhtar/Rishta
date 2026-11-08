@@ -167,6 +167,10 @@ export const FORBIDDEN_ENV_KEYS = [
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
+  // The supervised tools' service keys (legacy-content, account-erasure). They can
+  // delete any member's files or sign-in, so they belong in that one shell only.
+  'LEGACY_TOOL_STORAGE_KEY',
+  'ERASURE_TOOL_SERVICE_KEY',
 ] as const;
 
 export function assertNoForbiddenSecrets(env: NodeJS.ProcessEnv = process.env): void {
@@ -178,8 +182,9 @@ export function assertNoForbiddenSecrets(env: NodeJS.ProcessEnv = process.env): 
   if (present.length > 0) {
     throw new Error(
       `Refusing to start: ${present.join(', ')} present in the environment. ` +
-        `v1 uses no AI provider (ADR 0006), and this service reaches Postgres ` +
-        `directly rather than through the service-role key. Remove them.`,
+        `v1 uses no AI provider (ADR 0006), this service reaches Postgres ` +
+        `directly rather than through the service-role key, and the tools' keys ` +
+        `belong only in the supervised shell that runs them. Remove them.`,
     );
   }
 }

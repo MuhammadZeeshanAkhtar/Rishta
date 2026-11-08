@@ -6,6 +6,8 @@ import catalog from '../../../packages/i18n/src/locales/en.json';
 import { stageRow } from './chat/stage';
 import { ACCESS_ACTION_KEYS, accessActionKey, accessPermissionKey } from './family/accessLogText';
 import { createReturnGate } from './lib/useRefreshOnReturn';
+import { interestAlreadySent } from './discovery/interestOutcome';
+import { NikahMateError } from '@nikahmate/api-client';
 import { confirmAction } from './lib/confirm';
 import { notificationTarget } from './notifications/target';
 
@@ -337,5 +339,22 @@ describe('the family access log reads as words, not codes', () => {
 
   it('every label exists', () => {
     for (const key of ACCESS_ACTION_KEYS) expect(present(key), key).toBeTruthy();
+  });
+});
+
+describe('Express Interest pressed again on a card', () => {
+  it('"already sent" removes the card instead of showing an error', () => {
+    expect(interestAlreadySent(new NikahMateError('conflict'))).toBe(true);
+  });
+
+  it.each(['rate_limited', 'forbidden', 'network', 'server'] as const)(
+    'a real failure (%s) is still shown',
+    (kind) => {
+      expect(interestAlreadySent(new NikahMateError(kind))).toBe(false);
+    },
+  );
+
+  it('anything that is not an API error is still shown', () => {
+    expect(interestAlreadySent(new Error('boom'))).toBe(false);
   });
 });

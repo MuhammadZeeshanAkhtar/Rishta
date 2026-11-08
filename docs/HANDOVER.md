@@ -13,8 +13,8 @@ device or built on EAS. Phases 1–5 are merged into `main` (`75d435b`). The pos
 | [SUPABASE_SETUP.md](SUPABASE_SETUP.md)                               | Which dashboard value goes where             |
 | [ANDROID_APK_BUILD.md](ANDROID_APK_BUILD.md)                         | EAS APK configuration and steps              |
 | [DATABASE_MIGRATION_REPORT.md](../DATABASE_MIGRATION_REPORT.md)      | Each migration, release order, rollback      |
-| [CODE_REVIEW_COMPLETION_REPORT.md](CODE_REVIEW_COMPLETION_REPORT.md) | Finding-by-finding evidence                  |
-| [CODE_REVIEW_FIX_TRACKER.md](../CODE_REVIEW_FIX_TRACKER.md)          | Status tracker and manual actions            |
+| [CODE_REVIEW_COMPLETION_REPORT.md](CODE_REVIEW_COMPLETION_REPORT.md) | 5 November snapshot (superseded)             |
+| [CODE_REVIEW_FIX_TRACKER.md](../CODE_REVIEW_FIX_TRACKER.md)          | Current finding-by-finding status (8 Nov)    |
 | [MAINTENANCE.md](MAINTENANCE.md)                                     | Scheduled maintenance task                   |
 | [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)                         | What is missing, and why                     |
 | [openapi.yaml](openapi.yaml)                                         | API contract, with unbuilt operations marked |
@@ -69,7 +69,7 @@ What each partial item still needs:
 | L1   | Hosted MFA, staff accounts and console hosting. Cases, PII access log and `restrict` are not built   |
 | L3   | Real Storage verification. Discovery cards show no photo; no grant-revocation endpoint               |
 | L6   | Supervised view, quorum, SLA scheduler, delegate-only accounts (decision)                            |
-| L7   | Deletion execution, data export, public deletion page, store policies                                |
+| L7   | Scheduling erasure (built), data export, public deletion page, store policies                        |
 | L8   | Push provider and delivery; quiet hours at send time                                                 |
 | L10  | 18 operations, each blocked (see below)                                                              |
 | L11  | A job runner (dependency approval) and a scheduler                                                   |
@@ -97,18 +97,18 @@ check that is only meaningful on Supabase: elsewhere it reports "verify on the h
 
 ## Test results
 
-| Check                             | Result                                                                                        |
-| --------------------------------- | --------------------------------------------------------------------------------------------- |
-| Full test suite                   | **2,473 passed, 0 failed** (domain 254, db 622, api-client 45, i18n 14, api 1283, mobile 255) |
-| Typecheck, lint, formatting       | Clean                                                                                         |
-| Android JavaScript bundle         | `expo export --platform android` succeeds                                                     |
-| Android native project generation | `expo prebuild` succeeds; output removed                                                      |
-| Web build (includes `/admin`)     | `expo export --platform web` succeeds                                                         |
-| Lockfile                          | In sync with every `package.json`                                                             |
-| Secret scan                       | No keys or credentials in tracked or new files                                                |
-| Phase 5 mutation checks           | Every leak-relevant break caught; files restored                                              |
-| Notification regression           | Every database notification type parses in the inbox and has English text                     |
-| `eas.json` schema                 | Valid against EAS's own validator; no login or build involved                                 |
+| Check                             | Result                                                                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Full test suite                   | **2,549 passed, 0 failed, 0 skipped** (domain 254, db 622, api-client 45, i18n 14, api 1341, mobile 273), 8 November 2026 |
+| Typecheck, lint, formatting       | Clean                                                                                                                     |
+| Android JavaScript bundle         | `expo export --platform android` succeeds                                                                                 |
+| Android native project generation | `expo prebuild` succeeds; output removed                                                                                  |
+| Web build (includes `/admin`)     | `expo export --platform web` succeeds                                                                                     |
+| Lockfile                          | In sync with every `package.json`                                                                                         |
+| Secret scan                       | No keys or credentials in tracked or new files, or anywhere in git history                                                |
+| Mutation checks                   | Every break of a security safeguard caught; files restored (see FINAL_REPORT.pdf)                                         |
+| Notification regression           | Every database notification type parses in the inbox and has English text                                                 |
+| `eas.json` schema                 | Valid against EAS's own validator; no login or build involved                                                             |
 
 **Not run, and not claimed:** hosted migrations; live `verify:db`; real Supabase Storage or
 Auth MFA; a Gradle or EAS build; any device; a browser click-through of the photo upload and

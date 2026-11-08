@@ -75,8 +75,12 @@ Once a day is enough for every task. Alert on a non-zero exit code.
 ## Not done here (needs approval or infrastructure)
 
 - A job runner (e.g. pg-boss — a new dependency, needs approval) for work that
-  must happen at a specific time: deletion execution, review-SLA sweeps,
-  suspension expiry, push delivery.
-- Deletion execution (Supabase Auth admin API).
+  must happen at a specific time, such as push delivery. Everything else here is
+  daily, which a plain scheduled command covers.
+- Scheduling account erasure. It is a separate command, because it needs the
+  service-role key this script never holds:
+  `pnpm --filter @nikahmate/api account-erasure execute --apply`, with
+  `ERASURE_TOOL_SERVICE_KEY` and `SUPABASE_URL`. See docs/PRODUCTION_SECURITY.md
+  for what must happen before it is scheduled.
 - Removal of abandoned upload bytes from Storage on a schedule (the API already
   removes them, best effort, when the member next uploads — review B11).

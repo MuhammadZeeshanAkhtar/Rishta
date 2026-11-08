@@ -30,6 +30,8 @@ describe('migrations apply', () => {
       // Sorted, because the query is. Phases 1-6 Slice 2.
       // Review Phase 4 (0030): account deletion requests (L7/L10).
       'account_deletion_requests',
+      // Account erasure (0035): retention holds on an account.
+      'account_retention_holds',
       // Review Phase 3 (0029): the L1 admin/moderation backend.
       'admin_action_audit',
       'admin_role_assignments',
@@ -109,8 +111,8 @@ describe('migrations apply', () => {
        order by c.relname`,
     );
     // 45 through Phase 7; +5 in 0029 (review L1/B6); +4 in 0030 (review L10);
-    // +2 in 0031 (review L3).
-    expect(rows.length).toBe(57);
+    // +2 in 0031 (review L3); +1 in 0035 (retention holds).
+    expect(rows.length).toBe(58);
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} must have RLS enabled`).toBe(true);
       expect(row.relforcerowsecurity, `${row.relname} must FORCE RLS`).toBe(true);

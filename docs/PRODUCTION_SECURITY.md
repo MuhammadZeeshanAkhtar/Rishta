@@ -6,7 +6,7 @@ a hosted project, a production host or a real device**, unless it says so.
 
 ## Release order
 
-Migrations 0026 to 0034 are unapplied. On an empty project, run them all, then start the API.
+Migrations 0026 to 0035 are unapplied. On an empty project, run them all, then start the API.
 On a project with data, follow `DATABASE_MIGRATION_REPORT.md`:
 
 ```bash
@@ -20,7 +20,8 @@ pnpm --filter @nikahmate/api migrate
 pnpm --filter @nikahmate/api verify:db
 ```
 
-0034 removes what the previous API runs on, so it must come after the current API is live.
+0034 removes what the previous API runs on, so it must come after the current API is live. The
+second `migrate` applies 0035 with it: it only adds functions, and nothing in the API needs it.
 
 **Which API is live has not been checked.** Older documents name `6c67581`, the reviewed
 commit. `main` is now `75d435b`, so a host that deploys from `main` may be running that instead,
@@ -56,19 +57,19 @@ member above, and 1 expected sends to fail. So keep the time between 0033 and th
 
 ## Blockers, in order
 
-| #   | Blocker                                                                                                  | Owner                 |
-| --- | -------------------------------------------------------------------------------------------------------- | --------------------- |
-| 1   | **Nothing executes a deletion after its grace period.** The app promises it, and Google Play requires it | Company + engineering |
-| 2   | Apply the migrations, then run `verify:db` on the hosted project and resolve anything it reports         | Company               |
-| 3   | Test Realtime chat on Supabase with the reduced `messages` access from 0034                              | Company               |
-| 4   | Set `DATABASE_SSL_CA`. Without it, a remote database connection is refused                               | Company               |
-| 5   | Dashboard: remove `public` from the exposed schemas, and check `pg_graphql`                              | Company               |
-| 6   | Decide on legacy content, then run `docs/LEGACY_CONTENT_RUNBOOK.md`                                      | Company               |
-| 7   | Choose a host. Build and start commands, headers and health check are below                              | Company               |
-| 8   | Turn on PITR and test a restore. Storage has no equivalent                                               | Company               |
-| 9   | Publish a web deletion page and complete the Play data-safety form                                       | Company               |
-| 10  | Test on real Android devices: sign-up, photos, chat, MFA, restricted accounts, deletion                  | Company               |
-| 11  | Decide what a member sees when the other person in a chat is suspended or banned (see below)             | Company               |
+| #   | Blocker                                                                                          | Owner   |
+| --- | ------------------------------------------------------------------------------------------------ | ------- |
+| 1   | **Schedule account erasure, after counsel reviews ERD E1.** Built and tested locally; see below  | Company |
+| 2   | Apply the migrations, then run `verify:db` on the hosted project and resolve anything it reports | Company |
+| 3   | Test Realtime chat on Supabase with the reduced `messages` access from 0034                      | Company |
+| 4   | Set `DATABASE_SSL_CA`. Without it, a remote database connection is refused                       | Company |
+| 5   | Dashboard: remove `public` from the exposed schemas, and check `pg_graphql`                      | Company |
+| 6   | Decide on legacy content, then run `docs/LEGACY_CONTENT_RUNBOOK.md`                              | Company |
+| 7   | Choose a host. Build and start commands, headers and health check are below                      | Company |
+| 8   | Turn on PITR and test a restore. Storage has no equivalent                                       | Company |
+| 9   | Publish a web deletion page and complete the Play data-safety form                               | Company |
+| 10  | Test on real Android devices: sign-up, photos, chat, MFA, restricted accounts, deletion          | Company |
+| 11  | Decide what a member sees when the other person in a chat is suspended or banned (see below)     | Company |
 
 ## Chat with a suspended or banned member
 
@@ -86,17 +87,80 @@ in the app, and to offer a web link for the same. It also expects the data to be
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Ask from inside the app                      | **Built.** Me tab, every onboarding step, the restricted screen                                           |
 | Clear what happens, confirmation, cancelling | **Built.** Grace period from the API, typed confirmation, keep account                                    |
-| Actually delete the account and data         | **NOT BUILT.** `maintenance` reports requests past their grace period. Nothing executes them              |
+| Actually delete the account and data         | **Built, not scheduled.** `account-erasure execute --apply`; verified locally only, see below             |
 | Web page to ask from                         | **Company.** The web build serves `/delete-account`, but needs hosting, and the link goes in Play Console |
 | Data safety form, privacy policy             | **Company**                                                                                               |
 
-**Do not release while the first "not built" stands.** The screen says data is removed after
-30 days, because that is the stated policy (ERD E1). Until something does it, that sentence
-is untrue. Building it needs Supabase Auth admin access, a scheduler, and counsel's review of
-what ERD E1 retains: it is permanent, so it was left for a deliberate decision.
+### Account erasure
 
-No route reads an open request back, so after an app restart the pending screen shows the
-request without its date.
+Migration 0035 and `services/api/scripts/account-erasure.ts` carry out what the screen promises,
+exactly as ERD E1 defines it: the account is anonymised, not destroyed, so the other person keeps
+their conversation.
+
+```bash
+pnpm --filter @nikahmate/api account-erasure report
+pnpm --filter @nikahmate/api account-erasure execute
+pnpm --filter @nikahmate/api account-erasure execute --apply
+```
+
+- **Dry run by default.** `execute` alone changes nothing and says what each due request would do.
+- **What it does**, for each request whose 30 days have passed, in one transaction: anonymises the
+  database first, without committing, so nothing irreversible happens if that fails; then deletes
+  every file in the member's Storage folder (not only the files the database knows about); then
+  deletes their sign-in from Supabase Auth; then commits. Any failure rolls the database back, and
+  the next run finishes the job. Each Storage or Auth call times out after 30 seconds.
+- **What stops it.** A report opened during the grace period, or a retention hold on the account
+  (see 4 below), holds the request (R4). A held request
+  is never executed: releasing it is a staff decision. A staff account is refused until its staff
+  access is removed. A suspended or banned account is skipped while it is restricted. The 30 days
+  are counted from when the member asked as well as from the stored date. The database checks all
+  of this itself (`app.erasure_blocker`), under row locks, at the moment it erases.
+- **What is removed and kept** is listed at the top of migration 0035, which is the one place to
+  change if counsel changes ERD E1. The other person keeps the conversation, shown as ended, but
+  not the notes the member wrote on interests or photo requests. The link from the member's
+  deleted sign-in id to the tombstone is kept on purpose: without it, a session token issued
+  before the erasure (still valid until it expires) could create a new, undeletable account.
+  With it, every route and the database refuse that token. Counsel should confirm this too.
+- **Keys.** It needs `ERASURE_TOOL_SERVICE_KEY` (the service-role key) and `SUPABASE_URL`. The API
+  refuses to start if that key, or `LEGACY_TOOL_STORAGE_KEY`, is in its environment, so keep both
+  out of the API host's environment and out of `services/api/.env`. Run it as a supervised scheduled
+  job, once a day, and alert on a non-zero exit code. CI refuses a committed value for either key.
+- **What it prints.** Request ids, counts, the step that failed and an HTTP status or Postgres error
+  code. Never a name, an email, a file path, a response body or a connection string.
+
+**Before scheduling it, four things are still needed:**
+
+1. **Counsel's review of ERD E1.** ERD E1 calls its retention rules "defensible defaults, not legal
+   advice". Erasure is permanent.
+2. **A rehearsal against a copy of the hosted project.** The Storage list and delete calls and the
+   Auth admin call have only been tested against stand-ins. Confirm the key works for all three
+   (including whether a newer `sb_secret_` key is accepted), that every file in the member's folder
+   is really gone, and that nobody else's is touched.
+3. **A decision on who runs it and who resolves held requests.** There is no staff screen for holds:
+   releasing one is a direct database change today.
+4. **A process for legal holds.** The mechanism is built: a row in `public.account_retention_holds`
+   holds erasure for that account until `released_at` is set, and the member cannot clear it by
+   cancelling and asking again. Members are told only that "a legal review" must finish first.
+   Still to decide: who may place and lift a hold, and on what grounds. There is no staff screen, so
+   today both are a supervised database change:
+
+   ```sql
+   insert into public.account_retention_holds (user_id, reason, placed_by_admin_id)
+   values ('<member id>', '<internal reason>', '<your admin_users id>');
+   ```
+
+   Lifting a hold sets `released_at` (and `released_by_admin_id`). A request the hold put on
+   `held` stays held until staff also release it.
+
+Also for counsel: a closed report keeps its description, but the profile or photo it pointed at is
+erased with the account. ERD E1 asks for report evidence to be kept for 5 years, and evidence
+snapshots are not built (L1). Either snapshot evidence when a report is closed, hold erasure while
+a recently closed report exists, or accept the loss.
+
+Until it runs, the screen's promise that data is removed after 30 days is not yet kept.
+
+After an app restart, the pending screen now reads the request back (`GET /me/delete`), so it shows
+the date, or that deletion is held.
 
 ## Data API
 
@@ -206,10 +270,10 @@ Company actions, all in GitHub settings:
 
 `pnpm audit`: 40 advisories before Stage 2, 4 after. None critical, and none in the API.
 
-| Package                | Severity       | Where                                                  | Why it remains                                                                                                   |
-| ---------------------- | -------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `decode-uri-component` | High, moderate | **In the app**, through `expo-router` → `query-string` | The fix is a newer line `query-string` 7 does not accept. Only affects decoding links on the person's own device |
-| `glob`, `minimatch`    | Moderate       | Expo tooling, ESLint                                   | Major version only. Not shipped                                                                                  |
+| Package                | Severity       | Where                                                  | Why it remains                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | -------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decode-uri-component` | High, moderate | **In the app**, through `expo-router` → `query-string` | The fix is ES-module only, which `query-string` 7 cannot load. **Mitigated in the app:** `app/+native-intent.ts` sends any deep link with malformed percent-encoding, or longer than 4,096 characters, to the home screen before the router parses it. Without that, about 600 crafted characters froze the app for over 5 seconds. Not covered: a crafted link opened in the **web** build can still freeze that browser tab |
+| `glob`, `minimatch`    | Moderate       | Expo tooling, ESLint                                   | Fixed only in a new major version, which the depending packages do not accept. Neither sees untrusted input (glob's advisory concerns a timeout signal, minimatch's a crafted pattern). Not shipped                                                                                                                                                                                                                           |
 
 Check again at each Expo upgrade, which is where most of these will go away. CI reports them on
 every run.

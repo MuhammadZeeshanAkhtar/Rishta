@@ -59,6 +59,7 @@ export const RESTRICTED_ACCOUNT_ROUTES = [
   // Existing rule R4: a restricted member may ask for erasure, and the request is
   // held. Cancelling returns to the exact previous status.
   'POST /me/delete',
+  'GET /me/delete',
   'DELETE /me/delete',
   // Part of signing out: stops pushes reaching a device no longer in use.
   'DELETE /me/push-tokens/:deviceId',

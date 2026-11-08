@@ -134,7 +134,7 @@ import {
 } from '@nikahmate/domain';
 import { AuthClient, type AuthClientOptions } from './auth';
 import { HttpClient } from './http';
-import { NikahMateError } from './errors';
+import { isNikahMateError, NikahMateError } from './errors';
 
 /**
  * The single client the app talks to.
@@ -229,10 +229,20 @@ export class NikahMateClient {
 
   /**
    * POST /me/delete. Starts the grace period and hides the account at once. The
-   * details are returned only here: no route reads an open request back.
+   * details are returned here, and later by getAccountDeletion.
    */
   async requestAccountDeletion(): Promise<DeletionRequest> {
     return parse(deletionRequestSchema, await this.http.post<unknown>('/me/delete'), 'deletion');
+  }
+
+  /** GET /me/delete. The open request, or null when none is open. */
+  async getAccountDeletion(): Promise<DeletionRequest | null> {
+    try {
+      return parse(deletionRequestSchema, await this.http.get<unknown>('/me/delete'), 'deletion');
+    } catch (error) {
+      if (isNikahMateError(error) && error.kind === 'not_found') return null;
+      throw error;
+    }
   }
 
   /** DELETE /me/delete. Returns the account to its exact previous status. */
