@@ -4,6 +4,10 @@
  *   pnpm --filter @nikahmate/api migrate:status   # report only, writes nothing
  *   pnpm --filter @nikahmate/api migrate --dry-run
  *   pnpm --filter @nikahmate/api migrate
+ *   pnpm --filter @nikahmate/api migrate --through=20261106000033
+ *
+ * `--through` stops at that migration, for a release that must deploy the API
+ * between two of them. See DATABASE_MIGRATION_REPORT.md.
  *
  * Reads DATABASE_URL from services/api/.env (loaded by --env-file-if-exists).
  * The connection string contains the database password, so it is never printed,
@@ -29,9 +33,11 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import { MIGRATIONS_DIR } from '@nikahmate/db';
+import { databaseConnection, explainTlsFailure } from '../src/db/tls';
 
 const STATUS = process.argv.includes('--status');
 const DRY_RUN = process.argv.includes('--dry-run') || STATUS;
+const THROUGH = process.argv.find((a) => a.startsWith('--through='))?.split('=')[1];
 
 /**
  * Tables this schema is allowed to find already present, READ FROM THE
@@ -100,8 +106,14 @@ function checksum(sql: string): string {
 }
 
 async function loadMigrations(): Promise<Migration[]> {
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
-  if (files.length === 0) throw new Error(`No migrations found in ${MIGRATIONS_DIR}`);
+  const all = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+  if (all.length === 0) throw new Error(`No migrations found in ${MIGRATIONS_DIR}`);
+  if (THROUGH !== undefined && !all.some((f) => f.startsWith(`${THROUGH}_`))) {
+    // A typo must stop the run, not quietly apply everything or nothing.
+    throw new Error(`--through=${THROUGH} matches no migration file`);
+  }
+  const files =
+    THROUGH === undefined ? all : all.filter((f) => f.slice(0, THROUGH.length) <= THROUGH);
 
   return Promise.all(
     files.map(async (filename) => {
@@ -157,10 +169,7 @@ async function main(): Promise<void> {
 
   const migrations = await loadMigrations();
   const client = new Client({
-    connectionString: url,
-    // Supabase terminates TLS with a certificate this client does not have a
-    // local root for. The connection is still encrypted.
-    ssl: { rejectUnauthorized: false },
+    ...databaseConnection(url),
     application_name: 'nikahmate-migrate',
   });
 
@@ -169,7 +178,9 @@ async function main(): Promise<void> {
   } catch (error) {
     // Deliberately not re-throwing: a pg connection error can carry the
     // connection string, and this is the one place most likely to print it.
-    console.error(`Could not connect to ${maskedTarget(url)}: ${(error as Error).message}`);
+    console.error(
+      `Could not connect to ${maskedTarget(url)}: ${explainTlsFailure(error) ?? (error as Error).message}`,
+    );
     process.exit(1);
   }
 

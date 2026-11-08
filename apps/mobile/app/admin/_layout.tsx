@@ -3,6 +3,7 @@ import { Redirect, Stack } from 'expo-router';
 import { AdminGateScreen } from '../../src/admin/AdminChrome';
 import { AdminProvider, useAdmin } from '../../src/admin/AdminProvider';
 import { useSession } from '../../src/session/SessionProvider';
+import { redirectFor } from '../../src/session/sessionState';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
@@ -17,9 +18,8 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 export default function AdminLayout() {
   const { state } = useSession();
   if (state === 'loading') return null;
-  if (state === 'signed_out' || state === 'misconfigured')
-    return <Redirect href="/(auth)/sign-in" />;
-  if (state === 'unverified') return <Redirect href="/(auth)/verify-email" />;
+  const redirect = redirectFor('admin', state);
+  if (redirect) return <Redirect href={redirect as never} />;
   return (
     <AdminProvider>
       <Console />

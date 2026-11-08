@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# The token this workflow runs with can read the code and nothing else. It holds no
+# secrets, deploys nothing and applies no migration: all of those stay human steps.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,11 +21,13 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -55,18 +62,31 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @nikahmate/mobile exec expo install --check
 
+      # Proves the production API still bundles (docs/PRODUCTION_SECURITY.md).
+      - name: Build production API
+        run: pnpm --filter @nikahmate/api build
+
+      # Reports without blocking: some remaining advisories have no fix available, and
+      # are explained in docs/PRODUCTION_SECURITY.md. A new one should be read, not
+      # allowed to stop an unrelated change.
+      - name: Dependency advisories
+        continue-on-error: true
+        run: pnpm audit --prod
+
   secrets:
     name: Secret guard
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # A narrow, deliberate check for the things this project has committed to
       # never shipping (README principle 3). Not a substitute for a real secret
       # scanner, but it fails fast and costs nothing.
-      - name: No service-role keys, AI keys or .env files
+      - name: No service-role keys, AI keys, private keys or .env files
         run: |
           set -euo pipefail
 
@@ -85,6 +105,19 @@ jobs:
           # Gemini is not used in v1 at all, so any match here is a mistake.
           if git grep -nE 'AIza[0-9A-Za-z_-]{35}' -- . ':(exclude)*.md'; then
             echo "::error::Possible Google/Gemini API key in the repository."
+            exit 1
+          fi
+
+          # A private key has a fixed header. `.key` files are ignored, but a key pasted
+          # into a file is not. This workflow is excluded because it names the pattern.
+          if git grep -nE 'BEGIN [A-Z ]*PRIVATE KEY' -- . ':(exclude).github/workflows/ci.yml'; then
+            echo "::error::Possible private key in the repository."
+            exit 1
+          fi
+
+          # The legacy content and erasure tools' keys belong in a supervised shell only.
+          if git grep -nE '(LEGACY_TOOL_STORAGE_KEY|ERASURE_TOOL_SERVICE_KEY)=.+' -- . ':(exclude)*.md' ':(exclude).github/workflows/ci.yml'; then
+            echo "::error::A value for a tool's service key is committed."
             exit 1
           fi
 

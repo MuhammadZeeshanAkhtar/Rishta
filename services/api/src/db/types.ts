@@ -399,6 +399,13 @@ export const SERVICE_ROLE_USES = [
   'admin.decide',
 
   /**
+   * Recording that a member of staff is about to view a member's private data
+   * (`pii_access_log`, Stage 2). Restricted: no member or staff role can write
+   * it directly, or the record could be forged or skipped.
+   */
+  'admin.record_access',
+
+  /**
    * Another member's profile, permission-filtered (review L4).
    *
    * Name, age, gender and the target's field-visibility choices sit in
@@ -422,6 +429,14 @@ export const SERVICE_ROLE_USES = [
    * and back to exactly the previous status).
    */
   'account.lifecycle',
+
+  /**
+   * Ending the caller's own suspension when its moderator-set end date has
+   * passed (review N1). Members have no write grant on `users.status` and may
+   * not run the function. Keyed by the caller's id; changes nothing unless a
+   * suspension is actually due.
+   */
+  'account.lift_expired_suspension',
 
   /**
    * Registering and invalidating the caller's own push tokens (review L10/L8).
@@ -472,6 +487,16 @@ export const SERVICE_ROLE_USES = [
   'photo.request',
 
   /**
+   * Review N2. Reading another member's approved, non-private photo rows for
+   * `GET /profiles/:userId/photos` and the photo-request check. Members hold
+   * owner-only SELECT on `photos` and `photo_variants` since 0032, so storage
+   * paths are not readable directly. Runs only after the caller's own session
+   * has confirmed `app.can_view_profile`, and the viewer is passed explicitly to
+   * `app.photo_variant_readable`, so the rule still decides each object.
+   */
+  'photo.read_access',
+
+  /**
    * Review L3 (0031). The owner's answer to a photo request: the status
    * change, the grant on approval, and the requester's notification.
    */
@@ -482,7 +507,7 @@ export type ServiceRoleUse = (typeof SERVICE_ROLE_USES)[number];
 
 export interface Db {
   /**
-   * Runs as `authenticated` with the caller's claims. RLS applies.
+   * Runs as `api_member` with the caller's claims. RLS applies.
    * This is the default path — reach for it unless there is a listed reason not to.
    */
   asUser<T>(authUserId: string, fn: (session: DbSession) => Promise<T>): Promise<T>;

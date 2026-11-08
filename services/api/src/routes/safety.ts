@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import { blockRequestSchema, createReportSchema } from '@nikahmate/domain';
 import { requireAuthContext } from '../auth/plugin';
 import { badRequest, conflict, notFound } from '../errors';
-import { decodeCursor, encodeCursor, parseLimit } from '../discovery/cards';
+import { parseLimit } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
 import { isUuid } from '../http/params';
 
@@ -36,9 +37,10 @@ export interface SafetyRoutesOptions {
 }
 
 interface BlockRow {
+  id: string;
   blocked_user_id: string;
   created_at: string;
-  position: number;
+  cursor_at: string;
 }
 
 interface ReportRow {
@@ -88,24 +90,24 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
     const query = request.query as { cursor?: string; limit?: string };
 
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const { viewerUserId, page } = await db.asUser(auth.authUserId, async (session) => {
       // Keyset over newest first with the id as a tiebreak, so two blocks made
       // in the same millisecond never swap between pages.
       const rows = await session.query<BlockRow>(
-        `select blocked_user_id, created_at, position
+        `select id, blocked_user_id, created_at, cursor_at
            from (
              select b.*,
-                    (row_number() over (order by b.created_at desc, b.id))::int - 1 as position
+                    ${keysetTime('b.created_at')} as cursor_at
                from public.blocks b
               where b.blocker_user_id = app.current_user_id()
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null],
       );
       return { viewerUserId: await resolveViewer(session), page: rows };
     });
@@ -143,7 +145,7 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
         displayName: names.get(row.blocked_user_id) ?? null,
         blockedAt: row.created_at,
       })),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });
@@ -373,22 +375,22 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
     const query = request.query as { cursor?: string; limit?: string };
 
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const rows = await db.asUser(auth.authUserId, (session) =>
-      session.query<ReportRow & { position: number }>(
-        `select id, category, status, outcome_key, created_at, resolved_at, position
+      session.query<ReportRow & { cursor_at: string }>(
+        `select id, category, status, outcome_key, created_at, resolved_at, cursor_at
            from (
              select r.*,
-                    (row_number() over (order by r.created_at desc, r.id))::int - 1 as position
+                    ${keysetTime('r.created_at')} as cursor_at
                from public.reports r
               where r.reporter_user_id = app.current_user_id()
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null],
       ),
     );
 
@@ -398,7 +400,7 @@ export const safetyRoutes: FastifyPluginAsync<SafetyRoutesOptions> = async (fast
 
     return {
       items: page.map(toReport),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });

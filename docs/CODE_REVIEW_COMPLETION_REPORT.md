@@ -8,12 +8,16 @@ reviewed commit `6c67581`; PDF SHA-256
 verified on hosted Supabase or a device. Reconciled against the code and the test results,
 not against earlier reports.
 
-| Where                                      | What it contains                                                                                              |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| GitHub `main`                              | `6c67581` — the reviewed commit. **This work is not merged into it.**                                         |
-| Review branch `review/phases-2-5-handover` | Phase 1: `d74a3f3` (with 0026), `0de536f` (0027). Phases 2–5: five further commits, with migrations 0028–0031 |
-| Live deployment (named in the report)      | runs `6c67581`; carries every original finding; not touched                                                   |
-| Hosted Supabase                            | none reachable; **no migration has been applied anywhere**                                                    |
+> **Superseded for current status.** This is the 5 November snapshot. The current item-by-item
+> status, checked against the code on 8 November 2026, is in
+> [CODE_REVIEW_FIX_TRACKER.md](../CODE_REVIEW_FIX_TRACKER.md) → _Verification against the code_.
+
+| Where                                       | What it contains                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| GitHub `main`                               | `75d435b`, which merged Phases 1–5. The review was of `6c67581`.                                              |
+| Branch `review/phases-2-5-handover`, merged | Phase 1: `d74a3f3` (with 0026), `0de536f` (0027). Phases 2–5: five further commits, with migrations 0028–0031 |
+| Live deployment (named in the report)       | Not checked. Carries every original finding if it still runs `6c67581`                                        |
+| Hosted Supabase                             | none reachable; **no migration has been applied anywhere**                                                    |
 
 ---
 

@@ -39,6 +39,8 @@ import {
   type PublicProfile,
   bootstrapRequestSchema,
   createUploadRequestSchema,
+  deletionRequestSchema,
+  notificationPreferencesSchema,
   fieldVisibilityMapSchema,
   meSchema,
   ownPhotoSchema,
@@ -54,6 +56,8 @@ import {
   userSettingsUpdateSchema,
   type BootstrapRequest,
   type CreateUploadRequest,
+  type DeletionRequest,
+  type NotificationPreferences,
   type FieldVisibilityMap,
   type Me,
   type OwnPhoto,
@@ -130,7 +134,7 @@ import {
 } from '@nikahmate/domain';
 import { AuthClient, type AuthClientOptions } from './auth';
 import { HttpClient } from './http';
-import { NikahMateError } from './errors';
+import { isNikahMateError, NikahMateError } from './errors';
 
 /**
  * The single client the app talks to.
@@ -192,6 +196,58 @@ export class NikahMateClient {
     const body = bootstrapRequestSchema.parse(request);
     const response = await this.http.post<unknown>('/account/bootstrap', body);
     return parse(meSchema, response, 'bootstrap');
+  }
+
+  /** POST /me/deactivate. Hides the profile; nothing is deleted. Only from `active`. */
+  async deactivateAccount(): Promise<void> {
+    await this.http.post<void>('/me/deactivate');
+  }
+
+  async getNotificationPreferences(): Promise<NotificationPreferences> {
+    return parse(
+      notificationPreferencesSchema,
+      await this.http.get<unknown>('/me/notification-preferences'),
+      'notification preferences',
+    );
+  }
+
+  /** Replaces the whole set, and returns what was stored. */
+  async updateNotificationPreferences(
+    preferences: NotificationPreferences,
+  ): Promise<NotificationPreferences> {
+    return parse(
+      notificationPreferencesSchema,
+      await this.http.put<unknown>('/me/notification-preferences', preferences),
+      'notification preferences',
+    );
+  }
+
+  /** POST /me/reactivate. The API allows it only from `deactivated`. */
+  async reactivateAccount(): Promise<void> {
+    await this.http.post<void>('/me/reactivate');
+  }
+
+  /**
+   * POST /me/delete. Starts the grace period and hides the account at once. The
+   * details are returned here, and later by getAccountDeletion.
+   */
+  async requestAccountDeletion(): Promise<DeletionRequest> {
+    return parse(deletionRequestSchema, await this.http.post<unknown>('/me/delete'), 'deletion');
+  }
+
+  /** GET /me/delete. The open request, or null when none is open. */
+  async getAccountDeletion(): Promise<DeletionRequest | null> {
+    try {
+      return parse(deletionRequestSchema, await this.http.get<unknown>('/me/delete'), 'deletion');
+    } catch (error) {
+      if (isNikahMateError(error) && error.kind === 'not_found') return null;
+      throw error;
+    }
+  }
+
+  /** DELETE /me/delete. Returns the account to its exact previous status. */
+  async cancelAccountDeletion(): Promise<void> {
+    await this.http.delete<void>('/me/delete');
   }
 
   async getMe(): Promise<Me> {
@@ -300,7 +356,7 @@ export class NikahMateClient {
     const response = await fetch(target.uploadUrl, {
       method: target.method,
       headers: target.headers,
-      body: body as BodyInit,
+      body: body as NonNullable<RequestInit['body']>,
     });
     if (!response.ok) {
       throw new NikahMateError(response.status >= 500 ? 'server' : 'validation_failed', {
@@ -672,9 +728,10 @@ export class NikahMateClient {
 
   /** Matches awaiting my decision as a delegate. */
   async listFamilyReviews(
-    options: { cursor?: string; limit?: number } = {},
+    options: { cursor?: string; limit?: number; state?: string } = {},
   ): Promise<ReviewSummaryPage> {
     const query: Record<string, string | number | undefined> = {};
+    if (options.state) query.state = options.state;
     if (options.cursor) query.cursor = options.cursor;
     if (options.limit) query.limit = options.limit;
     return parse(

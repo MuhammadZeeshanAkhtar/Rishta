@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { databaseConnection, type DatabaseTlsEnv } from './tls';
 import type { Db, DbSession, ServiceRoleUse, ServiceUseRecorder } from './types';
 
 /**
@@ -6,19 +7,23 @@ import type { Db, DbSession, ServiceRoleUse, ServiceUseRecorder } from './types'
  *
  * Every path opens a transaction and uses `SET LOCAL`, so the role and the JWT
  * claims are scoped to that transaction and cannot leak into whichever request
- * next borrows the connection from the pool. A leaked `authenticated` role on a
+ * next borrows the connection from the pool. A leaked `api_member` role on a
  * pooled connection is the kind of bug that looks like it works.
  */
 
 export interface PgDbOptions {
   connectionString: string;
+  /** TLS settings; see ./tls.ts. Defaults to the process environment. */
+  tls?: DatabaseTlsEnv;
   max?: number;
   onServiceUse?: ServiceUseRecorder;
 }
 
 export function createPgDb(options: PgDbOptions): Db {
+  const { connectionString, ssl } = databaseConnection(options.connectionString, options.tls);
   const pool = new pg.Pool({
-    connectionString: options.connectionString,
+    connectionString,
+    ssl,
     // Deliberately small. One API instance in front of Supabase's pooler
     // (Supavisor) in transaction mode — a large pool here just exhausts the
     // upstream one (R10).
@@ -62,7 +67,9 @@ export function createPgDb(options: PgDbOptions): Db {
       return inTransaction(async (client) => {
         const claims = JSON.stringify({ sub: authUserId, role: 'authenticated' });
         await client.query('select set_config($1, $2, true)', ['request.jwt.claims', claims]);
-        await client.query('set local role authenticated');
+        // Review B7: not `authenticated`, which the Data API can reach. See migration
+        // 0033. The claims still say `authenticated`: that is the JWT's own role.
+        await client.query('set local role api_member');
       }, fn);
     },
 

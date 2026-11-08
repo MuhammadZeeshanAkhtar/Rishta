@@ -108,17 +108,14 @@ export const photoAccessRoutes: FastifyPluginAsync<PhotoAccessRoutesOptions> = a
   fastify.get('/profiles/:userId/photos', { preHandler: fastify.requireAuth }, async (request) => {
     const auth = requireAuthContext(request);
     const target = uuidParam(request, 'userId', 'user id');
-    await viewerOf(auth.authUserId, target);
+    const viewer = await viewerOf(auth.authUserId, target);
 
-    // As the viewer: `photos_select_visible` already limits the rows to
-    // approved, non-private photos on a profile they may view; the rule then
-    // says which stored object of each they may read.
-    const {
-      photos,
-      request: latest,
-      granted,
-    } = await db.asUser(auth.authUserId, async (session) => {
-      const photos = await session.query<{
+    // Review N2: `viewerOf` has confirmed the caller may view this profile, and
+    // members hold no direct read of another member's photo rows since 0032.
+    // The rule, given the viewer explicitly, says which object of each they may
+    // read.
+    const photos = await db.asService('photo.read_access', (session) =>
+      session.query<{
         id: string;
         storage_path: string;
         blurred_path: string | null;
@@ -129,16 +126,19 @@ export const photoAccessRoutes: FastifyPluginAsync<PhotoAccessRoutesOptions> = a
         `select p.id, p.storage_path, p.visibility,
                   (select v.storage_path from public.photo_variants v
                     where v.photo_id = p.id and v.variant = 'blurred') as blurred_path,
-                  app.photo_variant_readable(app.current_user_id(), p.id, 'full') as can_full,
-                  app.photo_variant_readable(app.current_user_id(), p.id, 'blurred') as can_blurred
+                  app.photo_variant_readable($2::uuid, p.id, 'full') as can_full,
+                  app.photo_variant_readable($2::uuid, p.id, 'blurred') as can_blurred
              from public.photos p
             where p.user_id = $1::uuid
               and p.deleted_at is null
               and p.moderation_status = 'approved'
               and p.visibility <> 'private'
             order by p.is_primary desc, p.position, p.id`,
-        [target],
-      );
+        [target, viewer],
+      ),
+    );
+
+    const { request: latest, granted } = await db.asUser(auth.authUserId, async (session) => {
       const requests = await session.query<RequestRow>(
         `select ${REQUEST_COLUMNS}
              from public.photo_requests r
@@ -151,7 +151,7 @@ export const photoAccessRoutes: FastifyPluginAsync<PhotoAccessRoutesOptions> = a
         `select app.has_photo_grant(app.current_user_id(), $1::uuid, null) as ok`,
         [target],
       );
-      return { photos, request: requests[0] ?? null, granted: grant[0]?.ok ?? false };
+      return { request: requests[0] ?? null, granted: grant[0]?.ok ?? false };
     });
 
     const token = tokenOf(request);
@@ -220,18 +220,23 @@ export const photoAccessRoutes: FastifyPluginAsync<PhotoAccessRoutesOptions> = a
       }
       const viewer = await viewerOf(auth.authUserId, target);
 
+      const requestable = await db.asService('photo.read_access', (session) =>
+        session.query<{ n: number }>(
+          `select count(*)::int as n from public.photos p
+            where p.user_id = $1::uuid and p.deleted_at is null
+              and p.moderation_status = 'approved'
+              and p.visibility in ('blurred', 'on_request')`,
+          [target],
+        ),
+      );
+
       const state = await db.asUser(auth.authUserId, (session) =>
         session.query<{
-          requestable: number;
           granted: boolean;
           pending: boolean;
           declined: boolean;
         }>(
           `select
-             (select count(*)::int from public.photos p
-               where p.user_id = $1::uuid and p.deleted_at is null
-                 and p.moderation_status = 'approved'
-                 and p.visibility in ('blurred', 'on_request')) as requestable,
              app.has_photo_grant(app.current_user_id(), $1::uuid, null) as granted,
              exists (select 1 from public.photo_requests r
                       where r.requester_user_id = app.current_user_id()
@@ -245,7 +250,7 @@ export const photoAccessRoutes: FastifyPluginAsync<PhotoAccessRoutesOptions> = a
       );
       const s = state[0]!;
       if (s.granted) throw conflict('You can already see these photos');
-      if (s.requestable === 0) throw conflict('There are no photos to request');
+      if ((requestable[0]?.n ?? 0) === 0) throw conflict('There are no photos to request');
       if (s.pending) throw conflict('You have already asked to see these photos');
       if (s.declined) throw conflict('This request was declined recently');
 

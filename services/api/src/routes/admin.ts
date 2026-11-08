@@ -2,7 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireAuthContext } from '../auth/plugin';
 import { bearerFrom } from '../auth/verify';
-import { badRequest, conflict, forbidden, notFound } from '../errors';
+import { badRequest, conflict, forbidden, notFound, staffProtected } from '../errors';
 import type { Db, DbSession } from '../db/types';
 import { parseLimit } from '../discovery/cards';
 import { isoTimestamp } from '../db/sql';
@@ -27,6 +27,14 @@ import type { StorageClient } from '../storage/client';
  *   5. writes every decision WITH its `admin_action_audit` row, in one
  *      transaction. The audit is append-only for every role.
  *
+ * ROLE HIERARCHY (review N5). `admin` outranks `moderator` and `support`, which
+ * rank equally. Nobody decides anything about themselves. On account actions
+ * (warn, suspend, ban, clear) the target must rank strictly below the actor, so
+ * two admins cannot lock each other out and an equal-rank dispute goes to an
+ * operator. On content decisions (photo, profile, report, date of birth) staff
+ * may act on a peer, but not on someone who outranks them. Roles are read inside
+ * the deciding transaction, so an expired role or disabled row does not count.
+ *
  * NOT built here, and recorded rather than pretended: the admin web app (a
  * separate surface that needs hosting), PII-access logging per field
  * (ERD `pii_access_log`), cases, risk signals, and a `restrict` action whose
@@ -42,7 +50,52 @@ type Role = 'moderator' | 'support' | 'admin';
 
 interface Admin {
   id: string;
+  userId: string;
   roles: Role[];
+}
+
+/** 2 admin, 1 other staff, 0 not staff. */
+const rankOf = (roles: readonly string[]): number =>
+  roles.includes('admin') ? 2 : roles.length > 0 ? 1 : 0;
+
+async function staffRank(session: DbSession, userId: string): Promise<number> {
+  const rows = await session.query<{ role_key: string }>(
+    `select r.role_key
+       from public.admin_users a
+       join public.admin_role_assignments r on r.admin_user_id = a.id
+      where a.user_id = $1::uuid and a.status = 'active'
+        and (r.expires_at is null or r.expires_at > now())`,
+    [userId],
+  );
+  return rankOf(rows.map((r) => r.role_key));
+}
+
+/** A warn, suspend, ban or clear: the target must rank strictly below the actor. */
+async function assertMayActOnAccount(
+  session: DbSession,
+  admin: Admin,
+  targetUserId: string,
+): Promise<void> {
+  if (targetUserId === admin.userId) {
+    throw staffProtected('Staff cannot take account actions on their own account');
+  }
+  if ((await staffRank(session, targetUserId)) >= rankOf(admin.roles)) {
+    throw staffProtected('This staff account can only be changed by someone senior to it');
+  }
+}
+
+/** A decision about someone's content: never your own, never a senior's. */
+async function assertMayDecideFor(
+  session: DbSession,
+  admin: Admin,
+  ownerUserId: string,
+): Promise<void> {
+  if (ownerUserId === admin.userId) {
+    throw staffProtected('Staff cannot decide on their own account or content');
+  }
+  if ((await staffRank(session, ownerUserId)) > rankOf(admin.roles)) {
+    throw staffProtected('This decision needs someone senior to this staff member');
+  }
 }
 
 const MODERATION = ['moderator', 'admin'] as const;
@@ -86,12 +139,24 @@ const reportDecisionSchema = z.object({
   note: NOTE.optional(),
 });
 
-const userActionSchema = z.object({
-  action: z.enum(['warn', 'suspend', 'ban', 'clear']),
-  // NOT NULL in the database too: an unexplained ban is unappealable.
-  reason: NOTE,
-  expiresAt: z.string().datetime({ offset: true }).optional(),
-});
+const userActionSchema = z
+  .object({
+    action: z.enum(['warn', 'suspend', 'ban', 'clear']),
+    // NOT NULL in the database too: an unexplained ban is unappealable.
+    reason: NOTE,
+    expiresAt: z.string().datetime({ offset: true }).optional(),
+  })
+  // Review N1. An end date now takes effect, so it is only accepted where it
+  // means something, as the admin screen has always said. A date already past
+  // would end the suspension on the member's next request.
+  .refine((b) => b.expiresAt === undefined || b.action === 'suspend', {
+    message: 'Only a suspension can have an end date',
+    path: ['expiresAt'],
+  })
+  .refine((b) => b.expiresAt === undefined || Date.parse(b.expiresAt) > Date.now(), {
+    message: 'The end date must be in the future',
+    path: ['expiresAt'],
+  });
 
 const parseBody = <T>(schema: z.ZodType<T>, body: unknown, what: string): T => {
   const parsed = schema.safeParse(body ?? {});
@@ -130,8 +195,8 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
   ): Promise<Admin> => {
     const auth = requireAuthContext(request);
     const rows = await db.asService('admin.authorize', (session) =>
-      session.query<{ id: string; mfa_required: boolean; roles: Role[] | null }>(
-        `select a.id, a.mfa_required,
+      session.query<{ id: string; user_id: string; mfa_required: boolean; roles: Role[] | null }>(
+        `select a.id, a.user_id, a.mfa_required,
                 array_agg(r.role_key) filter (
                   where r.role_key is not null
                     and (r.expires_at is null or r.expires_at > now())
@@ -140,7 +205,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
            join public.user_auth_links l on l.user_id = a.user_id
            left join public.admin_role_assignments r on r.admin_user_id = a.id
           where l.auth_user_id = $1::uuid and a.status = 'active'
-          group by a.id, a.mfa_required`,
+          group by a.id, a.user_id, a.mfa_required`,
         [auth.authUserId],
       ),
     );
@@ -154,7 +219,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
     if (!roles.some((r) => r === 'admin' || allowed.includes(r))) {
       throw forbidden('Not permitted for this role');
     }
-    return { id: row.id, roles };
+    return { id: row.id, userId: row.user_id, roles };
   };
 
   const tokenOf = (request: FastifyRequest): string =>
@@ -165,13 +230,15 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
   // ===========================================================================
 
   fastify.get('/admin/moderation/photos', { preHandler: fastify.requireAuth }, async (request) => {
-    await requireAdmin(request, MODERATION);
+    const admin = await requireAdmin(request, MODERATION);
     const limit = parseLimit((request.query as { limit?: string }).limit);
     const rows = await db.asService('admin.read_queue', (session) =>
       session.query<{
         id: string;
         user_id: string;
         storage_path: string;
+        // An original not yet cleaned of EXIF is not shown even to staff (N3).
+        view_path: string | null;
         width: number | null;
         height: number | null;
         created_at: string;
@@ -179,6 +246,10 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
         // Finalized (server-written variants exist) and still pending:
         // oldest first, which `photos_moderation_queue_idx` serves.
         `select p.id, p.user_id, p.storage_path, p.width, p.height,
+                  case when p.original_needs_strip
+                       then (select v.storage_path from public.photo_variants v
+                              where v.photo_id = p.id and v.variant = 'thumb')
+                       else p.storage_path end as view_path,
                   ${isoTimestamp('p.created_at')} as created_at
              from public.photos p
             where p.deleted_at is null
@@ -189,8 +260,23 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
         [limit],
       ),
     );
-    // Signed with the MODERATOR's own token. 0029's Storage policy lets an
-    // active moderator with MFA read the photos bucket; nobody else can.
+    // Stage 2: logged first, and committed before signing. From 0034 the Storage
+    // policy lets a moderator read only an object with a fresh row here, so there
+    // is no way to view a photo that leaves no record, and photos outside this
+    // queue cannot be viewed at all.
+    if (rows.length > 0) {
+      await db.asService('admin.record_access', (session) =>
+        session.query(
+          `insert into public.pii_access_log
+             (admin_user_id, subject_user_id, photo_id, fields, justification)
+           select $1::uuid, q.user_id, q.photo_id, array['photo'], 'moderation_queue'
+             from unnest($2::uuid[], $3::uuid[]) as q (photo_id, user_id)`,
+          [admin.id, rows.map((r) => r.id), rows.map((r) => r.user_id)],
+        ),
+      );
+    }
+
+    // Signed with the MODERATOR's own token: the API holds no service-role key.
     const token = tokenOf(request);
     return {
       items: await Promise.all(
@@ -200,7 +286,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
           width: r.width,
           height: r.height,
           createdAt: r.created_at,
-          url: await storage.createSignedUrl(token, r.storage_path),
+          url: r.view_path ? await storage.createSignedUrl(token, r.view_path) : null,
         })),
       ),
     };
@@ -216,14 +302,16 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
       const approve = body.decision === 'approve';
 
       return db.asService('admin.decide', async (session) => {
-        const rows = await session.query<{ finalized: boolean }>(
-          `select exists (select 1 from public.photo_variants v where v.photo_id = p.id) as finalized
+        const rows = await session.query<{ finalized: boolean; user_id: string }>(
+          `select exists (select 1 from public.photo_variants v where v.photo_id = p.id) as finalized,
+                  p.user_id
              from public.photos p
             where p.id = $1::uuid and p.deleted_at is null
             for update`,
           [photoId],
         );
         if (!rows[0]) throw notFound('No such photo');
+        await assertMayDecideFor(session, admin, rows[0].user_id);
         if (!rows[0].finalized) throw conflict('This photo has not been uploaded yet');
 
         await session.query(
@@ -231,8 +319,20 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
               set moderation_status = $2,
                   moderated_at = now(),
                   rejection_reason_key = $3,
-                  -- A rejected photo cannot stay the main photo (B13).
-                  is_primary = case when $2 = 'approved' then is_primary else false end
+                  -- A rejected photo cannot stay the main photo (B13). A photo
+                  -- re-queued as legacy gets its place back, unless the member
+                  -- has chosen another since (N3).
+                  is_primary = case
+                    when $2 <> 'approved' then false
+                    when is_primary then true
+                    when primary_before_requeue and not exists (
+                      select 1 from public.photos other
+                       where other.user_id = photos.user_id and other.is_primary
+                         and other.deleted_at is null and other.id <> photos.id
+                    ) then true
+                    else false
+                  end,
+                  primary_before_requeue = false
             where id = $1::uuid`,
           [
             photoId,
@@ -322,6 +422,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
       const approve = body.decision === 'approve';
 
       return db.asService('admin.decide', async (session) => {
+        await assertMayDecideFor(session, admin, userId);
         const updated = await session.query<{ user_id: string }>(
           `update public.profiles
               set review_status = $2, reviewed_at = now(), rejection_reason_key = $3
@@ -413,6 +514,22 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
     const resolved = body.status === 'actioned' || body.status === 'dismissed';
 
     return db.asService('admin.decide', async (session) => {
+      const parties = await session.query<{
+        reporter_user_id: string;
+        reported_user_id: string | null;
+      }>(
+        `select reporter_user_id, reported_user_id from public.reports
+          where id = $1::uuid for update`,
+        [reportId],
+      );
+      if (!parties[0]) throw notFound('No such report');
+      if (parties[0].reporter_user_id === admin.userId) {
+        throw staffProtected('Staff cannot decide a report they filed');
+      }
+      if (parties[0].reported_user_id) {
+        await assertMayDecideFor(session, admin, parties[0].reported_user_id);
+      }
+
       const updated = await session.query<{ reporter_user_id: string }>(
         `update public.reports
               set status = $2, outcome_key = $3,
@@ -460,17 +577,46 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
           [userId],
         );
         if (!exists[0]) throw notFound('No such member');
+        await assertMayActOnAccount(session, admin, userId);
+
+        // A timed suspension must not quietly replace a ban: its end date would
+        // then lift the ban too. Clearing the ban first is a decision on record.
+        if (body.action === 'suspend' && exists[0].status === 'banned') {
+          throw conflict('This account is banned. Clear the ban before suspending it.');
+        }
+
+        // What to return to when the restriction ends. Carried forward through a
+        // suspension becoming a ban, so a member who had deactivated themselves
+        // is not put back into discovery when the restriction ends (N1).
+        const latest = await session.query<{ previous_status: string | null }>(
+          `select previous_status from public.moderation_actions
+            where subject_user_id = $1::uuid and action in ('suspend', 'ban')
+            order by created_at desc, id desc limit 1`,
+          [userId],
+        );
+        const alreadyRestricted = exists[0].status === 'suspended' || exists[0].status === 'banned';
+        const returnTo = alreadyRestricted
+          ? (latest[0]?.previous_status ?? null)
+          : exists[0].status;
+        const restricting = body.action === 'suspend' || body.action === 'ban';
 
         await session.query(
           `insert into public.moderation_actions
-             (subject_user_id, actor_admin_id, action, reason, expires_at)
-           values ($1::uuid, $2::uuid, $3, $4, $5::timestamptz)`,
-          [userId, admin.id, body.action, body.reason, body.expiresAt ?? null],
+             (subject_user_id, actor_admin_id, action, reason, expires_at, previous_status)
+           values ($1::uuid, $2::uuid, $3, $4, $5::timestamptz, $6)`,
+          [
+            userId,
+            admin.id,
+            body.action,
+            body.reason,
+            body.expiresAt ?? null,
+            restricting ? returnTo : null,
+          ],
         );
 
         // `can_view_profile` already hides suspended and banned members, so a
         // status change is what takes effect everywhere at once. `clear`
-        // restores only an account a moderator had restricted.
+        // restores only an account a moderator had restricted, to what it was.
         let status = exists[0].status;
         if (body.action === 'suspend' || body.action === 'ban') {
           status = body.action === 'suspend' ? 'suspended' : 'banned';
@@ -478,10 +624,11 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
             userId,
             status,
           ]);
-        } else if (body.action === 'clear' && (status === 'suspended' || status === 'banned')) {
-          status = 'active';
-          await session.query(`update public.users set status = 'active' where id = $1::uuid`, [
+        } else if (body.action === 'clear' && alreadyRestricted) {
+          status = returnTo ?? 'active';
+          await session.query(`update public.users set status = $2 where id = $1::uuid`, [
             userId,
+            status,
           ]);
         }
 
@@ -554,6 +701,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (fastif
         const row = rows[0];
         if (!row) throw notFound('No such request');
         if (row.status !== 'pending') throw conflict('This request has already been decided');
+        await assertMayDecideFor(session, admin, row.user_id);
 
         if (approve) {
           // The service role may change a locked date of birth (0029); the

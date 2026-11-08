@@ -1,6 +1,7 @@
 import { Redirect } from 'expo-router';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useSession } from '../src/session/SessionProvider';
+import { redirectFor } from '../src/session/sessionState';
 import { useLocale } from '../src/i18n/LocaleProvider';
 import { useTheme } from '../src/theme/ThemeProvider';
 import { layout, spacing, typography } from '../src/theme/tokens';
@@ -11,6 +12,7 @@ import { layout, spacing, typography } from '../src/theme/tokens';
  *   signed out            -> (auth)/welcome
  *   email unverified      -> (auth)/verify-email
  *   verified, incomplete  -> (onboarding)
+ *   restricted            -> restricted (review N7)
  *   complete              -> (app)
  *
  * Routing mirrors the server's decision; it never makes it. The API is what
@@ -47,10 +49,7 @@ export default function Index() {
     );
   }
 
-  if (state === 'signed_out') return <Redirect href="/(auth)/welcome" />;
-  if (state === 'unverified') return <Redirect href="/(auth)/verify-email" />;
-  if (state === 'onboarding') return <Redirect href="/(onboarding)/basics" />;
-  return <Redirect href="/discover" />;
+  return <Redirect href={redirectFor('index', state) as never} />;
 }
 
 const styles = StyleSheet.create({

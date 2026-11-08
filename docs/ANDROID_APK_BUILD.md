@@ -18,8 +18,10 @@ would be a separate decision.
 ## Before you start (company)
 
 1. **Expo:** an account with access to the company's organisation.
-2. **Use the reviewed code.** Build from the branch `review/phases-2-5-handover`, which must exist
-   first, or from `main` only after the changes have been merged into it.
+2. **Use the reviewed code, and match the API.** `main` holds Phases 1–5; the later security work
+   (`4525c64`, plus the remediation on `remediation/code-review-verification`) is not merged yet.
+   The app must be built from the same code as the API it talks to: an APK built from newer code
+   than the deployed API will fail on the routes and behaviour that changed.
 3. **Supabase:** the hosted project with all migrations applied, and the app's redirect URL
    `nikahmate://auth/callback` added under **Authentication → URL Configuration**. Without it,
    email verification links will not return to the app.
@@ -28,12 +30,14 @@ would be a separate decision.
 
 ## Build steps
 
-Install the CLI once. `npx eas-cli` crashed on Windows with Node 24 during validation
-(`ERR_MODULE_NOT_FOUND`), while a normal install ran correctly. A global install does not
-change the project.
+The CLI needs no installation: pnpm can run it once, from `apps/mobile`. `npx eas-cli` fails
+inside this pnpm workspace (`Invalid Version`, or `ERR_MODULE_NOT_FOUND` on Node 24); the
+command below was checked to work (eas-cli 27.5.0, Windows, Node 24) and adds nothing to the
+project. Wherever this guide says `eas`, run `pnpm dlx eas-cli@27.5.0` instead, or install it
+once globally with `npm install --global eas-cli` if you prefer.
 
 ```bash
-npm install --global eas-cli
+pnpm dlx eas-cli@27.5.0 --version
 ```
 
 Run everything else from `apps/mobile`.
@@ -106,13 +110,11 @@ distribute, because Android will not install a lower one over a higher one.
 account), a Gradle compile (this machine has no Android SDK), and any install or run on a device
 or emulator. The first real build may therefore still reveal problems.
 
-## `expo-doctor`: open items (dependency changes need approval)
+## `expo-doctor`
 
-- **Six patch versions behind SDK 57's expected versions:** `expo`, `expo-router`,
-  `expo-constants`, `expo-linking`, `expo-splash-screen`, `@expo/metro-runtime`.
-- **`expo-font` is not a direct dependency** of `apps/mobile`, although `@expo/vector-icons` asks
-  for it. It does reach the native build through `expo`, so this is not expected to stop the app.
-  The recommended fix is `npx expo install expo-font`.
+21 of 21 checks pass (2026-11-08). `expo-font`, which `@expo/vector-icons` needs and Expo warned
+"may crash outside of Expo Go" without, is now a direct dependency (`~57.0.4`, with its config
+plugin in `app.json`). The earlier patch-version warnings no longer appear.
 
 ## First-install checklist
 

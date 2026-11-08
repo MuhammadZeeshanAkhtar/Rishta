@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -21,7 +20,9 @@ import { StatusBadge, type StatusTone } from '../../../src/components/StatusBadg
 import { useLocale } from '../../../src/i18n/LocaleProvider';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 import { getClient } from '../../../src/api/client';
+import { confirmAction } from '../../../src/lib/confirm';
 import { describeError } from '../../../src/lib/errors';
+import { useRefreshOnReturn } from '../../../src/lib/useRefreshOnReturn';
 import { MIN_TOUCH_TARGET, layout, radius, spacing, typography } from '../../../src/theme/tokens';
 
 /**
@@ -50,19 +51,27 @@ export default function InterestsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  // A slower answer for the other tab must not replace what this one is showing.
+  const generation = useRef(0);
+
   const load = useCallback(
     async (mode: 'initial' | 'refresh') => {
+      const mine = ++generation.current;
       if (mode === 'refresh') setRefreshing(true);
       else setLoading(true);
       try {
         const page = await getClient().listInterests(direction, { limit: 30 });
+        if (generation.current !== mine) return;
         setItems(page.items);
         setError(null);
       } catch (err) {
+        if (generation.current !== mine) return;
         setError(describeError(err, t).message);
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (generation.current === mine) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [direction, t],
@@ -71,6 +80,8 @@ export default function InterestsScreen() {
   useEffect(() => {
     void load('initial');
   }, [load]);
+
+  useRefreshOnReturn(() => void load('refresh'));
 
   const respond = useCallback(
     async (interest: Interest, decision: 'accept' | 'decline' | 'maybe_later') => {
@@ -94,35 +105,33 @@ export default function InterestsScreen() {
 
   const confirmDecline = useCallback(
     (interest: Interest) => {
-      Alert.alert(t('interests.declineTitle'), t('interests.declineBody'), [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('interests.decline'),
-          style: 'destructive',
-          onPress: () => void respond(interest, 'decline'),
-        },
-      ]);
+      confirmAction({
+        title: t('interests.declineTitle'),
+        message: t('interests.declineBody'),
+        confirmLabel: t('interests.decline'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => void respond(interest, 'decline'),
+      });
     },
     [respond, t],
   );
 
   const confirmWithdraw = useCallback(
     (interest: Interest) => {
-      Alert.alert(t('interests.withdrawTitle'), t('interests.withdrawBody'), [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('interests.withdraw'),
-          style: 'destructive',
-          onPress: () => {
-            setBusy(interest.id);
-            void getClient()
-              .withdrawInterest(interest.id)
-              .then(() => load('refresh'))
-              .catch((err: unknown) => setError(describeError(err, t).message))
-              .finally(() => setBusy(null));
-          },
+      confirmAction({
+        title: t('interests.withdrawTitle'),
+        message: t('interests.withdrawBody'),
+        confirmLabel: t('interests.withdraw'),
+        cancelLabel: t('common.cancel'),
+        onConfirm: () => {
+          setBusy(interest.id);
+          void getClient()
+            .withdrawInterest(interest.id)
+            .then(() => load('refresh'))
+            .catch((err: unknown) => setError(describeError(err, t).message))
+            .finally(() => setBusy(null));
         },
-      ]);
+      });
     },
     [load, t],
   );

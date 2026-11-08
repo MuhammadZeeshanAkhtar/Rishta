@@ -51,7 +51,7 @@ afterAll(async () => {
 describe('profiles', () => {
   it('lets a member read their own profile', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select about_me from public.profiles`,
     );
@@ -60,7 +60,7 @@ describe('profiles', () => {
 
   it('does NOT let a member read another member profile', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select about_me from public.profiles`,
     );
@@ -76,7 +76,7 @@ describe('profiles', () => {
   it('lets a member create their own profile row', async () => {
     const fresh = await seedUser(db, { displayName: 'Fresh' });
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       fresh.authUserId,
       `insert into public.profiles (user_id, about_me) values ($1, 'mine') returning user_id`,
       [fresh.userId],
@@ -87,7 +87,7 @@ describe('profiles', () => {
   it('does NOT let a member create a profile for someone else', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.profiles (user_id, about_me) values ($1, 'not mine')`,
         [alice.userId],
@@ -101,7 +101,7 @@ describe('profiles', () => {
     // without ever passing review.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.profiles set review_status = 'approved'`,
       ),
@@ -110,13 +110,13 @@ describe('profiles', () => {
 
   it('does NOT let a member inflate their completion score', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.profiles set completion_score = 100`),
+      db.as('api_member', alice.authUserId, `update public.profiles set completion_score = 100`),
     ).rejects.toThrow(/permission denied/);
   });
 
   it('does NOT let a member soft-delete their profile directly', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.profiles set deleted_at = now()`),
+      db.as('api_member', alice.authUserId, `update public.profiles set deleted_at = now()`),
     ).rejects.toThrow(/permission denied/);
   });
 
@@ -161,7 +161,7 @@ describe('profile_sensitive — restricted', () => {
     // Not "returns nothing" — unreachable. There is no grant and no policy,
     // which is what makes "hide my workplace" structurally true.
     await expect(
-      db.as('authenticated', alice.authUserId, `select phone_e164 from public.profile_sensitive`),
+      db.as('api_member', alice.authUserId, `select phone_e164 from public.profile_sensitive`),
     ).rejects.toThrow(/permission denied/);
   });
 
@@ -199,7 +199,7 @@ describe('partner_preferences', () => {
     // Someone who states a sect preference must still see profiles that left
     // it blank. Leaving a field blank must not cost a person visibility.
     const rows = await db.as<{ exclude_unstated_sect: boolean }>(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select exclude_unstated_sect from public.partner_preferences`,
     );
@@ -208,7 +208,7 @@ describe('partner_preferences', () => {
 
   it('does NOT expose another member preferences', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select user_id from public.partner_preferences`,
     );
@@ -217,7 +217,7 @@ describe('partner_preferences', () => {
 
   it('lets a member edit their own preferences', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.partner_preferences set age_min = 25, age_max = 35 returning age_min`,
     );
@@ -245,7 +245,7 @@ describe('partner_preferences', () => {
 describe('user_locations and preference_rules', () => {
   it('lets a member write their own location', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `insert into public.user_locations (user_id, country_code, city_name)
        values ($1, 'pk', 'Lahore') returning user_id`,
@@ -257,7 +257,7 @@ describe('user_locations and preference_rules', () => {
   it('does NOT let a member write a location for someone else', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.user_locations (user_id, country_code) values ($1, 'pk')`,
         [alice.userId],
@@ -267,7 +267,7 @@ describe('user_locations and preference_rules', () => {
 
   it('does NOT let a member see another member location', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select country_code from public.user_locations`,
     );
@@ -280,12 +280,12 @@ describe('user_locations and preference_rules', () => {
       [alice.userId],
     );
     const mine = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select criterion from public.preference_rules`,
     );
     const theirs = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select criterion from public.preference_rules`,
     );
@@ -314,7 +314,7 @@ describe('user_locations and preference_rules', () => {
 describe('profile_field_visibility', () => {
   it('accepts a valid key and visibility', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `insert into public.profile_field_visibility (user_id, field_key, visibility)
        values ($1, 'profession', 'matched_only') returning field_key`,
@@ -347,7 +347,7 @@ describe('profile_field_visibility', () => {
 
   it('does NOT expose another member visibility settings', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select field_key from public.profile_field_visibility`,
     );

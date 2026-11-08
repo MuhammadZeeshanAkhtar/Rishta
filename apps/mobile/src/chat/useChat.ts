@@ -22,16 +22,19 @@ export function useConversations(): {
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  // Only the first load shows a skeleton. A refresh must not blank a list being read.
+  const loaded = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (!loaded.current) setLoading(true);
     setError(false);
 
     getClient()
       .listConversations()
       .then((page) => {
         if (cancelled) return;
+        loaded.current = true;
         setConversations(page.items);
         setLoading(false);
       })

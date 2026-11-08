@@ -19,7 +19,7 @@ const asMember = <T = Record<string, unknown>>(
   user: SeededUser,
   sql: string,
   params: unknown[] = [],
-) => db.as<T>('authenticated', user.authUserId, sql, params);
+) => db.as<T>('api_member', user.authUserId, sql, params);
 
 async function photo(
   visibility: string,

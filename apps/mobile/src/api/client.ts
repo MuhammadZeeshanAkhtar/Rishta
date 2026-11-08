@@ -92,17 +92,23 @@ function resolveApiBaseUrl(configured: string): string {
 export function readClientConfig(): ClientConfig {
   const supabaseUrl = readEnv('EXPO_PUBLIC_SUPABASE_URL');
   const publishableKey = readEnv('EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY');
-  const apiBaseUrl = resolveApiBaseUrl(
-    readEnv('EXPO_PUBLIC_API_BASE_URL') ?? 'http://localhost:3000',
-  );
+  // Only a development build may assume a local API. In a release build localhost is
+  // the member's own phone, so a build missing this value could never reach the API.
+  const configuredApi =
+    readEnv('EXPO_PUBLIC_API_BASE_URL') ?? (__DEV__ ? 'http://localhost:3000' : undefined);
 
   const missing: string[] = [];
   if (!supabaseUrl) missing.push('EXPO_PUBLIC_SUPABASE_URL');
   if (!publishableKey) missing.push('EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY');
+  if (!configuredApi) missing.push('EXPO_PUBLIC_API_BASE_URL');
   // Failing loudly at start-up beats every screen failing mysteriously later.
   if (missing.length > 0) throw new MissingConfigError(missing);
 
-  return { supabaseUrl: supabaseUrl!, publishableKey: publishableKey!, apiBaseUrl };
+  return {
+    supabaseUrl: supabaseUrl!,
+    publishableKey: publishableKey!,
+    apiBaseUrl: resolveApiBaseUrl(configuredApi!),
+  };
 }
 
 let instance: NikahMateClient | null = null;

@@ -21,7 +21,8 @@
     "close": "Close",
     "of": "of",
     "more": "More",
-    "less": "Less"
+    "less": "Less",
+    "loadMore": "Load more"
   },
   "tabs": {
     "discover": "Discover",
@@ -206,7 +207,7 @@
     "editProfileHint": "Your details, photos and the words people read",
     "aboutSomeone": "About this person",
     "verified": "Verified",
-    "verifiedCount": "{{count}} checks",
+    "verifiedCount": "Checks passed: {{count}}",
     "limitedByPrivacy": "Other details are shown only to matches, or kept private by this person."
   },
   "preferences": {
@@ -279,7 +280,9 @@
     "photoRejectedQuality": "This photo was not approved: it is too unclear to recognise you. Please try a clearer one.",
     "profileRejectedContactDetails": "Your profile was not approved: please remove contact details and submit it again.",
     "profileRejectedInappropriate": "Your profile was not approved: some wording does not meet our guidelines. Please review it and submit again.",
-    "profileRejectedIncomplete": "Your profile was not approved: please add a little more about yourself and submit again."
+    "profileRejectedIncomplete": "Your profile was not approved: please add a little more about yourself and submit again.",
+    "accountRestricted": "Your account cannot use this feature at the moment.",
+    "staffProtected": "You don't have the authority to make this decision about this staff account."
   },
   "a11y": {
     "loading": "Loading",
@@ -607,7 +610,7 @@
     "joinNotFound": "This invitation is no longer valid. It may have been used or cancelled. Ask for a new one.",
     "joinExpired": "This invitation has expired. Ask for a new one.",
     "joinOwn": "You cannot accept an invitation you sent yourself.",
-    "invitationsTitle": "Invitations sent",
+    "invitationsTitle": "Invitations waiting",
     "invitePending": "Waiting for a reply",
     "inviteExpired": "Expired",
     "inviteCancel": "Cancel",
@@ -650,6 +653,12 @@
     "accessLogCta": "View activity",
     "accessLogEmpty": "Nothing yet.",
     "accessLogUnder": "under “{{permission}}”",
+    "accessActionOpened": "Opened a match to review it",
+    "accessActionApproved": "Approved a match",
+    "accessActionDeclined": "Declined a match",
+    "accessActionAskedMore": "Asked for more information about a match",
+    "accessActionRevoked": "Withdrew an approval",
+    "accessActionOther": "Looked at something",
     "accessLogNote": "Every time someone you invited looks at something, it is recorded here with the permission that allowed it.",
     "errorLoad": "Could not load your family settings.",
     "errorSave": "That did not save. Please try again.",
@@ -660,7 +669,16 @@
       "sister": "Sister",
       "guardian": "Guardian",
       "other": "Other relative"
-    }
+    },
+    "invitationPending": "Sent to {{contact}}",
+    "invitationCancel": "Cancel invitation",
+    "invitationCancelTitle": "Cancel this invitation?",
+    "invitationCancelBody": "The link you shared will stop working.",
+    "approvedTitle": "Matches you approved",
+    "approvedFor": "For {{name}}, with {{other}}",
+    "withdrawApproval": "Withdraw approval",
+    "withdrawTitle": "Withdraw your approval?",
+    "withdrawBody": "Messages between them will close. What has already been said stays readable."
   },
   "chat": {
     "title": "Messages",
@@ -695,7 +713,11 @@
     "closedCounterpart_left": "The other person has left this conversation. It is closed for both of you.",
     "closedRead_only": "You can read this conversation but not write in it.",
     "errorLoad": "Could not load your conversations.",
-    "errorSend": "That message did not send. Please try again."
+    "errorSend": "That message did not send. Please try again.",
+    "unmatch": "End this match",
+    "unmatchConfirm": "End this match? Messages will close for both of you. You can still read what was said.",
+    "errorAction": "That didn't work. Please try again.",
+    "actions": "Options"
   },
   "publicProfile": {
     "unavailableTitle": "This profile is not available",
@@ -939,5 +961,101 @@
       "empty": "No decisions recorded yet.",
       "more": "Load more"
     }
+  },
+  "restricted": {
+    "action": {
+      "reactivate": "Reactivate my account",
+      "cancel_deletion": "Keep my account",
+      "sign_out": "Sign out",
+      "request_deletion": "Delete my account"
+    },
+    "suspended": {
+      "title": "Your account is suspended",
+      "explanation": "Our moderation team has suspended this account. While it is suspended you can't use NikahMate, and other members can't see your profile.",
+      "nextStep": "There is nothing you can do in the app to change this. You can sign out, or ask for your account to be deleted."
+    },
+    "banned": {
+      "title": "Your account is banned",
+      "explanation": "Our moderation team has banned this account. You can't use NikahMate with it, and other members can't see your profile.",
+      "nextStep": "There is nothing you can do in the app to change this. You can sign out, or ask for your account to be deleted."
+    },
+    "deactivated": {
+      "title": "Your account is deactivated",
+      "explanation": "This account has been deactivated, so your profile is hidden and you can't use NikahMate with it. Nothing has been deleted.",
+      "nextStep": "Reactivate your account to pick up where you left off."
+    },
+    "pendingDeletion": {
+      "title": "Your account is scheduled for deletion",
+      "explanation": "A request to delete this account is open. Your profile is hidden, and you can't use NikahMate with this account while the request is open.",
+      "nextStep": "If you change your mind, you can cancel the request now and keep your account.",
+      "scheduled": "Your account is scheduled for deletion on {{date}}.",
+      "held": "A safety review on this account must finish before it can be deleted."
+    },
+    "unknown": {
+      "title": "Your account isn't available",
+      "explanation": "This account can't use NikahMate at the moment.",
+      "nextStep": "You can sign out below."
+    }
+  },
+  "accountDeletion": {
+    "link": "Delete my account",
+    "title": "Delete your account",
+    "intro": "Please read this first. Here is what happens if you go ahead.",
+    "point": {
+      "hidden": "Your profile is hidden from other members straight away, and you can't use NikahMate with this account while the request is open.",
+      "grace": "You have {{days}} days to change your mind. Sign in and choose \"Keep my account\" to cancel the request.",
+      "erased": "After that, your name, date of birth, private details and photos are removed for good.",
+      "kept": "Messages you have sent stay in the other person's conversation, no longer linked to you. Some safety and legal records are kept for a limited time.",
+      "held": "If a safety review is open on your account, deletion waits until it has finished."
+    },
+    "confirmLabel": "Type {{word}} to confirm",
+    "confirm": "Delete my account",
+    "cancel": "Keep my account"
+  },
+  "account": {
+    "savedTitle": "Saved profiles",
+    "savedHint": "People you saved to come back to",
+    "savedEmptyTitle": "Nobody saved yet",
+    "savedEmptyBody": "Save a profile from Discover and it will wait for you here.",
+    "blockedTitle": "Blocked members",
+    "blockedHint": "See who you have blocked, or unblock them",
+    "blockedEmptyTitle": "You haven't blocked anyone",
+    "blockedEmptyBody": "If you block someone, they will be listed here.",
+    "unblockTitle": "Unblock {{name}}?",
+    "unblockBody": "You will be able to see each other again, and they will not be told.",
+    "reportsTitle": "Your reports",
+    "reportsHint": "Reports you have made, and where they stand",
+    "reportsEmptyTitle": "You haven't reported anyone",
+    "reportsEmptyBody": "If you report someone, you can follow it here.",
+    "reportStatus": {
+      "open": "Received",
+      "triaged": "Being reviewed",
+      "actioned": "Action taken",
+      "dismissed": "Closed"
+    },
+    "notificationsTitle": "Notification settings",
+    "notificationsHint": "Choose what appears in your notifications",
+    "notificationsIntro": "Choose what appears in your notifications inside the app. Security alerts are always on.",
+    "notificationType": {
+      "interest_received": "Someone sends you an interest",
+      "interest_accepted": "Someone accepts your interest",
+      "new_match": "You have a new match",
+      "new_message": "You have a new message",
+      "photo_request": "Someone asks to see your photos",
+      "photo_request_answered": "Someone answers your photo request",
+      "family_invitation": "You are invited to help a family member",
+      "family_invitation_answered": "Someone answers your family invitation",
+      "family_review_requested": "A match needs your review",
+      "family_review_decided": "Your family decides on a match",
+      "family_review_stalled": "A family review is overdue",
+      "stage_advance_proposed": "Someone suggests the next stage",
+      "verification_update": "Your verification changes",
+      "security_alert": "Security alerts",
+      "report_update": "A report you made is updated"
+    },
+    "deactivate": "Deactivate my account",
+    "deactivateHint": "Hide your profile for a while. Nothing is deleted",
+    "deactivateTitle": "Deactivate your account?",
+    "deactivateBody": "Your profile will be hidden and you won't be able to use NikahMate until you reactivate. Nothing is deleted, and you can come back at any time."
   }
 }

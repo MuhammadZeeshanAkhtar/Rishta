@@ -1,17 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import { z } from 'zod';
 import { REVIEW_SLA_HOURS } from '@nikahmate/domain';
 import { badRequest, conflict, notFound } from '../errors';
 import { isoTimestamp } from '../db/sql';
 import { requireAuthContext } from '../auth/plugin';
-import {
-  CARDS_BY_USER_IDS,
-  buildCards,
-  decodeCursor,
-  encodeCursor,
-  parseLimit,
-  type CardRow,
-} from '../discovery/cards';
+import { CARDS_BY_USER_IDS, buildCards, parseLimit, type CardRow } from '../discovery/cards';
 import type { Db, DbSession } from '../db/types';
 import { isUuid, uuidParam } from '../http/params';
 
@@ -44,7 +38,7 @@ interface MatchRow {
   communication_state: string;
   created_at: string;
   ended_at: string | null;
-  position: number;
+  cursor_at: string;
 }
 
 /**
@@ -104,7 +98,7 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
     const query = request.query as { cursor?: string; limit?: string };
 
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
@@ -115,17 +109,17 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
     // the same millisecond never swap between pages.
     const rows = await db.asUser(auth.authUserId, (session) =>
       session.query<MatchRow>(
-        `select id, user_a_id, user_b_id, communication_state, created_at, ended_at, position
+        `select id, user_a_id, user_b_id, communication_state, created_at, ended_at, cursor_at
            from (
              select m.*,
-                    (row_number() over (order by m.created_at desc, m.id))::int - 1 as position
+                    ${keysetTime('m.created_at')} as cursor_at
                from public.matches m
               where m.ended_at is null
            ) ranked
-          where $1::int is null or position > $1::int
-          order by position
+          where $1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
-        [after],
+        [after?.at ?? null, after?.id ?? null],
       ),
     );
 
@@ -143,7 +137,7 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
         const counterpartUserId = row.user_a_id === viewerUserId ? row.user_b_id : row.user_a_id;
         return toMatch(row, viewerUserId, cards.get(counterpartUserId) ?? null);
       }),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });
@@ -162,7 +156,7 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
     const rows = await db.asUser(auth.authUserId, (session) =>
       session.query<MatchRow>(
         `select id, user_a_id, user_b_id, communication_state, created_at, ended_at,
-                0 as position
+                '' as cursor_at
            from public.matches where id = $1::uuid`,
         [matchId],
       ),
@@ -275,7 +269,7 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (fastif
     const rows = await db.asUser(authUserId, (session) =>
       session.query<MatchRow>(
         `select id, user_a_id, user_b_id, communication_state, created_at, ended_at,
-                0 as position
+                '' as cursor_at
            from public.matches where id = $1::uuid`,
         [matchId],
       ),

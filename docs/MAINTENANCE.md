@@ -8,14 +8,15 @@ hosted database.** It needs migrations 0029 and 0030 applied first.
 
 ## What it does
 
-| Task                                 | Changes with `--apply`                        | Source                                                       |
-| ------------------------------------ | --------------------------------------------- | ------------------------------------------------------------ |
-| Notifications older than 12 months   | deletes them                                  | `app.purge_expired_notifications()` (0029)                   |
-| Security events older than 12 months | deletes them                                  | `app.purge_expired_security_events()` (0030)                 |
-| Profile views older than 12 months   | deletes them                                  | `app.purge_expired_profile_views()` (0030)                   |
-| Family invitations past `expires_at` | `pending` → `expired`, `responded_at = now()` | `app.expire_family_invitations()` (0030)                     |
-| Deletion requests past their grace   | **nothing — reported only**                   | execution needs the Supabase Auth admin API and a job runner |
-| Abandoned photo uploads (> 1 day)    | **nothing — reported only**                   | byte removal needs a Storage service key                     |
+| Task                                          | Changes with `--apply`                                                                                | Source                                                       |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Notifications older than 12 months            | deletes them                                                                                          | `app.purge_expired_notifications()` (0029)                   |
+| Security events older than 12 months          | deletes them                                                                                          | `app.purge_expired_security_events()` (0030)                 |
+| Profile views older than 12 months            | deletes them                                                                                          | `app.purge_expired_profile_views()` (0030)                   |
+| Suspensions past their moderator-set end date | back to the status held before, recorded in `moderation_actions` with `reason = 'suspension_expired'` | `app.lift_expired_suspensions()`                             |
+| Family invitations past `expires_at`          | `pending` → `expired`, `responded_at = now()`                                                         | `app.expire_family_invitations()` (0030)                     |
+| Deletion requests past their grace            | **nothing — reported only**                                                                           | execution needs the Supabase Auth admin API and a job runner |
+| Abandoned photo uploads (> 1 day)             | **nothing — reported only**                                                                           | byte removal needs a Storage service key                     |
 
 The retention periods are the ERD's (12 months for notifications, security
 events and profile views). Soft-deleted messages (90 days, with a retention
@@ -74,8 +75,12 @@ Once a day is enough for every task. Alert on a non-zero exit code.
 ## Not done here (needs approval or infrastructure)
 
 - A job runner (e.g. pg-boss — a new dependency, needs approval) for work that
-  must happen at a specific time: deletion execution, review-SLA sweeps,
-  suspension expiry, push delivery.
-- Deletion execution (Supabase Auth admin API).
+  must happen at a specific time, such as push delivery. Everything else here is
+  daily, which a plain scheduled command covers.
+- Scheduling account erasure. It is a separate command, because it needs the
+  service-role key this script never holds:
+  `pnpm --filter @nikahmate/api account-erasure execute --apply`, with
+  `ERASURE_TOOL_SERVICE_KEY` and `SUPABASE_URL`. See docs/PRODUCTION_SECURITY.md
+  for what must happen before it is scheduled.
 - Removal of abandoned upload bytes from Storage on a schedule (the API already
   removes them, best effort, when the member next uploads — review B11).

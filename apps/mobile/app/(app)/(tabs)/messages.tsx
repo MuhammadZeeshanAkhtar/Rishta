@@ -9,6 +9,7 @@ import { Screen } from '../../../src/components/Screen';
 import { StatusBadge } from '../../../src/components/StatusBadge';
 import { useConversations } from '../../../src/chat/useChat';
 import { useLocale } from '../../../src/i18n/LocaleProvider';
+import { useRefreshOnReturn } from '../../../src/lib/useRefreshOnReturn';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 import { iconSize, radius, spacing, typography } from '../../../src/theme/tokens';
 
@@ -28,7 +29,8 @@ import { iconSize, radius, spacing, typography } from '../../../src/theme/tokens
 export default function MessagesScreen() {
   const { t } = useLocale();
   const theme = useTheme();
-  const { conversations, loading, error } = useConversations();
+  const { conversations, loading, error, reload } = useConversations();
+  useRefreshOnReturn(reload);
 
   return (
     <Screen title={t('chat.title')} subtitle={t('chat.subtitle')}>

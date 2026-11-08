@@ -29,12 +29,16 @@
  *   security events older than 12 months   app.purge_expired_security_events()
  *   profile views older than 12 months     app.purge_expired_profile_views()
  *   family invitations past their expiry   app.expire_family_invitations()
- * Reported, never changed (their execution needs what does not exist yet):
- *   deletion requests past their grace     — execution needs Supabase Auth admin
+ *   suspensions past their end date        app.lift_expired_suspensions()
+ *   staff access log older than 24 months  app.purge_expired_pii_access_log()
+ *   family reviews past the 72-hour SLA    app.notify_stalled_family_reviews()
+ * Reported, never changed (they need a key this script does not hold):
+ *   deletion requests past their grace     — `account-erasure execute --apply` runs them
  *   abandoned photo uploads                — byte removal needs a Storage key
  */
 
 import { Client, type QueryResultRow } from 'pg';
+import { databaseConnection, explainTlsFailure } from '../src/db/tls';
 
 export interface Queryable {
   query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -70,6 +74,39 @@ export const TASKS: readonly Task[] = [
     apply: 'select app.expire_family_invitations() as n',
   },
   {
+    name: 'suspensions past their end date',
+    count: `select count(*)::int as n
+              from public.users u
+              join lateral (
+                select m.action, m.expires_at from public.moderation_actions m
+                 where m.subject_user_id = u.id and m.action in ('suspend', 'ban', 'clear')
+                 order by m.created_at desc, m.id desc limit 1
+              ) latest on true
+             where u.status = 'suspended' and u.deleted_at is null
+               and latest.action = 'suspend'
+               and latest.expires_at is not null and latest.expires_at <= now()`,
+    apply: 'select app.lift_expired_suspensions() as n',
+  },
+  {
+    name: 'staff access log older than 24 months',
+    count: `select count(*)::int as n from public.pii_access_log where accessed_at < now() - interval '24 months'`,
+    apply: 'select app.purge_expired_pii_access_log() as n',
+  },
+  {
+    // D12-g. The Family screen also sweeps this on read; this is for everyone else.
+    name: 'family reviews past the 72-hour SLA',
+    count: `select count(*)::int as n from public.family_reviews r
+             where r.decision in ('pending', 'more_info_requested')
+               and r.sla_notified_at is null
+               and r.requested_at < now() - interval '72 hours'
+               and exists (select 1 from public.matches m
+                            where m.id = r.match_id
+                              and m.communication_state = 'pending_family_review'
+                              and m.ended_at is null)`,
+    apply: 'select app.notify_stalled_family_reviews() as n',
+  },
+  {
+    // Executed by `account-erasure execute --apply`, which holds the key this lacks.
     name: 'deletion requests past their grace period (report only)',
     count: `select count(*)::int as n from public.account_deletion_requests
              where status = 'pending' and scheduled_for < now()`,
@@ -178,8 +215,7 @@ async function main(): Promise<void> {
   }
   const apply = process.argv.includes('--apply');
   const client = new Client({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
+    ...databaseConnection(url),
     application_name: 'nikahmate-maintenance',
   });
   try {
@@ -188,7 +224,7 @@ async function main(): Promise<void> {
     write({
       level: 'error',
       msg: `could not connect to ${maskedHost(url)}`,
-      error: (error as Error).message,
+      error: explainTlsFailure(error) ?? (error as Error).message,
     });
     process.exit(1);
   }

@@ -30,6 +30,8 @@ describe('migrations apply', () => {
       // Sorted, because the query is. Phases 1-6 Slice 2.
       // Review Phase 4 (0030): account deletion requests (L7/L10).
       'account_deletion_requests',
+      // Account erasure (0035): retention holds on an account.
+      'account_retention_holds',
       // Review Phase 3 (0029): the L1 admin/moderation backend.
       'admin_action_audit',
       'admin_role_assignments',
@@ -67,6 +69,7 @@ describe('migrations apply', () => {
       'photo_requests',
       'photo_variants',
       'photos',
+      'pii_access_log',
       'preference_rules',
       'profile_field_visibility',
       'profile_sensitive',
@@ -108,8 +111,8 @@ describe('migrations apply', () => {
        order by c.relname`,
     );
     // 45 through Phase 7; +5 in 0029 (review L1/B6); +4 in 0030 (review L10);
-    // +2 in 0031 (review L3).
-    expect(rows.length).toBe(56);
+    // +2 in 0031 (review L3); +1 in 0035 (retention holds).
+    expect(rows.length).toBe(58);
     for (const row of rows) {
       expect(row.relrowsecurity, `${row.relname} must have RLS enabled`).toBe(true);
       expect(row.relforcerowsecurity, `${row.relname} must FORCE RLS`).toBe(true);
@@ -233,90 +236,90 @@ describe('migrations apply', () => {
  * Sorted in JS rather than SQL so the order does not depend on collation.
  */
 describe('grants — the surface the Data API exposes', () => {
-  it('grants anon and authenticated exactly these table privileges', async () => {
+  it('grants anon and api_member exactly these table privileges', async () => {
     const rows = await db.admin<{ g: string }>(
       `select c.relname || ' ' || r.rolname || ' ' || a.privilege_type as g
        from pg_class c
        join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
        cross join lateral aclexplode(c.relacl) a
        join pg_roles r on r.oid = a.grantee
-       where c.relkind = 'r' and r.rolname in ('anon', 'authenticated')`,
+       where c.relkind = 'r' and r.rolname in ('anon', 'api_member')`,
     );
     expect(rows.map((r) => r.g).sort()).toEqual([
       // Sorted, because the assertion sorts. Writes are the exception and
       // each one is deliberate: blocks, the owner actions, and interests.
-      'blocks authenticated DELETE',
-      'blocks authenticated INSERT',
-      'blocks authenticated SELECT',
-      'compatibility_factors authenticated SELECT',
-      'compatibility_scores authenticated SELECT',
+      'blocks api_member DELETE',
+      'blocks api_member INSERT',
+      'blocks api_member SELECT',
+      'compatibility_factors api_member SELECT',
+      'compatibility_scores api_member SELECT',
       // Phase 7. SELECT on the thread is membership; INSERT on `messages` is
       // a COLUMN grant additionally gated by `app.can_write_message()` — the
       // one table where a member holds both, and the two policies answer
       // different questions on purpose. No UPDATE or DELETE: edits and
       // deletions are server state that report evidence depends on.
-      'conversation_participants authenticated SELECT',
-      'conversation_stages authenticated SELECT',
-      'conversations authenticated SELECT',
-      'dismissed_profiles authenticated DELETE',
-      'dismissed_profiles authenticated INSERT',
-      'dismissed_profiles authenticated SELECT',
+      'conversation_participants api_member SELECT',
+      'conversation_stages api_member SELECT',
+      'conversations api_member SELECT',
+      'dismissed_profiles api_member DELETE',
+      'dismissed_profiles api_member INSERT',
+      'dismissed_profiles api_member SELECT',
       // 0029 (review B6): a member reads their own DOB correction requests.
-      'dob_correction_requests authenticated SELECT',
+      'dob_correction_requests api_member SELECT',
       // Phase 6b. SELECT only, every one of them: an invitation must hash a
       // token, a grant must be refused if its phase has not arrived, a review
       // must be the first for its side, and an audit a delegate can write is
       // not an audit. `system_flags` is absent on purpose — no member grant at
       // all, because a flag a member can read is a roadmap.
-      'family_access_log authenticated SELECT',
-      'family_invitations authenticated SELECT',
-      'family_permissions authenticated SELECT',
-      'family_relationships authenticated SELECT',
-      'family_reviews authenticated SELECT',
+      'family_access_log api_member SELECT',
+      'family_invitations api_member SELECT',
+      'family_permissions api_member SELECT',
+      'family_relationships api_member SELECT',
+      'family_reviews api_member SELECT',
       // `interests authenticated INSERT` was revoked by 0026 (review B7). The
       // API has always sent through `interest.send`, which consumes the daily
       // quota in the same transaction; the member grant only let the Data API
       // skip the quota.
-      'interests authenticated SELECT',
-      'match_candidates authenticated SELECT',
-      'matches authenticated SELECT',
-      'message_reads authenticated SELECT',
-      'messages authenticated SELECT',
+      'interests api_member SELECT',
+      'match_candidates api_member SELECT',
+      'matches api_member SELECT',
+      'message_reads api_member SELECT',
+      'messages api_member SELECT',
       // 0030 (review L10): a member manages their own notification preferences.
-      'notification_preferences authenticated DELETE',
-      'notification_preferences authenticated INSERT',
-      'notification_preferences authenticated SELECT',
-      'notifications authenticated SELECT',
-      'partner_preferences authenticated SELECT',
+      'notification_preferences api_member DELETE',
+      'notification_preferences api_member INSERT',
+      'notification_preferences api_member SELECT',
+      'notifications api_member SELECT',
+      'partner_preferences api_member SELECT',
       // 0031 (review L3): each party reads its own requests and grants; the
       // server writes them.
-      'photo_grants authenticated SELECT',
-      'photo_requests authenticated SELECT',
-      'photo_variants authenticated SELECT',
-      'photos authenticated SELECT',
-      'preference_rules authenticated DELETE',
-      'preference_rules authenticated SELECT',
-      'profile_field_visibility authenticated DELETE',
-      'profile_field_visibility authenticated SELECT',
-      'profiles authenticated SELECT',
+      'photo_grants api_member SELECT',
+      'photo_requests api_member SELECT',
+      'photo_variants api_member SELECT',
+      'photos api_member SELECT',
+      'preference_rules api_member DELETE',
+      'preference_rules api_member SELECT',
+      'profile_field_visibility api_member DELETE',
+      'profile_field_visibility api_member SELECT',
+      'profiles api_member SELECT',
       'reference_items anon SELECT',
-      'reference_items authenticated SELECT',
+      'reference_items api_member SELECT',
       'reference_translations anon SELECT',
-      'reference_translations authenticated SELECT',
+      'reference_translations api_member SELECT',
       // Reports: SELECT only. The reporter is promised the outcome (ERD §14);
       // writes belong to the moderation pipeline, so there is no member path.
-      'reports authenticated SELECT',
-      'security_events authenticated SELECT',
-      'shortlists authenticated DELETE',
-      'shortlists authenticated INSERT',
-      'shortlists authenticated SELECT',
-      'usage_counters authenticated SELECT',
-      'user_devices authenticated SELECT',
-      'user_entitlements authenticated SELECT',
-      'user_locations authenticated SELECT',
-      'user_settings authenticated SELECT',
-      'users authenticated SELECT',
-      'verification_status authenticated SELECT',
+      'reports api_member SELECT',
+      'security_events api_member SELECT',
+      'shortlists api_member DELETE',
+      'shortlists api_member INSERT',
+      'shortlists api_member SELECT',
+      'usage_counters api_member SELECT',
+      'user_devices api_member SELECT',
+      'user_entitlements api_member SELECT',
+      'user_locations api_member SELECT',
+      'user_settings api_member SELECT',
+      'users api_member SELECT',
+      'verification_status api_member SELECT',
     ]);
     // profile_sensitive is absent, and that absence is the whole control.
     expect(rows.some((r) => r.g.startsWith('profile_sensitive'))).toBe(false);
@@ -402,7 +405,7 @@ describe('grants — the surface the Data API exposes', () => {
        cross join lateral aclexplode(att.attacl) a
        join pg_roles r on r.oid = a.grantee
        where c.relkind = 'r' and att.attnum > 0 and not att.attisdropped
-         and r.rolname in ('anon', 'authenticated')
+         and r.rolname in ('anon', 'api_member')
          and a.privilege_type = 'UPDATE'`,
     );
     const granted = new Set(rows.map((r) => r.g));
@@ -420,7 +423,7 @@ describe('grants — the surface the Data API exposes', () => {
        cross join lateral aclexplode(att.attacl) a
        join pg_roles r on r.oid = a.grantee
        where c.relkind = 'r' and att.attnum > 0 and not att.attisdropped
-         and r.rolname in ('anon', 'authenticated')
+         and r.rolname in ('anon', 'api_member')
        order by 1`,
     );
     expect(rows.map((r) => r.relname)).toEqual([
@@ -487,7 +490,7 @@ describe('grants — the surface the Data API exposes', () => {
          cross join lateral aclexplode(c.relacl) a
          join pg_roles r on r.oid = a.grantee
          where c.relname = 'zz_grant_probe'
-           and r.rolname in ('anon', 'authenticated')
+           and r.rolname in ('anon', 'api_member')
          group by 1`,
       );
       expect(rows).toEqual([]);

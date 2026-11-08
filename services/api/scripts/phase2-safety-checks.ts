@@ -7,6 +7,7 @@ import {
   type ExpectedTrigger,
   type Queryable,
   type SecurityCheck,
+  memberRoles,
 } from './phase1-security-checks';
 
 /**
@@ -61,8 +62,6 @@ const TRIGGERS: ExpectedTrigger[] = [
   },
 ];
 
-const MEMBER_ROLES = ['anon', 'authenticated'] as const;
-
 async function functionChecks(db: Queryable, out: SecurityCheck[]): Promise<void> {
   const { rows } = await db.query<{
     name: string;
@@ -95,7 +94,7 @@ async function functionChecks(db: Queryable, out: SecurityCheck[]): Promise<void
                 has_function_privilege(r, 'app.cancel_pending_stage_proposals(uuid)', 'EXECUTE')
                   as can
            from unnest($1::text[]) as r`,
-        [MEMBER_ROLES],
+        [await memberRoles(db)],
       );
       const open = grants.filter((g) => g.can).map((g) => g.role);
       if (open.length) problems.push(`EXECUTE held by: ${open.join(', ')}`);

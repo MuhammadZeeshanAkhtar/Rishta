@@ -35,6 +35,34 @@ export const bootstrapRequestSchema = z.object({
 export type BootstrapRequest = z.infer<typeof bootstrapRequestSchema>;
 
 // ---------------------------------------------------------------------------
+// Account deletion
+// ---------------------------------------------------------------------------
+
+/** How long a deletion request can be cancelled for (ERD E1). */
+export const DELETION_GRACE_DAYS = 30;
+
+/** `POST /me/delete`. `held`: a safety review must finish first (risk R4). */
+export const deletionRequestSchema = z.object({
+  requestedAt: z.string(),
+  scheduledFor: z.string(),
+  status: z.enum(['pending', 'held']),
+  heldReason: z.string().nullable(),
+});
+export type DeletionRequest = z.infer<typeof deletionRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Notification preferences
+// ---------------------------------------------------------------------------
+
+/** `GET` and `PUT /me/notification-preferences`. The whole set each way. */
+export const notificationPreferencesSchema = z.object({
+  quietHoursStart: z.string().nullable(),
+  quietHoursEnd: z.string().nullable(),
+  types: z.array(z.object({ type: z.string(), push: z.boolean(), inApp: z.boolean() })),
+});
+export type NotificationPreferences = z.infer<typeof notificationPreferencesSchema>;
+
+// ---------------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------------
 

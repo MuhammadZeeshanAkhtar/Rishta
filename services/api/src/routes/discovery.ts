@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import {
   COMPATIBILITY_DIMENSIONS,
   DIMENSION_WEIGHTS,
@@ -304,7 +305,7 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     const query = request.query as { cursor?: string; limit?: string };
 
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
@@ -313,27 +314,26 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     // Saved ids as the caller, so RLS confines the list to their own rows.
     // Ordered newest first, with the id as a tiebreak so the keyset is total.
     const saved = await db.asUser(auth.authUserId, (session) =>
-      session.query<{ target_user_id: string; position: number }>(
+      session.query<{ target_user_id: string; cursor_at: string }>(
         // Filtered by app.discoverable_to (review B3). The shortlist is a
         // discovery surface — you save from Discover — so a member who paused
         // or went incognito leaves it too. Filtered HERE rather than in the
         // card query, because CARDS_BY_USER_IDS is shared with interests and
         // matches, where a paused member must stay visible.
-        `select target_user_id,
-                (row_number() over (order by created_at desc, target_user_id))::int - 1
-                  as position
+        `select target_user_id, ${keysetTime('created_at')} as cursor_at
            from public.shortlists
           where user_id = $1::uuid
-            and app.discoverable_to($1::uuid, target_user_id)`,
-        [viewerUserId],
+            and app.discoverable_to($1::uuid, target_user_id)
+            and ($2::timestamptz is null
+                 or (created_at, target_user_id) < ($2::timestamptz, $3::uuid))
+          order by created_at desc, target_user_id desc
+          limit ${limit + 1}`,
+        [viewerUserId, after?.at ?? null, after?.id ?? null],
       ),
     );
 
-    const window = saved
-      .filter((row) => after === null || row.position > after)
-      .sort((a, b) => a.position - b.position);
-    const hasMore = window.length > limit;
-    const page = hasMore ? window.slice(0, limit) : window;
+    const hasMore = saved.length > limit;
+    const page = hasMore ? saved.slice(0, limit) : saved;
 
     if (page.length === 0) return { items: [], nextCursor: null, hasMore: false };
 
@@ -354,7 +354,8 @@ export const discoveryRoutes: FastifyPluginAsync<DiscoveryRoutesOptions> = async
     const last = page[page.length - 1];
     return {
       items,
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor:
+        hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.target_user_id }) : null,
       hasMore,
     };
   });

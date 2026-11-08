@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -18,6 +17,7 @@ import { Button } from '../components/Button';
 import { useLocale } from '../i18n/LocaleProvider';
 import { useTheme } from '../theme/ThemeProvider';
 import { getClient } from '../api/client';
+import { confirmAction } from '../lib/confirm';
 import { describeError } from '../lib/errors';
 import { MIN_TOUCH_TARGET, layout, radius, spacing, typography } from '../theme/tokens';
 
@@ -73,27 +73,21 @@ export function SafetyMenu({
 
   const doBlock = useCallback(() => {
     setMenuOpen(false);
-    Alert.alert(
-      t('safety.blockTitle').replace('{{name}}', who),
-      t('safety.blockBody'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('safety.block'),
-          style: 'destructive',
-          onPress: () => {
-            setBusy(true);
-            setError(null);
-            void getClient()
-              .blockUser(userId)
-              .then(() => onBlocked?.())
-              .catch((err: unknown) => setError(describeError(err, t).message))
-              .finally(() => setBusy(false));
-          },
-        },
-      ],
-      { cancelable: true },
-    );
+    confirmAction({
+      title: t('safety.blockTitle').replace('{{name}}', who),
+      message: t('safety.blockBody'),
+      confirmLabel: t('safety.block'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        setBusy(true);
+        setError(null);
+        void getClient()
+          .blockUser(userId)
+          .then(() => onBlocked?.())
+          .catch((err: unknown) => setError(describeError(err, t).message))
+          .finally(() => setBusy(false));
+      },
+    });
   }, [onBlocked, t, userId, who]);
 
   const openReport = useCallback(() => {

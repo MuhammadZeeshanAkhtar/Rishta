@@ -57,6 +57,19 @@ export const unauthenticated = (message = 'Authentication required') =>
 export const forbidden = (message = 'Not permitted') => new ApiError(403, 'forbidden', message);
 
 /**
+ * Review N1. The account is suspended, banned, deactivated or pending deletion.
+ * Says nothing about why: the app reads the status from `GET /me` and explains.
+ */
+export const accountRestricted = () =>
+  new ApiError(403, 'account_restricted', 'This account cannot use this feature at the moment', {
+    messageKey: 'errors.accountRestricted',
+  });
+
+/** Review N5. The staff role hierarchy refused this action. */
+export const staffProtected = (message: string) =>
+  new ApiError(403, 'staff_protected', message, { messageKey: 'errors.staffProtected' });
+
+/**
  * Used for genuinely-missing resources AND for anything the caller may not see.
  *
  * A 403 on a profile confirms the account exists, which is a disclosure in

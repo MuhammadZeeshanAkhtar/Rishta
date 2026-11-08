@@ -7,7 +7,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 
 > ## HANDOVER STATE, 5 NOVEMBER 2026: VERIFIED LOCALLY ONLY
 >
-> **Built and tested locally:** the monorepo, the full schema (31 migrations, 56 tables) with
+> **Built and tested locally:** the monorepo, the full schema (34 migrations, 57 tables) with
 > RLS enabled _and forced_ everywhere, authentication, onboarding, profiles, photos including
 > others' photos and photo requests, per-field privacy, discovery, the deterministic compatibility
 > engine, interests, matches, notifications, block & report, the Family/Wali review layer,
@@ -18,7 +18,7 @@ Serious, private, family-aware, and built for Muslims everywhere — not a casua
 >
 > **Not started:** family calls (Phase 9), proposals (10), the AI layer (11) and everything after.
 >
-> **1,730 tests pass.** Typecheck, lint and format are clean. §13 below records the state at
+> **2,549 tests pass (8 November 2026).** Typecheck, lint and format are clean. §13 below records the state at
 > Phase 7; the code review documents supersede it where they differ.
 > See [§13 Implementation Status](#13-implementation-status) for the row-by-row record and
 > [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for what a new team should expect
@@ -1487,8 +1487,8 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Monorepo / pnpm workspace                    | **BUILT** - 6 packages, TS strict, ESLint, Prettier                                        |
 | ESLint architectural guardrails              | **BUILT** - verified firing                                                                |
-| `@nikahmate/domain` shared vocabulary        | **BUILT** - 122 tests                                                                      |
-| Database schema                              | **BUILT** - 31 migrations, 56 tables, applied to a fresh Postgres in CI                    |
+| `@nikahmate/domain` shared vocabulary        | **BUILT** - 254 tests                                                                      |
+| Database schema                              | **BUILT** - 35 migrations, 58 tables, applied to a fresh Postgres in CI                    |
 | Family / Wali review layer (Phase 6b)        | **BUILT** - D12 settled; invitations, scoped grants, match-scoped review, 72h SLA          |
 | Conversations and messages (Phase 7)         | **BUILT** - gate-aware send, stages, unread counts, Supabase Realtime                      |
 | RLS - every table                            | **BUILT** - enabled AND forced; 330 tests across 13 suites                                 |
@@ -1512,7 +1512,7 @@ block/report safety layer are complete. Phase 6b onwards has not been started.
 | English at 320dp                             | **VERIFIED** - rendered and measured, zero horizontal overflow                             |
 | CI workflow                                  | **BUILT** - lint, format, typecheck, test, Expo web bundle, secret guard                   |
 
-**1,730 tests passing** - domain 254, db 514, api-client 40, i18n 14, api 850, mobile 58.
+**2,549 tests passing** - domain 254, db 622, api-client 45, i18n 14, api 1341, mobile 273.
 Lint, format and typecheck clean across all 6 packages.
 
 Database tests run against a real Postgres via PGlite, in-process, applying the
@@ -1520,20 +1520,20 @@ migration files exactly as written. No Docker or service container is needed.
 
 ### Not built
 
-| Component                                | Status                                                                                                                             |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Moderation tooling, admin panel          | Console and API built (L1); not hosted. Cases and PII log not built                                                                |
-| Voice notes in chat                      | Not started - the message `kind` column accepts `voice`; no upload or moderation path exists                                       |
-| Message translation, reply suggestions   | Not started - both are AI, which [ADR 0006](docs/adr/) excludes from v1                                                            |
-| Family calls (Phase 9)                   | Not started                                                                                                                        |
-| Push notifications                       | Tokens and preferences built; delivery not built (no provider)                                                                     |
-| Search and advanced filters              | Not started - `/discovery/search` unimplemented                                                                                    |
-| Cross-user photo delivery                | Built (L3); unverified on real Storage. Discovery cards show no photo - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) |
-| Account deletion / deactivation          | Request and deactivation API built; deletion execution not built - **required by Google Play** before launch                       |
-| Subscriptions, entitlement UI (Phase 12) | Backend primitives exist; no plans, no billing                                                                                     |
-| Gemini / AI layer                        | Not started - **not required for v1**, and rejected at boot if a key is present                                                    |
-| Dark theme                               | Architecture ready, palette not authored                                                                                           |
-| Deployment configuration                 | Not started - no Dockerfile, no `eas.json`                                                                                         |
+| Component                                | Status                                                                                                                                                      |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Moderation tooling, admin panel          | Console and API built (L1); not hosted. Cases and PII log not built                                                                                         |
+| Voice notes in chat                      | Not started - the message `kind` column accepts `voice`; no upload or moderation path exists                                                                |
+| Message translation, reply suggestions   | Not started - both are AI, which [ADR 0006](docs/adr/) excludes from v1                                                                                     |
+| Family calls (Phase 9)                   | Not started                                                                                                                                                 |
+| Push notifications                       | Tokens and preferences built; delivery not built (no provider)                                                                                              |
+| Search and advanced filters              | Not started - `/discovery/search` unimplemented                                                                                                             |
+| Cross-user photo delivery                | Built (L3); unverified on real Storage. Discovery cards show no photo - see [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)                          |
+| Account deletion / deactivation          | Request, cancel and deactivation built; erasure built (`account-erasure`, migration 0035) but not yet scheduled - **required by Google Play** before launch |
+| Subscriptions, entitlement UI (Phase 12) | Backend primitives exist; no plans, no billing                                                                                                              |
+| Gemini / AI layer                        | Not started - **not required for v1**, and rejected at boot if a key is present                                                                             |
+| Dark theme                               | Architecture ready, palette not authored                                                                                                                    |
+| Deployment configuration                 | No Dockerfile (host not chosen); `eas.json` builds an APK, never run on EAS                                                                                 |
 
 A full, evidence-backed list is in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
@@ -1582,7 +1582,7 @@ The existing **Zufishan** Supabase project has **not** been touched and will not
 | **D7**  | Repository structure ([§3](#3-technology-direction))                | **pnpm workspaces** now; Turborepo deferred                                 |
 | **D8**  | Entity design ([docs/ENTITIES.md](docs/ENTITIES.md))                | **Consolidated** — 93 entities, 74 in v1, 52 in M1 _(D12)_                  |
 
-| **D9** | API surface ([docs/openapi.yaml](docs/openapi.yaml)) | **Contract written** — 95 paths, 111 operations, 68 schemas, runtime-neutral _(D12 added 14 operations)_ |
+| **D9** | API surface ([docs/openapi.yaml](docs/openapi.yaml)) | **Contract written** — 95 paths, 111 operations, 68 schemas, runtime-neutral _(D12 added 14 operations; now 111 paths and 129 operations)_ |
 | **D10** | `PROJECT_PLAN.md` | **Kept** as a superseded historical record, not deleted |
 | **A1–A11** | Product & schema policy ([§15](#15-open-questions)) | **All resolved** — see the Group A tables |
 | **E1–E6** | Schema & policy detail ([docs/ERD.md §20](docs/ERD.md)) | **All resolved** — retention, FK scope, distance banding, scoring weights, stage gates, visibility keys |
@@ -1708,7 +1708,7 @@ Grouped so you can answer in one pass. **Group A blocks the ERD.**
 | **README.md**                                        | This document — product, architecture, decisions, risks                                                                 |
 | **[docs/ENTITIES.md](docs/ENTITIES.md)**             | 93 entities · 74 in v1 · 52 in M1, with purpose, phase and access class                                                 |
 | **[docs/ERD.md](docs/ERD.md)**                       | All 74 v1 entities: columns, types, indexes, RLS strategy, test matrix, the communication state machine, E1–E6 resolved |
-| **[docs/openapi.yaml](docs/openapi.yaml)**           | 95 paths · 111 operations · 68 schemas · runtime-neutral                                                                |
+| **[docs/openapi.yaml](docs/openapi.yaml)**           | 111 paths · 129 operations (111 served, 18 marked not implemented) · 82 schemas · runtime-neutral                       |
 | **[docs/adr/](docs/adr/)**                           | 11 architecture decision records                                                                                        |
 | **[docs/BRAND.md](docs/BRAND.md)**                   | The identity, its six official versions, and how every asset is derived                                                 |
 | **[docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)** | Three environments, and the Zufishan prohibition                                                                        |

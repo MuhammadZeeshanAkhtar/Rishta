@@ -663,7 +663,20 @@ export const conversationRoutes: FastifyPluginAsync<ConversationRoutesOptions> =
            returning id, from_stage, to_stage, status, created_at`,
           [id, thread.current_stage, viewerUserId],
         );
-        return rows[0] ?? null;
+        const proposal = rows[0];
+        if (!proposal) return null;
+        // Identifiers only; the other person's app renders the words.
+        await session.query(
+          `insert into public.notifications (user_id, type, payload, dedupe_key)
+           values ($1::uuid, 'stage_advance_proposed', $2::jsonb, $3)
+           on conflict do nothing`,
+          [
+            thread.counterpart_user_id,
+            JSON.stringify({ conversationId: id, toStage: proposal.to_stage }),
+            `stage_advance_proposed:${proposal.id}`,
+          ],
+        );
+        return proposal;
       });
 
       if (!created) throw conflict('A stage proposal is already waiting');

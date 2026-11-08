@@ -46,7 +46,7 @@ afterAll(async () => {
 describe('shortlists', () => {
   it('lets the owner read their own', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select target_user_id from public.shortlists`,
     );
@@ -55,7 +55,7 @@ describe('shortlists', () => {
 
   it('does NOT let the saved member learn they were saved', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select user_id from public.shortlists`,
     );
@@ -64,7 +64,7 @@ describe('shortlists', () => {
 
   it('lets the owner save someone', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `insert into public.shortlists (user_id, target_user_id)
        values (app.current_user_id(), $1::uuid) returning id`,
@@ -78,7 +78,7 @@ describe('shortlists', () => {
     // caught here rather than in production.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.shortlists (user_id, target_user_id)
          values ($1::uuid, $2::uuid)`,
@@ -89,14 +89,14 @@ describe('shortlists', () => {
 
   it('does NOT let a member delete another member shortlist row', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `delete from public.shortlists where user_id = $1::uuid returning id`,
       [alice.userId],
     );
     expect(rows).toHaveLength(0);
     // And Alice's row survives.
-    const left = await db.as('authenticated', alice.authUserId, `select id from public.shortlists`);
+    const left = await db.as('api_member', alice.authUserId, `select id from public.shortlists`);
     expect(left).toHaveLength(1);
   });
 
@@ -104,7 +104,7 @@ describe('shortlists', () => {
     // No UPDATE grant at all, so `user_id` and `target_user_id` cannot be
     // moved. There is nothing mutable on these rows by design.
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.shortlists set user_id = $1::uuid`, [
+      db.as('api_member', alice.authUserId, `update public.shortlists set user_id = $1::uuid`, [
         bilal.userId,
       ]),
     ).rejects.toThrow(/permission denied/i);
@@ -138,7 +138,7 @@ describe('shortlists', () => {
 describe('dismissed_profiles', () => {
   it('lets the owner read their own dismissals', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select target_user_id from public.dismissed_profiles`,
     );
@@ -149,7 +149,7 @@ describe('dismissed_profiles', () => {
     // The property that makes "not interested" different from a rejection
     // notice. Chloe must have no way to learn Alice dismissed her.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       chloe.authUserId,
       `select user_id from public.dismissed_profiles`,
     );
@@ -159,7 +159,7 @@ describe('dismissed_profiles', () => {
   it('does NOT let a member dismiss on someone else behalf', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         chloe.authUserId,
         `insert into public.dismissed_profiles (user_id, target_user_id)
          values ($1::uuid, $2::uuid)`,
@@ -172,7 +172,7 @@ describe('dismissed_profiles', () => {
     // Undoing someone else's "not interested" would resurrect a profile they
     // already said no to.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       chloe.authUserId,
       `delete from public.dismissed_profiles returning id`,
     );
@@ -182,7 +182,7 @@ describe('dismissed_profiles', () => {
   it('does NOT let a member reassign a dismissal', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.dismissed_profiles set target_user_id = $1::uuid`,
         [bilal.userId],

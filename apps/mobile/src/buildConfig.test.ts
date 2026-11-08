@@ -40,6 +40,25 @@ describe('eas.json', () => {
   });
 });
 
+describe('what every build carries', () => {
+  it('app.json holds no address: it goes into the bundle whatever the environment says', () => {
+    expect(read(ROOT, 'app.json')).not.toMatch(/localhost|127\.0\.0\.1|https?:\/\//);
+  });
+
+  it('the release export refuses local addresses, and only the local one may skip that', () => {
+    const scripts = (JSON.parse(read(ROOT, 'package.json')) as { scripts: Record<string, string> })
+      .scripts;
+    expect(scripts['web:export']).toContain('apply-web-csp.mjs');
+    expect(scripts['web:export']).not.toContain('--allow-local');
+    expect(scripts['web:export:local']).toContain('--allow-local');
+    // The same files Expo reads for a production bundle, or the policy would name
+    // different addresses from the ones the bundle calls.
+    for (const file of ['.env', '.env.production', '.env.local', '.env.production.local']) {
+      expect(scripts['web:export']).toContain(`--env-file-if-exists=${file} `);
+    }
+  });
+});
+
 describe('apps/mobile/.env.example', () => {
   const list = entries(read(ROOT, '.env.example'));
 

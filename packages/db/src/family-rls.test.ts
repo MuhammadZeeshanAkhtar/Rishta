@@ -266,11 +266,11 @@ describe('app.can_review_match — match-scoped, and that is the control', () =>
     // Proved by the only route that could leak a set — reading `matches`
     // directly as the delegate. The delegate is not a participant, so RLS
     // returns nothing even though they may review this very match.
-    const rows = await db.as('authenticated', delegate.authUserId, `select id from public.matches`);
+    const rows = await db.as('api_member', delegate.authUserId, `select id from public.matches`);
     expect(rows).toEqual([]);
 
     // And `users` yields only themselves — never the counterpart they review.
-    const people = await db.as('authenticated', delegate.authUserId, `select id from public.users`);
+    const people = await db.as('api_member', delegate.authUserId, `select id from public.users`);
     expect(people.map((r) => (r as { id: string }).id)).toEqual([delegate.userId]);
   });
 });
@@ -278,7 +278,7 @@ describe('app.can_review_match — match-scoped, and that is the control', () =>
 describe('family_reviews — who may read the decision', () => {
   it('lets the OWNER read their own review', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       owner.authUserId,
       `select id from public.family_reviews`,
     );
@@ -287,7 +287,7 @@ describe('family_reviews — who may read the decision', () => {
 
   it('lets a delegate holding approve_communication read it', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       delegate.authUserId,
       `select id from public.family_reviews`,
     );
@@ -298,7 +298,7 @@ describe('family_reviews — who may read the decision', () => {
     // They learn a review is pending from `matches.communication_state`,
     // which they can already see. They never learn more than that.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       counterpart.authUserId,
       `select id from public.family_reviews`,
     );
@@ -307,7 +307,7 @@ describe('family_reviews — who may read the decision', () => {
 
   it('shows a stranger nothing', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       stranger.authUserId,
       `select id from public.family_reviews`,
     );
@@ -317,7 +317,7 @@ describe('family_reviews — who may read the decision', () => {
   it('stops showing a delegate once their grant is cleared', async () => {
     await ungrant('approve_communication');
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       delegate.authUserId,
       `select id from public.family_reviews`,
     );
@@ -328,7 +328,7 @@ describe('family_reviews — who may read the decision', () => {
   it('refuses a member INSERT, UPDATE and DELETE', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         delegate.authUserId,
         `update public.family_reviews set decision = 'approved' where match_id = $1::uuid`,
         [matchId],
@@ -337,7 +337,7 @@ describe('family_reviews — who may read the decision', () => {
 
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         owner.authUserId,
         `insert into public.family_reviews (match_id, owner_user_id)
          values ($1::uuid, $2::uuid)`,
@@ -346,7 +346,7 @@ describe('family_reviews — who may read the decision', () => {
     ).rejects.toThrow(/permission denied/i);
 
     await expect(
-      db.as('authenticated', owner.authUserId, `delete from public.family_reviews`),
+      db.as('api_member', owner.authUserId, `delete from public.family_reviews`),
     ).rejects.toThrow(/permission denied/i);
   });
 });
@@ -516,7 +516,7 @@ describe('family_access_log — the anti-coercion control', () => {
 
   it('shows the OWNER every action taken in their name', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       owner.authUserId,
       `select action, permission from public.family_access_log`,
     );
@@ -531,7 +531,7 @@ describe('family_access_log — the anti-coercion control', () => {
     // A delegate who could see what the owner has been shown would know what
     // is safe to do unobserved, which inverts the control.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       delegate.authUserId,
       `select id from public.family_access_log`,
     );
@@ -541,7 +541,7 @@ describe('family_access_log — the anti-coercion control', () => {
   it('refuses every member write — an audit a delegate can edit is not an audit', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         delegate.authUserId,
         `insert into public.family_access_log
            (relationship_id, delegate_user_id, owner_user_id, action, permission)
@@ -551,7 +551,7 @@ describe('family_access_log — the anti-coercion control', () => {
     ).rejects.toThrow(/permission denied/i);
 
     await expect(
-      db.as('authenticated', owner.authUserId, `delete from public.family_access_log`),
+      db.as('api_member', owner.authUserId, `delete from public.family_access_log`),
     ).rejects.toThrow(/permission denied/i);
   });
 });
@@ -585,7 +585,7 @@ describe('family_invitations — a token is never readable', () => {
 
   it('shows the inviter their own invitations', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       owner.authUserId,
       `select id from public.family_invitations`,
     );
@@ -599,7 +599,7 @@ describe('family_invitations — a token is never readable', () => {
     // token, through the API.
     for (const who of [delegate, counterpart, stranger]) {
       const rows = await db.as(
-        'authenticated',
+        'api_member',
         who.authUserId,
         `select id from public.family_invitations`,
       );
@@ -639,7 +639,7 @@ describe('family_relationships and permissions — the member surface is read-on
   it('shows both parties the relationship', async () => {
     for (const who of [owner, delegate]) {
       const rows = await db.as(
-        'authenticated',
+        'api_member',
         who.authUserId,
         `select id from public.family_relationships where id = $1::uuid`,
         [relationshipId],
@@ -652,7 +652,7 @@ describe('family_relationships and permissions — the member surface is read-on
     for (const who of [counterpart, stranger]) {
       expect(
         await db.as(
-          'authenticated',
+          'api_member',
           who.authUserId,
           `select id from public.family_relationships where id = $1::uuid`,
           [relationshipId],
@@ -661,7 +661,7 @@ describe('family_relationships and permissions — the member surface is read-on
 
       expect(
         await db.as(
-          'authenticated',
+          'api_member',
           who.authUserId,
           `select id from public.family_permissions where relationship_id = $1::uuid`,
           [relationshipId],
@@ -673,7 +673,7 @@ describe('family_relationships and permissions — the member surface is read-on
   it('refuses a delegate granting themselves a permission', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         delegate.authUserId,
         `insert into public.family_permissions (relationship_id, permission, granted_by_user_id)
          values ($1::uuid, 'report_on_behalf', $2::uuid)`,
@@ -685,7 +685,7 @@ describe('family_relationships and permissions — the member surface is read-on
   it('refuses a delegate un-revoking themselves', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         delegate.authUserId,
         `update public.family_relationships set status = 'active' where id = $1::uuid`,
         [relationshipId],
@@ -724,7 +724,7 @@ describe('system_flags — the switched-off path', () => {
   it('is invisible to every member — a flag they can read is a roadmap', async () => {
     for (const who of [owner, delegate, stranger]) {
       await expect(
-        db.as('authenticated', who.authUserId, `select key from public.system_flags`),
+        db.as('api_member', who.authUserId, `select key from public.system_flags`),
       ).rejects.toThrow(/permission denied/i);
     }
   });

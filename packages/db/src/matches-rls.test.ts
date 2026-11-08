@@ -61,7 +61,7 @@ describe('matches — shared read, no member writes', () => {
   it('lets both participants read it', async () => {
     for (const member of [alice, bilal]) {
       const rows = await db.as(
-        'authenticated',
+        'api_member',
         member.authUserId,
         `select communication_state from public.matches`,
       );
@@ -70,7 +70,7 @@ describe('matches — shared read, no member writes', () => {
   });
 
   it('shows an uninvolved member nothing', async () => {
-    const rows = await db.as('authenticated', chloe.authUserId, `select id from public.matches`);
+    const rows = await db.as('api_member', chloe.authUserId, `select id from public.matches`);
     expect(rows).toHaveLength(0);
   });
 
@@ -79,7 +79,7 @@ describe('matches — shared read, no member writes', () => {
     const [a, b] = ordered(chloe.userId, bilal.userId);
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         chloe.authUserId,
         `insert into public.matches (user_a_id, user_b_id, interest_id)
          values ($1::uuid, $2::uuid, $3::uuid)`,
@@ -93,7 +93,7 @@ describe('matches — shared read, no member writes', () => {
     // approve their own conversation.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.matches set communication_state = 'family_approved'`,
       ),
@@ -102,7 +102,7 @@ describe('matches — shared read, no member writes', () => {
 
   it('does NOT let a participant delete a match', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.matches`),
+      db.as('api_member', alice.authUserId, `delete from public.matches`),
     ).rejects.toThrow(/permission denied/i);
   });
 
@@ -177,7 +177,7 @@ describe('match_events — append-only, no member path', () => {
   it('gives members no read path', async () => {
     for (const member of [alice, bilal]) {
       await expect(
-        db.as('authenticated', member.authUserId, `select id from public.match_events`),
+        db.as('api_member', member.authUserId, `select id from public.match_events`),
       ).rejects.toThrow(/permission denied/i);
     }
   });
@@ -185,7 +185,7 @@ describe('match_events — append-only, no member path', () => {
   it('gives members no write path', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.match_events (match_id, event, actor_user_id)
          values ($1::uuid, 'created', app.current_user_id())`,

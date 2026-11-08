@@ -173,7 +173,7 @@ describe('a database broken in one way at a time', () => {
     [KIND, 'granted to PUBLIC', `grant insert (kind) on public.messages to public`],
     [KIND, 'granted to anon', `grant insert (kind) on public.messages to anon`],
     // --- the send must still work -------------------------------------------
-    [SEND, 'revoke went too far', `revoke insert (body) on public.messages from authenticated`],
+    [SEND, 'revoke went too far', `revoke insert (body) on public.messages from api_member`],
     // --- insert policy ------------------------------------------------------
     [
       POLICY,

@@ -36,6 +36,8 @@ export interface DiscoverFeed {
   refresh: () => Promise<void>;
   loadMore: () => Promise<void>;
   dismiss: (userId: string) => Promise<void>;
+  /** Removes a card from this screen only, telling the server nothing. */
+  forget: (userId: string) => void;
   toggleShortlist: (userId: string) => Promise<void>;
 }
 
@@ -161,6 +163,7 @@ export function useDiscoverFeed(sectionKey = 'recommended'): DiscoverFeed {
     refresh: () => load('refresh'),
     loadMore,
     dismiss,
+    forget: (userId: string) => setItems((list) => list.filter((p) => p.userId !== userId)),
     toggleShortlist,
   };
 }

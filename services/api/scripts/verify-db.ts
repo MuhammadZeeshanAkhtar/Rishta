@@ -20,11 +20,15 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client, type QueryResultRow } from 'pg';
 import { MIGRATIONS_DIR } from '@nikahmate/db';
+import { databaseConnection, explainTlsFailure } from '../src/db/tls';
 import { phase1SecurityChecks } from './phase1-security-checks';
 import { phase2SafetyChecks } from './phase2-safety-checks';
 import { phase3ModerationChecks } from './phase3-moderation-checks';
 import { phase4AccountChecks } from './phase4-account-checks';
 import { phase5PhotoChecks } from './phase5-photo-checks';
+import { accountSecurityChecks } from './account-security-checks';
+import { dataApiChecks } from './data-api-checks';
+import { storagePolicyChecks } from './storage-policy-checks';
 
 interface Check {
   name: string;
@@ -43,6 +47,8 @@ const fail = (name: string, detail: string): void => {
 const EXPECTED_TABLES = [
   // Review Phase 4 (0030), L10.
   'account_deletion_requests',
+  // Account erasure (0035): retention holds on an account.
+  'account_retention_holds',
   // Review Phase 3 (0029): the L1 admin/moderation backend.
   'admin_action_audit',
   'admin_role_assignments',
@@ -79,6 +85,7 @@ const EXPECTED_TABLES = [
   'photo_requests',
   'photo_variants',
   'photos',
+  'pii_access_log',
   'preference_rules',
   'profile_field_visibility',
   'profile_sensitive',
@@ -105,6 +112,8 @@ const EXPECTED_TABLES = [
 
 /** Zero policies is the control on these — see ERD §2.2. */
 const RESTRICTED = [
+  // Stage 2 (0033): who looked at which member's private data.
+  'pii_access_log',
   // Review Phase 4 (0030): restricted by the ERD — no member policy.
   'account_deletion_requests',
   'profile_views',
@@ -206,71 +215,71 @@ const COLUMN_GRANTABLE_TABLES = [
 ];
 
 const EXPECTED_TABLE_GRANTS = [
-  'blocks authenticated DELETE',
-  'blocks authenticated INSERT',
-  'blocks authenticated SELECT',
-  'compatibility_factors authenticated SELECT',
-  'compatibility_scores authenticated SELECT',
+  'blocks api_member DELETE',
+  'blocks api_member INSERT',
+  'blocks api_member SELECT',
+  'compatibility_factors api_member SELECT',
+  'compatibility_scores api_member SELECT',
   // Phase 7. SELECT is membership; the INSERT on `messages` is a COLUMN grant
   // gated by `app.can_write_message()`, so it is checked in the column list
   // rather than here.
-  'conversation_participants authenticated SELECT',
-  'conversation_stages authenticated SELECT',
-  'conversations authenticated SELECT',
-  'dismissed_profiles authenticated DELETE',
-  'dismissed_profiles authenticated INSERT',
-  'dismissed_profiles authenticated SELECT',
+  'conversation_participants api_member SELECT',
+  'conversation_stages api_member SELECT',
+  'conversations api_member SELECT',
+  'dismissed_profiles api_member DELETE',
+  'dismissed_profiles api_member INSERT',
+  'dismissed_profiles api_member SELECT',
   // Review B6 (0029): a member reads their own DOB correction requests.
-  'dob_correction_requests authenticated SELECT',
+  'dob_correction_requests api_member SELECT',
   // Phase 6b. SELECT only on every family table: an invitation must hash a
   // token, a grant must be refused if its phase has not arrived, a review must
   // be the first for its side, and an audit a delegate can write is not an
   // audit. `system_flags` is absent on purpose — no member grant at all.
-  'family_access_log authenticated SELECT',
-  'family_invitations authenticated SELECT',
-  'family_permissions authenticated SELECT',
-  'family_relationships authenticated SELECT',
-  'family_reviews authenticated SELECT',
+  'family_access_log api_member SELECT',
+  'family_invitations api_member SELECT',
+  'family_permissions api_member SELECT',
+  'family_relationships api_member SELECT',
+  'family_reviews api_member SELECT',
   // `interests authenticated INSERT` revoked by 0026 (review B7): sending must
   // consume the daily quota, which only the API's service-role path does.
-  'interests authenticated SELECT',
-  'match_candidates authenticated SELECT',
-  'matches authenticated SELECT',
-  'message_reads authenticated SELECT',
-  'messages authenticated SELECT',
+  'interests api_member SELECT',
+  'match_candidates api_member SELECT',
+  'matches api_member SELECT',
+  'message_reads api_member SELECT',
+  'messages api_member SELECT',
   // Review Phase 4 (0030): a member manages their own notification preferences.
-  'notification_preferences authenticated DELETE',
-  'notification_preferences authenticated INSERT',
-  'notification_preferences authenticated SELECT',
-  'notifications authenticated SELECT',
-  'partner_preferences authenticated SELECT',
-  'photo_grants authenticated SELECT',
-  'photo_requests authenticated SELECT',
-  'photo_variants authenticated SELECT',
-  'photos authenticated SELECT',
-  'preference_rules authenticated DELETE',
-  'preference_rules authenticated SELECT',
-  'profile_field_visibility authenticated DELETE',
-  'profile_field_visibility authenticated SELECT',
-  'profiles authenticated SELECT',
+  'notification_preferences api_member DELETE',
+  'notification_preferences api_member INSERT',
+  'notification_preferences api_member SELECT',
+  'notifications api_member SELECT',
+  'partner_preferences api_member SELECT',
+  'photo_grants api_member SELECT',
+  'photo_requests api_member SELECT',
+  'photo_variants api_member SELECT',
+  'photos api_member SELECT',
+  'preference_rules api_member DELETE',
+  'preference_rules api_member SELECT',
+  'profile_field_visibility api_member DELETE',
+  'profile_field_visibility api_member SELECT',
+  'profiles api_member SELECT',
   'reference_items anon SELECT',
-  'reference_items authenticated SELECT',
+  'reference_items api_member SELECT',
   'reference_translations anon SELECT',
-  'reference_translations authenticated SELECT',
+  'reference_translations api_member SELECT',
   // Reports: SELECT only. The reporter is promised the outcome (ERD section 14);
   // every write belongs to the moderation pipeline, so there is no member path.
-  'reports authenticated SELECT',
-  'security_events authenticated SELECT',
-  'shortlists authenticated DELETE',
-  'shortlists authenticated INSERT',
-  'shortlists authenticated SELECT',
-  'usage_counters authenticated SELECT',
-  'user_devices authenticated SELECT',
-  'user_entitlements authenticated SELECT',
-  'user_locations authenticated SELECT',
-  'user_settings authenticated SELECT',
-  'users authenticated SELECT',
-  'verification_status authenticated SELECT',
+  'reports api_member SELECT',
+  'security_events api_member SELECT',
+  'shortlists api_member DELETE',
+  'shortlists api_member INSERT',
+  'shortlists api_member SELECT',
+  'usage_counters api_member SELECT',
+  'user_devices api_member SELECT',
+  'user_entitlements api_member SELECT',
+  'user_locations api_member SELECT',
+  'user_settings api_member SELECT',
+  'users api_member SELECT',
+  'verification_status api_member SELECT',
 ];
 
 function maskedTarget(url: string): string {
@@ -412,7 +421,7 @@ async function structural(client: Client): Promise<void> {
      join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
      cross join lateral aclexplode(c.relacl) a
      join pg_roles r on r.oid = a.grantee
-     where c.relkind = 'r' and r.rolname in ('anon', 'authenticated')`,
+     where c.relkind = 'r' and r.rolname in ('anon', 'authenticated', 'api_member')`,
   );
   diff('table grants to anon/authenticated', tg.map((r) => r.g).sort(), EXPECTED_TABLE_GRANTS);
 
@@ -424,7 +433,7 @@ async function structural(client: Client): Promise<void> {
      cross join lateral aclexplode(att.attacl) a
      join pg_roles r on r.oid = a.grantee
      where c.relkind = 'r' and att.attnum > 0 and not att.attisdropped
-       and r.rolname in ('anon', 'authenticated')
+       and r.rolname in ('anon', 'authenticated', 'api_member')
        and a.privilege_type = 'UPDATE'`,
   );
   const updatable = new Set(cg.map((r) => r.g));
@@ -443,7 +452,7 @@ async function structural(client: Client): Promise<void> {
      cross join lateral aclexplode(att.attacl) a
      join pg_roles r on r.oid = a.grantee
      where c.relkind = 'r' and att.attnum > 0 and not att.attisdropped
-       and r.rolname in ('anon', 'authenticated')
+       and r.rolname in ('anon', 'authenticated', 'api_member')
      order by 1`,
   );
   diff(
@@ -572,35 +581,14 @@ async function structural(client: Client): Promise<void> {
     fail('RLS enabled on storage.objects', 'objects are unprotected');
   }
 
-  const { rows: storagePolicies } = await client.query<{ policyname: string; cmd: string }>(
-    `select policyname, cmd from pg_policies
-     where schemaname = 'storage' and tablename = 'objects'
-       and policyname like 'photos_bucket_%'
-     order by policyname`,
-  );
-  diff(
-    'photos bucket policies',
-    storagePolicies.map((r) => `${r.policyname} ${r.cmd}`),
-    [
-      'photos_bucket_delete_own DELETE',
-      'photos_bucket_insert_own INSERT',
-      'photos_bucket_select_own SELECT',
-      'photos_bucket_update_own UPDATE',
-    ],
-  );
-
-  // Every one of those policies is `to authenticated`. An anonymous caller
-  // holding the publishable key — which ships in the APK — must match none.
-  const { rows: anonStorage } = await client.query<{ policyname: string }>(
-    `select policyname from pg_policies
-     where schemaname = 'storage' and tablename = 'objects'
-       and policyname like 'photos_bucket_%'
-       and 'anon' = any(roles)`,
-  );
-  if (anonStorage.length === 0) {
-    pass('anon matches no photos-bucket policy');
-  } else {
-    fail('anon matches no photos-bucket policy', anonStorage.map((r) => r.policyname).join(', '));
+  // Review N4. What each policy must be, and anything else that can reach this
+  // bucket, including one offered to `anon`: the publishable key ships in the APK.
+  const storagePolicies = await storagePolicyChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of storagePolicies) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
   }
 
   // --- the forward guard ----------------------------------------------------
@@ -623,7 +611,7 @@ async function structural(client: Client): Promise<void> {
        cross join lateral aclexplode(c.relacl) a
        join pg_roles r on r.oid = a.grantee
        where c.relname = 'zz_grant_probe'
-         and r.rolname in ('anon', 'authenticated')
+         and r.rolname in ('anon', 'authenticated', 'api_member')
        group by 1`,
     );
     if (probe.length === 0) {
@@ -802,6 +790,24 @@ async function structural(client: Client): Promise<void> {
     if (c.ok) pass(c.name, c.detail);
     else fail(c.name, c.detail ?? 'failed');
   }
+
+  // --- post-merge security audit (migration 0032) ---------------------------
+  const accountSecurity = await accountSecurityChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of accountSecurity) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
+  }
+
+  // --- Stage 2 (migrations 0033, 0034) ---------------------------------------
+  const dataApi = await dataApiChecks({
+    query: <T>(sql: string, params?: unknown[]) => client.query<T & QueryResultRow>(sql, params),
+  });
+  for (const c of dataApi) {
+    if (c.ok) pass(c.name, c.detail);
+    else fail(c.name, c.detail ?? 'failed');
+  }
 }
 
 /**
@@ -815,13 +821,13 @@ async function behavioural(client: Client): Promise<void> {
   try {
     // Can we impersonate at all? If not, say so rather than reporting a pass.
     try {
-      await client.query(`set local role authenticated`);
+      await client.query(`set local role api_member`);
       await client.query(`reset role`);
     } catch (error) {
-      fail('can SET ROLE authenticated', (error as Error).message);
+      fail('can SET ROLE api_member', (error as Error).message);
       return;
     }
-    pass('can SET ROLE authenticated', 'behavioural checks can run');
+    pass('can SET ROLE api_member', 'the API can act for a member, and these checks can run');
 
     await client.query(
       `insert into public.reference_items (type, code, sort_order)
@@ -860,7 +866,7 @@ async function behavioural(client: Client): Promise<void> {
      * any write a probe made, so probes cannot influence each other.
      */
     const as = async <T extends QueryResultRow>(
-      role: 'anon' | 'authenticated',
+      role: 'anon' | 'api_member',
       authId: string | null,
       sql: string,
     ): Promise<{ rows: T[]; error?: string }> => {
@@ -868,7 +874,7 @@ async function behavioural(client: Client): Promise<void> {
       let out: { rows: T[]; error?: string };
       try {
         await client.query(`select set_config('request.jwt.claims', $1, true)`, [
-          JSON.stringify({ sub: authId, role }),
+          JSON.stringify({ sub: authId, role: role === 'api_member' ? 'api_member' : role }),
         ]);
         await client.query(`set local role ${role}`);
         const r = await client.query<T>(sql);
@@ -884,7 +890,7 @@ async function behavioural(client: Client): Promise<void> {
       name: string,
       n: number,
       sql: string,
-      role: 'anon' | 'authenticated',
+      role: 'anon' | 'api_member',
       authId: string | null,
     ): Promise<void> => {
       const r = await as<Record<string, unknown>>(role, authId, sql);
@@ -896,7 +902,7 @@ async function behavioural(client: Client): Promise<void> {
     const expectDenied = async (
       name: string,
       sql: string,
-      role: 'anon' | 'authenticated',
+      role: 'anon' | 'api_member',
       authId: string | null,
     ): Promise<void> => {
       const r = await as(role, authId, sql);
@@ -913,46 +919,46 @@ async function behavioural(client: Client): Promise<void> {
       'member reads own users row',
       1,
       `select id from public.users`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectRows(
       'member cannot read another member',
       0,
       `select id from public.users where display_name = 'VerifyAlice'`,
-      'authenticated',
+      'api_member',
       bilal.authId,
     );
     await expectDenied('anon cannot read users', `select id from public.users`, 'anon', null);
     await expectDenied(
       'member cannot change status (no column grant)',
       `update public.users set status = 'active'`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot clear profile_completed_at',
       `update public.users set profile_completed_at = null`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot soft-delete themselves',
       `update public.users set deleted_at = now()`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot grant themselves an entitlement',
       `insert into public.user_entitlements (user_id, entitlement_key, value)
        values (app.current_user_id(), 'who_viewed_me', 'true'::jsonb)`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot raise an entitlement they hold',
       `update public.user_entitlements set value = '999'::jsonb`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
@@ -960,7 +966,7 @@ async function behavioural(client: Client): Promise<void> {
       `insert into public.compatibility_scores
          (viewer_user_id, candidate_user_id, overall, engine_version)
        values (app.current_user_id(), app.current_user_id(), 100, '1.0.0')`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
@@ -968,32 +974,32 @@ async function behavioural(client: Client): Promise<void> {
       `insert into public.match_candidates
          (user_id, candidate_user_id, section_key, rank, batch_id)
        values (app.current_user_id(), app.current_user_id(), 'recommended', 0, gen_random_uuid())`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot read user_auth_links',
       `select user_id from public.user_auth_links`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot read user_consents',
       `select id from public.user_consents`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectDenied(
       'member cannot write security_events',
       `insert into public.security_events (user_id, event_type) values ('${alice.userId}', 'sign_in')`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectRows(
       'member updates own display_name',
       1,
       `update public.users set display_name = 'Renamed' returning id`,
-      'authenticated',
+      'api_member',
       alice.authId,
     );
     await expectRows(
@@ -1016,15 +1022,16 @@ async function main(): Promise<void> {
   }
 
   const client = new Client({
-    connectionString: url,
-    ssl: { rejectUnauthorized: false },
+    ...databaseConnection(url),
     application_name: 'nikahmate-verify',
   });
 
   try {
     await client.connect();
   } catch (error) {
-    console.error(`Could not connect to ${maskedTarget(url)}: ${(error as Error).message}`);
+    console.error(
+      `Could not connect to ${maskedTarget(url)}: ${explainTlsFailure(error) ?? (error as Error).message}`,
+    );
     process.exit(1);
   }
 

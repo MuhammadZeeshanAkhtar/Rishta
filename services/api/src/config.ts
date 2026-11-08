@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DATABASE_SSL_MODES } from './db/tls';
 
 /**
  * Environment configuration, validated at boot.
@@ -22,10 +23,20 @@ const schema = z.object({
   /**
    * Server-only. Full Postgres connection string.
    *
-   * Must connect as a role that can `SET ROLE authenticated` — Supabase's
-   * pooler user can. This is the single most sensitive value the service holds.
+   * Must connect as a role that can `SET ROLE api_member` (migration 0033 grants
+   * it to whoever ran the migration). This is the single most sensitive value the service holds.
    */
   DATABASE_URL: z.string().min(1),
+
+  /**
+   * How the database connection is secured; see db/tls.ts. Defaults to
+   * `verify-full`, or `disable` for localhost. `require` and `disable` are refused
+   * for a remote database when NODE_ENV=production.
+   */
+  DATABASE_SSL_MODE: z.enum(DATABASE_SSL_MODES).optional(),
+
+  /** The database's CA, as PEM text or a file path. Supabase needs this. */
+  DATABASE_SSL_CA: z.string().optional(),
 
   /** Public. Also the issuer used to locate the JWKS endpoint. */
   SUPABASE_URL: z.string().url(),
@@ -80,9 +91,37 @@ const schema = z.object({
    * Development additionally allows localhost on any port; see app.ts.
    */
   CORS_ALLOWED_ORIGINS: z.string().optional(),
+
+  /**
+   * Which proxies may say who the client is, through X-Forwarded-For.
+   *
+   * Unset means every proxy, which is what this service has always done and what a
+   * deployment behind a load balancer relies on. Anyone who can reach the API directly
+   * could then pick their own IP address, and with it a fresh rate-limit bucket for
+   * signed-out requests. Set it for production: the number of proxies in front of the
+   * API (usually `1`), their addresses, or `false` when there are none.
+   */
+  TRUST_PROXY: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema> & { jwksUrl: string };
+
+/** `TRUST_PROXY` as Fastify wants it. See the setting above. */
+export function parseTrustProxy(
+  value: string | undefined,
+): boolean | string[] | ((address: string, hop: number) => boolean) {
+  const text = value?.trim();
+  if (!text || text === 'true') return true;
+  if (text === 'false') return false;
+  if (/^\d+$/.test(text)) {
+    const hops = Number(text);
+    return (_address, hop) => hop < hops;
+  }
+  return text
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // An .env file has no way to say "absent" other than an empty value, and
@@ -128,6 +167,10 @@ export const FORBIDDEN_ENV_KEYS = [
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
+  // The supervised tools' service keys (legacy-content, account-erasure). They can
+  // delete any member's files or sign-in, so they belong in that one shell only.
+  'LEGACY_TOOL_STORAGE_KEY',
+  'ERASURE_TOOL_SERVICE_KEY',
 ] as const;
 
 export function assertNoForbiddenSecrets(env: NodeJS.ProcessEnv = process.env): void {
@@ -139,8 +182,9 @@ export function assertNoForbiddenSecrets(env: NodeJS.ProcessEnv = process.env): 
   if (present.length > 0) {
     throw new Error(
       `Refusing to start: ${present.join(', ')} present in the environment. ` +
-        `v1 uses no AI provider (ADR 0006), and this service reaches Postgres ` +
-        `directly rather than through the service-role key. Remove them.`,
+        `v1 uses no AI provider (ADR 0006), this service reaches Postgres ` +
+        `directly rather than through the service-role key, and the tools' keys ` +
+        `belong only in the supervised shell that runs them. Remove them.`,
     );
   }
 }

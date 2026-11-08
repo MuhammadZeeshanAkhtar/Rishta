@@ -202,7 +202,7 @@ describe('B16 — every way a thread closes cancels its pending proposal', () =>
     // The path no route sees — which is why cancellation lives in a trigger.
     const t = await fresh('Block');
     await db.as(
-      'authenticated',
+      'api_member',
       t.bilal.authUserId,
       `insert into public.blocks (blocker_user_id, blocked_user_id)
        values (app.current_user_id(), $1::uuid)`,
@@ -219,7 +219,7 @@ describe('B16 — every way a thread closes cancels its pending proposal', () =>
   it('a block works from the member insert alone, inside that transaction', async () => {
     const t = await fresh('BlockTx');
     const seen = await db.as<{ status: string }>(
-      'authenticated',
+      'api_member',
       t.bilal.authUserId,
       `with b as (
          insert into public.blocks (blocker_user_id, blocked_user_id)
@@ -300,7 +300,7 @@ describe('B16 — every way a thread closes cancels its pending proposal', () =>
     const t = await fresh('Direct');
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         t.alice.authUserId,
         `select app.cancel_pending_stage_proposals($1::uuid)`,
         [t.conversationId],
@@ -322,7 +322,7 @@ describe('B25 — once anyone has left, nobody writes', () => {
   const trySend = async (who: SeededUser, body: string): Promise<boolean> => {
     try {
       await db.as(
-        'authenticated',
+        'api_member',
         who.authUserId,
         `insert into public.messages (conversation_id, sender_user_id, body)
          values ($1::uuid, app.current_user_id(), $2)`,
@@ -368,7 +368,7 @@ describe('B24 — app.has_interacted_with, for the caller only', () => {
   const ask = async (caller: SeededUser | null, target: SeededUser): Promise<boolean> =>
     (
       await db.as<{ ok: boolean }>(
-        caller ? 'authenticated' : 'anon',
+        caller ? 'api_member' : 'anon',
         caller?.authUserId ?? null,
         `select app.has_interacted_with($1::uuid) as ok`,
         [target.userId],

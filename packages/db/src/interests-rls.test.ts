@@ -57,27 +57,19 @@ afterAll(async () => {
 
 describe('interests — shared read, server-owned state', () => {
   it('lets the sender read their own', async () => {
-    const rows = await db.as(
-      'authenticated',
-      alice.authUserId,
-      `select status from public.interests`,
-    );
+    const rows = await db.as('api_member', alice.authUserId, `select status from public.interests`);
     expect(rows).toHaveLength(1);
   });
 
   it('lets the RECIPIENT read it too', async () => {
     // Shared, not owner: an interest is a fact about the pair, and a recipient
     // who could not see it could not respond to it.
-    const rows = await db.as(
-      'authenticated',
-      bilal.authUserId,
-      `select status from public.interests`,
-    );
+    const rows = await db.as('api_member', bilal.authUserId, `select status from public.interests`);
     expect(rows).toHaveLength(1);
   });
 
   it('shows an uninvolved member nothing', async () => {
-    const rows = await db.as('authenticated', chloe.authUserId, `select id from public.interests`);
+    const rows = await db.as('api_member', chloe.authUserId, `select id from public.interests`);
     expect(rows).toHaveLength(0);
   });
 
@@ -89,7 +81,7 @@ describe('interests — shared read, server-owned state', () => {
     // could send without spending any quota at all.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.interests (sender_user_id, recipient_user_id)
          values (app.current_user_id(), $1::uuid) returning id`,
@@ -102,7 +94,7 @@ describe('interests — shared read, server-owned state', () => {
     // The forgery case, refused by the database rather than by a handler.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         chloe.authUserId,
         `insert into public.interests (sender_user_id, recipient_user_id)
          values ($1::uuid, $2::uuid)`,
@@ -117,7 +109,7 @@ describe('interests — shared read, server-owned state', () => {
   it('does NOT let the sender change the status', async () => {
     // No UPDATE grant at all. Status is server state, like review_status.
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.interests set status = 'accepted'`),
+      db.as('api_member', alice.authUserId, `update public.interests set status = 'accepted'`),
     ).rejects.toThrow(/permission denied/i);
   });
 
@@ -125,14 +117,14 @@ describe('interests — shared read, server-owned state', () => {
     // Accepting arrives with the respond endpoint and creates a match; a
     // direct write would skip the state machine entirely.
     await expect(
-      db.as('authenticated', bilal.authUserId, `update public.interests set status = 'accepted'`),
+      db.as('api_member', bilal.authUserId, `update public.interests set status = 'accepted'`),
     ).rejects.toThrow(/permission denied/i);
   });
 
   it('does NOT let anyone delete an interest', async () => {
     // Withdrawn rows are kept, so the audit trail survives a change of mind.
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.interests`),
+      db.as('api_member', alice.authUserId, `delete from public.interests`),
     ).rejects.toThrow(/permission denied/i);
   });
 
@@ -197,7 +189,7 @@ describe('interest_events — append-only, no member path', () => {
   it('gives members no read path', async () => {
     for (const member of [alice, bilal]) {
       await expect(
-        db.as('authenticated', member.authUserId, `select id from public.interest_events`),
+        db.as('api_member', member.authUserId, `select id from public.interest_events`),
       ).rejects.toThrow(/permission denied/i);
     }
   });
@@ -205,7 +197,7 @@ describe('interest_events — append-only, no member path', () => {
   it('gives members no write path', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.interest_events (interest_id, event, actor_user_id)
          values ($1::uuid, 'sent', app.current_user_id())`,
@@ -217,7 +209,7 @@ describe('interest_events — append-only, no member path', () => {
   it('does NOT let a member fabricate an event attributed to someone else', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.interest_events (interest_id, event, actor_user_id)
          values ($1::uuid, 'withdrawn', $2::uuid)`,
@@ -249,7 +241,7 @@ describe('interest_events — append-only, no member path', () => {
 describe('usage_counters — read own, write service', () => {
   it('lets a member read their own counter', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select count from public.usage_counters`,
     );
@@ -258,7 +250,7 @@ describe('usage_counters — read own, write service', () => {
 
   it('does NOT let a member read another counter', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select count from public.usage_counters`,
     );
@@ -268,7 +260,7 @@ describe('usage_counters — read own, write service', () => {
   it('does NOT let a member mint quota by writing their own counter', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.usage_counters (user_id, counter_key, period_start, count)
          values (app.current_user_id(), 'daily_interests', current_date, 0)`,
@@ -278,13 +270,13 @@ describe('usage_counters — read own, write service', () => {
 
   it('does NOT let a member reset a counter', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `update public.usage_counters set count = 0`),
+      db.as('api_member', alice.authUserId, `update public.usage_counters set count = 0`),
     ).rejects.toThrow(/permission denied/i);
   });
 
   it('does NOT let a member delete a counter', async () => {
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.usage_counters`),
+      db.as('api_member', alice.authUserId, `delete from public.usage_counters`),
     ).rejects.toThrow(/permission denied/i);
   });
 

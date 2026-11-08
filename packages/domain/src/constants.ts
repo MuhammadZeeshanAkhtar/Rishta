@@ -26,6 +26,16 @@ export const USER_STATUSES = [
 ] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 
+/**
+ * The only statuses that may use the product. An allowlist, so an unknown or
+ * future status is refused (review N1). `onboarding` is a member finishing
+ * their profile, not a restriction. Mirrored by `app.current_account_can_act()`.
+ */
+export const ACCOUNT_USABLE_STATUSES: readonly UserStatus[] = ['onboarding', 'active'];
+
+export const isAccountUsable = (status: string): boolean =>
+  (ACCOUNT_USABLE_STATUSES as readonly string[]).includes(status);
+
 /** A user may only reach discovery from `active`. */
 export const DISCOVERABLE_STATUSES: readonly UserStatus[] = ['active'];
 
@@ -181,6 +191,10 @@ export const PROBLEM_CODES = [
   'payload_too_large',
   'unsupported_media_type',
   'malformed_request',
+  // Review N1: this account may not use the product in its current status.
+  'account_restricted',
+  // Review N5: the staff role hierarchy refused this action.
+  'staff_protected',
   'internal_error',
 ] as const;
 export type ProblemCode = (typeof PROBLEM_CODES)[number];

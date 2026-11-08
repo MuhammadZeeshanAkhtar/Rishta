@@ -45,7 +45,7 @@ afterAll(async () => {
 describe('reads', () => {
   it('lets the owner read their own', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select type from public.notifications`,
     );
@@ -54,7 +54,7 @@ describe('reads', () => {
 
   it('does NOT let another member read them', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `select type from public.notifications`,
     );
@@ -72,7 +72,7 @@ describe('a member cannot forge one', () => {
   it('cannot insert for themselves', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.notifications (user_id, type, dedupe_key)
          values (app.current_user_id(), 'new_match', 'forged')`,
@@ -83,7 +83,7 @@ describe('a member cannot forge one', () => {
   it('cannot insert for someone else', async () => {
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         bilal.authUserId,
         `insert into public.notifications (user_id, type, dedupe_key)
          values ($1::uuid, 'security_alert', 'forged')`,
@@ -96,22 +96,18 @@ describe('a member cannot forge one', () => {
     // `security_alert` lives in this table. An alert its subject can erase is
     // not an alert.
     await expect(
-      db.as('authenticated', alice.authUserId, `delete from public.notifications`),
+      db.as('api_member', alice.authUserId, `delete from public.notifications`),
     ).rejects.toThrow(/permission denied/i);
   });
 
   it('cannot rewrite the type or payload while marking it read', async () => {
     // The grant is column-level on read_at, so these are refused outright.
     await expect(
-      db.as(
-        'authenticated',
-        alice.authUserId,
-        `update public.notifications set type = 'new_match'`,
-      ),
+      db.as('api_member', alice.authUserId, `update public.notifications set type = 'new_match'`),
     ).rejects.toThrow(/permission denied/i);
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `update public.notifications set payload = '{"hacked":true}'::jsonb`,
       ),
@@ -122,7 +118,7 @@ describe('a member cannot forge one', () => {
 describe('marking read', () => {
   it('lets the owner set read_at', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.notifications set read_at = now()
         where id = $1::uuid returning id`,
@@ -133,7 +129,7 @@ describe('marking read', () => {
 
   it('does NOT let another member mark it read', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `update public.notifications set read_at = now() returning id`,
     );

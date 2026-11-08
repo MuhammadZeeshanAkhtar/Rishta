@@ -10,7 +10,7 @@ import { createTestDb, seedReference, seedUser, type SeededUser, type TestDb } f
  * so the assertions that matter here are the NEGATIVE ones.
  *
  * Everything runs against real policies on a real Postgres through
- * `db.as('authenticated', …)`. Nothing here mocks a predicate: a test that
+ * `db.as('api_member', …)`. Nothing here mocks a predicate: a test that
  * stubs `app.is_blocked()` proves the stub works, not the policy.
  *
  * Cast of four:
@@ -229,7 +229,7 @@ describe('app.can_view_profile', () => {
 describe('profiles RLS', () => {
   const readProfileAs = async (viewer: SeededUser, target: SeededUser): Promise<number> => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       viewer.authUserId,
       `select user_id from public.profiles where user_id = $1`,
       [target.userId],
@@ -241,8 +241,11 @@ describe('profiles RLS', () => {
     expect(await readProfileAs(alice, alice)).toBe(1);
   });
 
-  it('lets a member read an approved stranger profile', async () => {
-    expect(await readProfileAs(alice, bilal)).toBe(1);
+  it('does NOT let a member read a stranger profile directly (N2, migration 0032)', async () => {
+    // It used to return the row, with every column, which is how private fields
+    // reached anyone with a token. The API serves other members' profiles under
+    // `profile.read_public`, filtered by field.
+    expect(await readProfileAs(alice, bilal)).toBe(0);
   });
 
   it('does NOT let a member read a profile that blocked them', async () => {
@@ -268,7 +271,7 @@ describe('profiles RLS', () => {
 
   it('still lets an owner update their own profile', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.profiles set about_me = 'Edited by the owner, at sufficient length.'
         where user_id = $1 returning about_me`,
@@ -281,7 +284,7 @@ describe('profiles RLS', () => {
     // Visibility widened; write access did not. This is the assertion that
     // catches a SELECT policy accidentally pasted onto UPDATE.
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `update public.profiles set about_me = 'Hijacked by someone who is not the owner.'
         where user_id = $1 returning about_me`,
@@ -295,7 +298,7 @@ describe('profiles RLS', () => {
     // workflow, which carries a grace period and retention holds (E1).
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `delete from public.profiles where user_id = $1::uuid returning user_id`,
         [alice.userId],
@@ -324,7 +327,7 @@ describe('profiles RLS', () => {
 describe('photos RLS', () => {
   const readPhotosAs = async (viewer: SeededUser, owner: SeededUser): Promise<number> => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       viewer.authUserId,
       `select id from public.photos where user_id = $1`,
       [owner.userId],
@@ -332,9 +335,9 @@ describe('photos RLS', () => {
     return rows.length;
   };
 
-  it('lets a member see an approved public photo on a visible profile', async () => {
+  it('does NOT let a member read a photo row directly, even a public one (N2, 0032)', async () => {
     await seedPhoto(bilal);
-    expect(await readPhotosAs(alice, bilal)).toBe(1);
+    expect(await readPhotosAs(alice, bilal)).toBe(0);
   });
 
   it('does NOT let a blocked member see photos, in either direction', async () => {
@@ -376,7 +379,7 @@ describe('photos RLS', () => {
     await seedProfile(owner, 'approved');
 
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       owner.authUserId,
       `insert into public.photos
          (user_id, storage_path, content_type, byte_size, position)
@@ -395,7 +398,7 @@ describe('photos RLS', () => {
     await seedPhoto(owner, { visibility: 'private', moderationStatus: 'pending' });
 
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       owner.authUserId,
       `select id from public.photos where user_id = $1::uuid`,
       [owner.userId],
@@ -420,13 +423,13 @@ describe('photos RLS', () => {
     );
 
     const asStranger = await db.as(
-      'authenticated',
+      'api_member',
       alice.authUserId,
       `select id from public.photo_variants where photo_id = $1`,
       [photoId],
     );
     const asOwner = await db.as(
-      'authenticated',
+      'api_member',
       owner.authUserId,
       `select id from public.photo_variants where photo_id = $1`,
       [photoId],
@@ -446,7 +449,7 @@ describe('photos RLS', () => {
 describe('blocks RLS', () => {
   it('lets the blocker list their own blocks', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       chloe.authUserId,
       `select blocked_user_id from public.blocks`,
     );
@@ -456,7 +459,7 @@ describe('blocks RLS', () => {
   it('gives the BLOCKED party no read path at all', async () => {
     // A detectable block is a retaliation trigger. `app.is_blocked()` is
     // security definer so the predicate can see what Bilal cannot.
-    const rows = await db.as('authenticated', bilal.authUserId, `select id from public.blocks`);
+    const rows = await db.as('api_member', bilal.authUserId, `select id from public.blocks`);
     expect(rows).toHaveLength(0);
   });
 
@@ -465,7 +468,7 @@ describe('blocks RLS', () => {
     // as another member could silence a conversation they are not part of.
     await expect(
       db.as(
-        'authenticated',
+        'api_member',
         alice.authUserId,
         `insert into public.blocks (blocker_user_id, blocked_user_id)
          values ($1::uuid, $2::uuid) returning id`,
@@ -476,7 +479,7 @@ describe('blocks RLS', () => {
 
   it('does NOT let a member delete a block they did not create', async () => {
     const rows = await db.as(
-      'authenticated',
+      'api_member',
       bilal.authUserId,
       `delete from public.blocks where blocker_user_id = $1 returning id`,
       [chloe.userId],
@@ -510,12 +513,10 @@ describe('blocks RLS', () => {
 
     const visible = async (): Promise<number> =>
       (
-        await db.as(
-          'authenticated',
-          alice.authUserId,
-          `select user_id from public.profiles where user_id = $1`,
-          [edward.userId],
-        )
+        await db.admin(`select 1 where app.can_view_profile($1::uuid, $2::uuid)`, [
+          alice.userId,
+          edward.userId,
+        ])
       ).length;
 
     expect(await visible()).toBe(1);

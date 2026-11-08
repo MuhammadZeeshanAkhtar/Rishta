@@ -7,9 +7,10 @@
  *
  * A keyset cursor names the last row seen by its sort key and id, and the next
  * page is "strictly after that row" — which does not move when rows are added
- * in front of it. Opaque (base64url) per the contract; the `k:` prefix keeps
- * it distinct from the position cursors other lists still use, so one can
- * never be mistaken for the other.
+ * in front of it. Opaque (base64url) per the contract. Every list a member pages through
+ * now uses this. The one exception is a discovery section, which pages a frozen batch
+ * that cannot shift (`match_candidates`), so a position there stays correct. The `k:`
+ * prefix keeps the two apart, so one can never be mistaken for the other.
  *
  * The timestamp is carried as text with microsecond precision — exactly
  * Postgres's resolution — so the comparison is exact rather than rounded to

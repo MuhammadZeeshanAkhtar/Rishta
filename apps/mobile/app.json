@@ -35,13 +35,11 @@
           "resizeMode": "contain",
           "backgroundColor": "#03291F"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
-    },
-    "extra": {
-      "apiBaseUrl": "http://localhost:3000"
     },
     "icon": "./assets/icon.png",
     "backgroundColor": "#FAFAF7",

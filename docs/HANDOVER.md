@@ -5,7 +5,7 @@
 
 **Read this first:** all of this work has been verified locally only. Nothing has been
 applied to hosted Supabase, nothing has been deployed, and the app has never been run on a
-device or built on EAS. Phases 1–5 are on the branch `review/phases-2-5-handover`, which is not merged.
+device or built on EAS. Phases 1–5 are merged into `main` (`75d435b`). The post-merge security work, Stage 2 and the final review are uncommitted changes on `review/post-merge-security`.
 
 | Document                                                             | What it covers                               |
 | -------------------------------------------------------------------- | -------------------------------------------- |
@@ -13,8 +13,8 @@ device or built on EAS. Phases 1–5 are on the branch `review/phases-2-5-handov
 | [SUPABASE_SETUP.md](SUPABASE_SETUP.md)                               | Which dashboard value goes where             |
 | [ANDROID_APK_BUILD.md](ANDROID_APK_BUILD.md)                         | EAS APK configuration and steps              |
 | [DATABASE_MIGRATION_REPORT.md](../DATABASE_MIGRATION_REPORT.md)      | Each migration, release order, rollback      |
-| [CODE_REVIEW_COMPLETION_REPORT.md](CODE_REVIEW_COMPLETION_REPORT.md) | Finding-by-finding evidence                  |
-| [CODE_REVIEW_FIX_TRACKER.md](../CODE_REVIEW_FIX_TRACKER.md)          | Status tracker and manual actions            |
+| [CODE_REVIEW_COMPLETION_REPORT.md](CODE_REVIEW_COMPLETION_REPORT.md) | 5 November snapshot (superseded)             |
+| [CODE_REVIEW_FIX_TRACKER.md](../CODE_REVIEW_FIX_TRACKER.md)          | Current finding-by-finding status (8 Nov)    |
 | [MAINTENANCE.md](MAINTENANCE.md)                                     | Scheduled maintenance task                   |
 | [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)                         | What is missing, and why                     |
 | [openapi.yaml](openapi.yaml)                                         | API contract, with unbuilt operations marked |
@@ -62,22 +62,22 @@ including `services/api/.env.local-demo`, are gitignored.
 
 What each partial item still needs:
 
-| Item | Still needed                                                                                       |
-| ---- | -------------------------------------------------------------------------------------------------- |
-| B7   | Supabase Dashboard: remove `public` from exposed schemas; apply 0026 and 0027                      |
-| B26  | A scheduler for the maintenance task; apply 0029 and 0030                                          |
-| L1   | Hosted MFA, staff accounts and console hosting. Cases, PII access log and `restrict` are not built |
-| L3   | Real Storage verification. Discovery cards show no photo; no grant-revocation endpoint             |
-| L6   | Supervised view, quorum, SLA scheduler, delegate-only accounts (decision)                          |
-| L7   | Deletion execution, data export, public deletion page, store policies                              |
-| L8   | Push provider and delivery; quiet hours at send time                                               |
-| L10  | 18 operations, each blocked (see below)                                                            |
-| L11  | A job runner (dependency approval) and a scheduler                                                 |
+| Item | Still needed                                                                                         |
+| ---- | ---------------------------------------------------------------------------------------------------- |
+| B7   | Supabase Dashboard: remove `public` from exposed schemas, check `pg_graphql`; apply 0026, 0027, 0032 |
+| B26  | A scheduler for the maintenance task; apply 0029 and 0030                                            |
+| L1   | Hosted MFA, staff accounts and console hosting. Cases, PII access log and `restrict` are not built   |
+| L3   | Real Storage verification. Discovery cards show no photo; no grant-revocation endpoint               |
+| L6   | Supervised view, quorum, SLA scheduler, delegate-only accounts (decision)                            |
+| L7   | Scheduling erasure (built), data export, public deletion page, store policies                        |
+| L8   | Push provider and delivery; quiet hours at send time                                                 |
+| L10  | 18 operations, each blocked (see below)                                                              |
+| L11  | A job runner (dependency approval) and a scheduler                                                   |
 
 ## Migrations
 
-31 files, numbered 0001–0031 with no gaps, and timestamps strictly ascending. Every test
-suite applies them all, in order, to real Postgres (PGlite). **None of 0026–0031 has been
+34 files, numbered 0001–0034 with no gaps, and timestamps strictly ascending. Every test
+suite applies them all, in order, to real Postgres (PGlite). **None of 0026–0034 has been
 applied to a hosted database**, and none is on GitHub `main` until the review branch is
 merged.
 
@@ -87,7 +87,7 @@ database:
 - **New, empty project with no live users:** one `migrate` run applies all 31 from the final code.
   Then deploy the API and run `verify:db`.
 - **Existing project on `6c67581` (through 0025) with live users:** release in this order,
-  **0026 → Phase 1 API → 0027 → 0028 + 0029 + 0030 + 0031 → Phases 2–5 API.** Commits `d74a3f3`
+  **0026 → Phase 1 API → 0027 → 0028 to 0033 → current API → 0034.** Commits `d74a3f3`
   (with 0026) and `0de536f` (0027 only) exist so `migrate` can run from each in turn. Follow "Exact
   order" in the migration report, including its pre-flight query.
 
@@ -97,29 +97,29 @@ check that is only meaningful on Supabase: elsewhere it reports "verify on the h
 
 ## Test results
 
-| Check                             | Result                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------- |
-| Full test suite                   | **1,730 passed, 0 failed** (domain 254, db 514, api-client 40, i18n 14, api 850, mobile 58) |
-| Typecheck, lint, formatting       | Clean                                                                                       |
-| Android JavaScript bundle         | `expo export --platform android` succeeds                                                   |
-| Android native project generation | `expo prebuild` succeeds; output removed                                                    |
-| Web build (includes `/admin`)     | `expo export --platform web` succeeds                                                       |
-| Lockfile                          | In sync with every `package.json`                                                           |
-| Secret scan                       | No keys or credentials in tracked or new files                                              |
-| Phase 5 mutation checks           | Every leak-relevant break caught; files restored                                            |
-| Notification regression           | Every database notification type parses in the inbox and has English text                   |
-| `eas.json` schema                 | Valid against EAS's own validator; no login or build involved                               |
+| Check                             | Result                                                                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Full test suite                   | **2,549 passed, 0 failed, 0 skipped** (domain 254, db 622, api-client 45, i18n 14, api 1341, mobile 273), 8 November 2026 |
+| Typecheck, lint, formatting       | Clean                                                                                                                     |
+| Android JavaScript bundle         | `expo export --platform android` succeeds                                                                                 |
+| Android native project generation | `expo prebuild` succeeds; output removed                                                                                  |
+| Web build (includes `/admin`)     | `expo export --platform web` succeeds                                                                                     |
+| Lockfile                          | In sync with every `package.json`                                                                                         |
+| Secret scan                       | No keys or credentials in tracked or new files, or anywhere in git history                                                |
+| Mutation checks                   | Every break of a security safeguard caught; files restored (see FINAL_REPORT.pdf)                                         |
+| Notification regression           | Every database notification type parses in the inbox and has English text                                                 |
+| `eas.json` schema                 | Valid against EAS's own validator; no login or build involved                                                             |
 
 **Not run, and not claimed:** hosted migrations; live `verify:db`; real Supabase Storage or
-Auth MFA; a Gradle or EAS build; any device or browser click-through of the new screens;
-concurrency on multi-connection Postgres; a fresh-clone install; component tests (no tooling
+Auth MFA; a Gradle or EAS build; any device; a browser click-through of the photo upload and
+restricted-account screens in the final round (both were covered earlier or by tests); concurrency on multi-connection Postgres; a fresh-clone install; component tests (no tooling
 exists without new dev dependencies).
 
 ## Blockers needing company credentials or access
 
 | Blocker                      | Needs                                                                                                                                                                                                                                            |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Hosted database verification | A reachable Supabase project (the local `.env` project does not resolve). Apply 0026–0031, run `verify:db`                                                                                                                                       |
+| Hosted database verification | A reachable Supabase project (the local `.env` project does not resolve). Apply 0026–0034, in the order in `docs/PRODUCTION_SECURITY.md`, run `verify:db`                                                                                        |
 | B7, B18                      | Supabase Dashboard: remove `public` from exposed schemas; add `nikahmate://auth/callback` and the web callback URL                                                                                                                               |
 | L1 console use               | Supabase Auth MFA enabled; first staff row inserted by an operator (SQL in the migration report)                                                                                                                                                 |
 | L3 photos                    | Real Storage, using the three-step check in the migration report                                                                                                                                                                                 |
@@ -182,16 +182,15 @@ Everything else is in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 
 ## Git state
 
-- **Review branch:** `review/phases-2-5-handover`: `d74a3f3` and `0de536f` (Phase 1), then five commits for
-  Phases 2–5, the Android build configuration, the Zod fix and these documents.
-- **GitHub `main`:** `6c67581`, the reviewed commit. The branch is not merged into it.
-- **Before merging:** merging applies no migration. Check whether the host deploys
-  automatically from `main`, because the new API needs its migrations applied first (see
-  Migrations). This repository's documents describe the live deployment both as manually
-  deployed and as deployed from git, and the hosting settings have not been checked.
+- **`main` on GitHub:** `75d435b`, which merged Phases 1–5.
+- **Not committed:** everything since, on `review/post-merge-security`, including migrations
+  0032 to 0034. Nothing from it has been pushed, deployed or applied.
+- **What is live has not been checked.** If the host deploys from `main`, the live API may already be
+  `75d435b` rather than the reviewed `6c67581`, and it needs migrations through 0031. Check this first:
+  it decides what the release starts from. The release order was tested from both.
 
-To see everything on the branch:
+To see what has been merged since the reviewed commit:
 
 ```bash
-git diff --stat 6c67581 review/phases-2-5-handover
+git diff --stat 6c67581 main
 ```

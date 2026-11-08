@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
+import { ScreenHeader } from '../../../src/components/ScreenHeader';
 import { ScrollView, StyleSheet, Text } from 'react-native';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { isNikahMateError } from '@nikahmate/api-client';
 import { parseFamilyInviteLink, toFamilyInviteRef, type FamilyInviteRef } from '@nikahmate/domain';
 import { Banner } from '../../../src/components/Banner';
@@ -95,7 +96,7 @@ export default function JoinFamilyScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t('family.joinHeading') }} />
+      <ScreenHeader title={t('family.joinHeading')} fallback="/family" />
       <ScrollView
         style={[styles.root, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.content}

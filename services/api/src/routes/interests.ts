@@ -1,4 +1,5 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { decodeKeyset, encodeKeyset, keysetTime } from '../http/cursor';
 import { z } from 'zod';
 import { findContactDetails } from '@nikahmate/domain';
 import { badRequest, conflict, notFound, quotaExhausted } from '../errors';
@@ -7,14 +8,7 @@ import { loadEntitlements, valueOf } from '../entitlements/service';
 import { interestAccepted, interestReceived, newMatch, notify } from '../notifications/service';
 import type { Db, DbSession } from '../db/types';
 import { memberLocalDate } from '../db/sql';
-import {
-  CARDS_BY_USER_IDS,
-  buildCards,
-  decodeCursor,
-  encodeCursor,
-  parseLimit,
-  type CardRow,
-} from '../discovery/cards';
+import { CARDS_BY_USER_IDS, buildCards, parseLimit, type CardRow } from '../discovery/cards';
 import { isUuid } from '../http/params';
 
 /**
@@ -79,6 +73,13 @@ interface InterestRow {
   responded_at: string | null;
 }
 
+/** What the respond route needs of a match, however it arrived at it. */
+interface MatchResultRow {
+  id: string;
+  communication_state: string;
+  created_at: string;
+}
+
 /** The contract's `Interest`, minus the counterpart card the reader supplies. */
 function toInterest(row: InterestRow, viewerUserId: string): Record<string, unknown> {
   return {
@@ -125,6 +126,26 @@ async function counterpartCards(
     const built = (await buildCards(session, viewerUserId, rows)) as Array<{ userId: string }>;
     return new Map<string, unknown>(built.map((card) => [card.userId, card]));
   });
+}
+
+/**
+ * The card for a response to something already saved. A failure here must not answer
+ * as though the action failed, which is the fault this response shape was fixed for: the
+ * contract allows no card, so the member sees their action worked, without the details.
+ */
+async function cardAfterCommit(
+  db: Db,
+  request: FastifyRequest,
+  viewerUserId: string,
+  counterpartUserId: string,
+): Promise<unknown> {
+  try {
+    const cards = await counterpartCards(db, viewerUserId, [counterpartUserId]);
+    return cards.get(counterpartUserId) ?? null;
+  } catch (error) {
+    request.log.error({ err: error }, 'could not read the card for a saved interest');
+    return null;
+  }
 }
 
 export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
@@ -275,7 +296,17 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       return row;
     });
 
-    return reply.code(201).send(toInterest(created, senderUserId));
+    // The contract's Interest includes the card. Without it the client's parsing
+    // threw after the interest was saved: the member saw an error, and a retry was
+    // refused as already sent.
+    const shaped = toInterest(created, senderUserId);
+    const counterpart = await cardAfterCommit(
+      db,
+      request,
+      senderUserId,
+      shaped.counterpartUserId as string,
+    );
+    return reply.code(201).send({ ...shaped, counterpart });
   });
 
   // --- POST /interests/:interestId/respond -----------------------------------
@@ -321,7 +352,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
       const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
       if (!viewerUserId) throw notFound('Interest not found');
 
-      return db.asService('interest.respond', async (session) => {
+      const answered = await db.asService('interest.respond', async (session) => {
         // FOR UPDATE (review B17). Without the lock, a double-tapped Accept
         // ran two of these transactions side by side: both read `pending`,
         // both passed the check below, and both wrote an `accepted` event and
@@ -410,11 +441,11 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
           // `do nothing` rather than a prior existence check: the constraint
           // is the race control, and a pair who sent interests both ways can
           // reach this twice. One match per pair, whichever arrives first.
-          const inserted = await session.query<{ id: string; communication_state: string }>(
+          const inserted = await session.query<MatchResultRow>(
             `insert into public.matches (user_a_id, user_b_id, interest_id)
              values ($1::uuid, $2::uuid, $3::uuid)
              on conflict (user_a_id, user_b_id) do nothing
-             returning id, communication_state`,
+             returning id, communication_state, created_at`,
             [userA, userB, interestId],
           );
 
@@ -452,7 +483,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
             // unmatch and rematch cannot launder their way past a review they
             // would otherwise have needed. A line here setting it to `'open'`
             // was that bypass.
-            const revived = await session.query<{ id: string; communication_state: string }>(
+            const revived = await session.query<MatchResultRow>(
               `update public.matches
                   set ended_at = null,
                       ended_by_user_id = null,
@@ -460,7 +491,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
                       interest_id = $3::uuid
                 where user_a_id = $1::uuid and user_b_id = $2::uuid
                   and ended_at is not null
-                returning id, communication_state`,
+                returning id, communication_state, created_at`,
               [userA, userB, interestId],
             );
 
@@ -478,8 +509,8 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
               // what stops the reused match row swallowing this.
               await notify(session, newMatch(matchRow.id, interestId, userA, userB));
             } else {
-              const existing = await session.query<{ id: string; communication_state: string }>(
-                `select id, communication_state from public.matches
+              const existing = await session.query<MatchResultRow>(
+                `select id, communication_state, created_at from public.matches
                   where user_a_id = $1::uuid and user_b_id = $2::uuid`,
                 [userA, userB],
               );
@@ -573,6 +604,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
                 matchRow.communication_state === 'pending_family_review'
                   ? { status: 'pending' }
                   : null,
+              createdAt: matchRow.created_at,
               endedAt: null,
             };
           }
@@ -580,6 +612,21 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
 
         return { interest: toInterest(updated[0]!, viewerUserId), match };
       });
+
+      // The contract's Interest and Match both include the card. Without it the
+      // client's parsing threw after the answer was saved: the member saw an error
+      // on a decision that had worked, and a retry was refused as already answered.
+      // After the transaction, as the card is a read that decides nothing.
+      const counterpart = await cardAfterCommit(
+        db,
+        request,
+        viewerUserId,
+        answered.interest.counterpartUserId as string,
+      );
+      return {
+        interest: { ...answered.interest, counterpart },
+        match: answered.match ? { ...answered.match, counterpart } : null,
+      };
     },
   );
 
@@ -601,17 +648,19 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
     }
 
     const limit = parseLimit(query.limit);
-    const after = decodeCursor(query.cursor);
+    const after = decodeKeyset(query.cursor);
     if (query.cursor !== undefined && after === null) throw badRequest('Invalid cursor');
 
     const viewerUserId = await db.asUser(auth.authUserId, resolveViewer);
     if (!viewerUserId) return { items: [], nextCursor: null, hasMore: false };
 
     const column = query.direction === 'sent' ? 'sender_user_id' : 'recipient_user_id';
+    const keyset = [after?.at ?? null, after?.id ?? null];
     const params: unknown[] = query.status
-      ? [viewerUserId, query.status, after]
-      : [viewerUserId, after];
+      ? [viewerUserId, query.status, ...keyset]
+      : [viewerUserId, ...keyset];
     const afterParam = query.status ? '$3' : '$2';
+    const afterIdParam = query.status ? '$4' : '$3';
 
     // Keyset over a stable total order: newest first, id as the tiebreak so
     // two interests created in the same millisecond never swap between pages.
@@ -620,18 +669,18 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
     // RLS already confines this to interests the caller participates in, so
     // the direction column is a filter rather than the access control.
     const rows = await db.asUser(auth.authUserId, (session) =>
-      session.query<InterestRow & { position: number }>(
+      session.query<InterestRow & { cursor_at: string }>(
         `select id, sender_user_id, recipient_user_id, acted_by_user_id,
-                status, note, created_at, responded_at, position
+                status, note, created_at, responded_at, cursor_at
            from (
              select i.*,
-                    (row_number() over (order by i.created_at desc, i.id))::int - 1 as position
+                    ${keysetTime('i.created_at')} as cursor_at
                from public.interests i
               where i.${column} = $1::uuid
                 ${query.status ? 'and i.status = $2::text' : ''}
            ) ranked
-          where ${afterParam}::int is null or position > ${afterParam}::int
-          order by position
+          where ${afterParam}::timestamptz is null or (created_at, id) < (${afterParam}::timestamptz, ${afterIdParam}::uuid)
+          order by created_at desc, id desc
           limit ${limit + 1}`,
         params,
       ),
@@ -654,7 +703,7 @@ export const interestRoutes: FastifyPluginAsync<InterestRoutesOptions> = async (
         const shaped = toInterest(row, viewerUserId);
         return { ...shaped, counterpart: cards.get(shaped.counterpartUserId as string) ?? null };
       }),
-      nextCursor: hasMore && last ? encodeCursor(last.position) : null,
+      nextCursor: hasMore && last ? encodeKeyset({ at: last.cursor_at, id: last.id }) : null,
       hasMore,
     };
   });

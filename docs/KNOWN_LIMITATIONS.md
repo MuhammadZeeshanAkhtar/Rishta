@@ -59,10 +59,10 @@ Not built, and deliberately scoped out of M1:
   already records WHICH relationship decided, so adding a count rule is
   additive rather than a migration.
 
-**The SLA has no scheduler.** pg-boss was deferred (ADR 0007), so the 72-hour
-warning is swept when the owner opens their family screen rather than by a
-runner. An owner who never opens the app is never warned — which matters
-because this is an R16 control. `sla_notified_at` keeps it to one warning.
+**The SLA sweep is ready to schedule.** The 72-hour warning is swept when the owner opens their
+family screen, and since migration 0035 also by `maintenance` (`app.notify_stalled_family_reviews`),
+so an owner who never opens the app is warned too, once a scheduler runs it. `sla_notified_at`
+keeps it to one warning either way.
 
 ---
 
@@ -131,8 +131,8 @@ _Updated 2026-11-05 (code review L9, company decision 3)._
 
 `POST /interests` refuses a note containing a phone number, email, link, handle or messaging
 platform. The filter cannot catch everything: Urdu number words and letter-for-digit substitution
-get through, and closing the Data API route depends on applying 0026 and the Supabase Dashboard
-change (B7).
+get through. Direct writes are closed by 0026 and direct reads of other members by 0032, once
+applied; the Supabase Dashboard change (B7) is still required, see `DATABASE_MIGRATION_REPORT.md`.
 
 ---
 
@@ -140,9 +140,12 @@ change (B7).
 
 _Updated 2026-11-05._
 
-- **Account deletion is only partly built.** Deactivation and deletion REQUESTS work
-  (`/me/deactivate`, `/me/delete`), but nothing executes a deletion after the grace period, there is
-  no in-app screen for them, and `/me/export` is absent. Google also requires a web deletion route.
+- **Account deletion is built but not scheduled.** Members can ask for deletion and cancel it, and
+  `account-erasure` carries it out after the grace period. It still needs counsel's review of ERD E1,
+  a rehearsal on a copy of the hosted project, a scheduler, and a process for who places and lifts
+  legal holds (`account_retention_holds`, built in 0035). There is no staff screen for holds or for
+  releasing a held request: both are supervised database changes. `/me/export` is absent. Google also requires a web
+  deletion page. See `docs/PRODUCTION_SECURITY.md`.
 - No data-safety form, no privacy policy, no age-rating submission.
 - `apps/mobile/eas.json` builds an APK for direct distribution only. A Play Store upload needs an
   AAB profile.
@@ -181,9 +184,10 @@ applying the migration files exactly as written. What that does **not** cover:
   user's phone is invisible.
 - **No deployment configuration** — no Dockerfile, no hosting config. The API is
   a plain Node process (`pnpm --filter @nikahmate/api start`).
-- **No scheduler.** pg-boss was deferred, so the Phase 6b review SLA sweep and the
-  verification SLA have no runner. Retention and invitation expiry are ready to schedule
-  ([MAINTENANCE.md](MAINTENANCE.md)), but nothing schedules them yet.
+- **No scheduler.** pg-boss was deferred, so nothing runs on a timer. Retention, invitation
+  expiry, expired suspensions and the family review SLA sweep are ready to schedule through
+  `maintenance`, and account erasure through `account-erasure` ([MAINTENANCE.md](MAINTENANCE.md)).
+  Nothing schedules them yet.
 
   Candidate generation is the exception, and it is not scheduled: it runs
   on-demand when a member opens Discover, claimed through
@@ -201,6 +205,14 @@ _Updated 2026-11-05._
 
 18 of the 111 contract operations are not built. Each is marked `x-status: not-implemented` with
 its blocker in [openapi.yaml](openapi.yaml), and a test keeps that list matched to the running routes.
+No screen calls them. The ones a company should know about: `POST /me/export` (a member cannot
+export their data), `POST /support/contact` and `GET /safety/center`, resending the verification
+email, phone verification, family calls and plans.
+
+**Discover does not reload when someone returns to it,** because a reload goes back to the first
+page and would lose their place. A card for someone already sent an interest from their profile
+stays until the next refresh. Pressing Express Interest on it now just removes the card, instead
+of showing an error.
 
 ---
 

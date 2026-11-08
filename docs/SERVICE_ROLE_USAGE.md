@@ -568,6 +568,20 @@ pages them; no route returns members' contact details.
 
 **Scope:** pending items, one page at a time.
 
+### `admin.record_access`
+
+**Where:** [`routes/admin.ts`](../services/api/src/routes/admin.ts) — `GET /admin/moderation/photos`
+
+**Why:** `pii_access_log` (0033) has no member or staff grant. A record of access
+that the person being recorded could write, or skip, would prove nothing. From 0034
+the Storage policy reads this table, so the row is also what makes the photo readable.
+
+**Safety:** runs only after `requireAdmin` has confirmed an active moderator with a
+second factor. Writes one row for each photo in the moderation queue, naming that
+moderator. Photos outside the queue never get a row.
+
+**Scope:** one row per queued photo returned.
+
 ### `admin.decide`
 
 **Where:** [`routes/admin.ts`](../services/api/src/routes/admin.ts) — the `POST /admin/...` decisions
@@ -610,6 +624,21 @@ deactivated → active, and → `pending_deletion` and back to the exact previou
 status are written; suspended or banned members cannot reactivate themselves.
 
 **Scope:** the caller's own user row and deletion request.
+
+### `account.lift_expired_suspension`
+
+**Where:** [`auth/plugin.ts`](../services/api/src/auth/plugin.ts) — the account check on every protected route, only when the caller is suspended
+
+**Why:** members have no write grant on `users.status` and may not run
+`app.lift_expired_suspensions` (0032). Without this a suspension's end date
+would mean nothing until a maintenance run, and no job runner exists (L11).
+
+**Safety:** keyed by the caller's id, resolved from the verified token. The
+function changes nothing unless the latest suspend, ban or clear is a suspension
+with an end date a moderator set, and that date has passed. A failure leaves the
+account restricted.
+
+**Scope:** the caller's own user row, and one `moderation_actions` record.
 
 ### `notifications.push_tokens`
 
@@ -664,6 +693,21 @@ silence or refusal, never a way to overrule the other family).
 **Scope:** one match's reviews; the owner's own delegates' notifications.
 
 ---
+
+### `photo.read_access`
+
+**Where:** [`routes/photo-access.ts`](../services/api/src/routes/photo-access.ts) — `GET /profiles/:userId/photos`, `POST /profiles/:userId/photo-request`
+
+**Why:** since 0032 (N2) `photos` and `photo_variants` are owner-only for members,
+so storage paths and photo metadata are not readable through the Data API.
+
+**Safety:** only after the caller's own session has confirmed
+`app.can_view_profile` for the target. The query selects approved, non-private
+photos of that one member, and passes the viewer to
+`app.photo_variant_readable`, which decides each stored object. Paths never reach
+the response; only signed URLs the rule allowed do.
+
+**Scope:** one member's approved, non-private photos.
 
 ### `photo.request`
 

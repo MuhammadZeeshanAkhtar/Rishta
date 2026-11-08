@@ -264,9 +264,11 @@ paths:
         member, or a suspended/banned account, places a retention hold
         (`status: held`); the response says so in general terms.
 
-        EXECUTION is not built: erasure after the grace period needs a job
-        runner and the Supabase Auth admin API. `pnpm maintenance` reports
-        requests past their grace period; it does not execute them.
+        EXECUTION: `pnpm --filter @nikahmate/api account-erasure execute --apply`
+        anonymises each account whose grace period has ended (ERD E1), deleting
+        its photo files and its sign-in. It runs as a supervised process with
+        the service-role key, which the API never holds. Scheduling it is an
+        operator step; see docs/PRODUCTION_SECURITY.md.
       tags: [Account]
       x-access: self
       x-async: true
@@ -275,6 +277,18 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      operationId: getDeletion
+      summary: The open deletion request
+      description: |
+        When the account is due to be deleted, or why it is held. Readable by a
+        `pending_deletion` account, which is the only one that has one.
+      tags: [Account]
+      x-access: self
+      responses:
+        '200': { description: The open request, content: { application/json: { schema: { $ref: '#/components/schemas/DeletionRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       operationId: cancelDeletion
       summary: Cancel a pending deletion during the grace period
@@ -2611,7 +2625,11 @@ paths:
     get:
       operationId: adminListPhotoQueue
       summary: Finalized photos awaiting moderation
-      description: 'Role: moderator or admin. `url` is a short-lived signed URL to the original.'
+      description: |
+        Role: moderator or admin. `url` is a short-lived signed URL to the original, or to
+        the thumbnail while the original is still to be cleaned of metadata (N3). Each photo
+        returned is recorded in `pii_access_log` first, and from migration 0034 Storage lets a
+        moderator read only an object with a fresh row there.
       tags: [Admin]
       x-access: staff
       parameters: [{ $ref: '#/components/parameters/Limit' }]
@@ -2778,10 +2796,20 @@ paths:
       summary: Warn, suspend, ban or clear a member
       description: |
         Role: moderator or admin. `suspend` and `ban` change the account
-        status, which hides the member everywhere at once. `clear` restores
-        `active` only for a suspended or banned account. `warn` records the
-        action without changing status. `expiresAt` is recorded with the
-        action; nothing lifts a suspension automatically yet (L11).
+        status, which hides the member and refuses their requests at once.
+        `clear` restores the status held before the restriction, only for a
+        suspended or banned account. `warn` records the action without changing
+        status.
+
+        `expiresAt` is accepted only on `suspend` and must be in the future. On
+        that date the suspension ends: on the member's next request, or at the
+        next maintenance run. A later ban or clear supersedes it, and without a
+        date a suspension never ends by itself. A banned account must be cleared
+        before it can be suspended (409).
+
+        Refused with 403 `staff_protected`: any action on your own account, and
+        any action on staff who do not rank below you (`admin` outranks
+        `moderator` and `support`, which rank equally).
       tags: [Admin]
       x-access: staff
       parameters: [{ $ref: '#/components/parameters/UserId' }]
@@ -2970,7 +2998,14 @@ components:
       description: Missing or invalid token
       content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
     Forbidden:
-      description: Authenticated but not permitted, or an entitlement is required
+      description: |
+        Authenticated but not permitted, or an entitlement is required.
+        `account_restricted`: the account is suspended, banned, deactivated or
+        pending deletion, which every protected route refuses except GET /me,
+        POST /account/bootstrap, the /me/deactivate, /me/reactivate and /me/delete
+        lifecycle routes, and DELETE /me/push-tokens/{deviceId}. Read `status`
+        from GET /me to explain it. `staff_protected`: the staff role hierarchy
+        refused this decision.
       content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } }
     NotFound:
       description: |
@@ -3005,9 +3040,9 @@ components:
         code:
           type: string
           description: Stable machine-readable code. The server emits exactly these.
-          enum: [validation_failed, malformed_request, unauthenticated, forbidden, entitlement_required,
-                 not_found, conflict, payload_too_large, unsupported_media_type, quota_exhausted,
-                 rate_limited, internal_error]
+          enum: [validation_failed, malformed_request, unauthenticated, forbidden, account_restricted,
+                 staff_protected, entitlement_required, not_found, conflict, payload_too_large,
+                 unsupported_media_type, quota_exhausted, rate_limited, internal_error]
         message: { type: string, description: Human-readable, already localised to the caller's locale }
         messageKey: { type: string, description: i18n key, so the client can re-render on locale change }
         fields:

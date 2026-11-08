@@ -107,11 +107,13 @@ export default function PreviewScreen() {
 
       <ProfileSummary profile={profile} />
 
-      <Pressable onPress={() => void reload()} accessibilityRole="button" style={styles.refresh}>
-        <Text style={[styles.linkText, { color: theme.colors.textMuted }]}>
-          {t('common.retry')}
-        </Text>
-      </Pressable>
+      {error ? (
+        <Pressable onPress={() => void reload()} accessibilityRole="button" style={styles.refresh}>
+          <Text style={[styles.linkText, { color: theme.colors.textMuted }]}>
+            {t('common.retry')}
+          </Text>
+        </Pressable>
+      ) : null}
     </OnboardingStep>
   );
 }

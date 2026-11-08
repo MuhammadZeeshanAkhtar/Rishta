@@ -37,7 +37,7 @@ const asMember = <T = Record<string, unknown>>(
   user: SeededUser,
   sql: string,
   params: unknown[] = [],
-) => db.as<T>('authenticated', user.authUserId, sql, params);
+) => db.as<T>('api_member', user.authUserId, sql, params);
 
 const asService = <T = Record<string, unknown>>(sql: string, params: unknown[] = []) =>
   db.as<T>('service_role', null, sql, params);
@@ -289,11 +289,11 @@ describe('L1 — app.is_active_moderator needs an active role and, by default, M
   const ask = async (user: SeededUser, aal: string | null): Promise<boolean> => {
     const claims = JSON.stringify({
       sub: user.authUserId,
-      role: 'authenticated',
+      role: 'api_member',
       ...(aal ? { aal } : {}),
     });
     const rows = await db.as<{ ok: boolean }>(
-      'authenticated',
+      'api_member',
       user.authUserId,
       `select set_config('request.jwt.claims', $1, true) is not null and app.is_active_moderator() as ok`,
       [claims],
